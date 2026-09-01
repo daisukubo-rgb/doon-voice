@@ -106,7 +106,13 @@ function MainApp() {
       void appInvoke<boolean>("direct_input_status").then(setDirectInputAllowed).catch(() => undefined);
     };
     window.addEventListener("focus", refreshPermission);
-    return () => window.removeEventListener("focus", refreshPermission);
+    // macOSのシステム設定で許可を切り替えて戻ってきた場合、WebViewの
+    // focusイベントだけでは通知されないことがあるため定期的に再確認する。
+    const timer = window.setInterval(refreshPermission, 1000);
+    return () => {
+      window.removeEventListener("focus", refreshPermission);
+      window.clearInterval(timer);
+    };
   }, []);
   useEffect(() => () => { void recorderRef.current?.stop(); }, []);
   useEffect(() => () => { void setVoiceOverlay("hidden"); }, []);
@@ -351,8 +357,7 @@ function MainApp() {
       if (allowed) {
         setNotice("カーソル位置への入力を許可しました");
       } else {
-        await appInvoke("open_direct_input_settings");
-        setNotice("アクセシビリティでDOON Voiceをオンにしてください");
+        setNotice("アクセシビリティでDOON Voiceをオンにしてください。許可後に自動更新します");
       }
     } catch (error) {
       setNotice(errorMessage(error, "直接入力の許可を確認できませんでした"));

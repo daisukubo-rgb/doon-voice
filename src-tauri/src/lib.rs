@@ -258,7 +258,15 @@ fn request_direct_input_permission() -> Result<bool, String> {
         CFString::new("AXTrustedCheckOptionPrompt"),
         CFBoolean::true_value(),
     )]);
-    Ok(unsafe { AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef()) })
+    let allowed = unsafe { AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef()) };
+    if !allowed {
+        // 許可ダイアログが表示されないmacOSでは、必ず現在のアプリの
+        // アクセシビリティ一覧を開いて、戻ってきた後にポーリングで反映する。
+        let _ = Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            .spawn();
+    }
+    Ok(allowed)
 }
 #[cfg(not(target_os = "macos"))]
 #[tauri::command]
