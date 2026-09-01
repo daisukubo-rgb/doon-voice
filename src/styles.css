@@ -133,20 +133,21 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--coral); out
 .state-connecting-mark { width: 11px; height: 11px; border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: state-spin 800ms linear infinite; }
 
 html.is-overlay, html.is-overlay body, html.is-overlay #root { width: 100%; min-height: 100%; overflow: hidden; background: transparent; }
-.voice-overlay { display: grid; grid-template-columns: 48px minmax(0, 1fr) auto; align-items: center; gap: 12px; width: 100%; height: 72px; border: 1px solid rgba(255, 250, 240, .16); border-radius: 8px; padding: 10px 15px 10px 10px; color: var(--paper); background: rgba(17, 47, 42, .97); box-shadow: 0 10px 28px rgba(7, 23, 20, .28); }
+.voice-overlay { display: grid; grid-template-columns: 54px minmax(0, 1fr) auto; align-items: center; gap: 14px; width: 100%; height: 86px; border: 1px solid rgba(255, 250, 240, .16); border-radius: 10px; padding: 12px 18px 12px 12px; color: var(--paper); background: rgba(17, 47, 42, .97); box-shadow: 0 10px 28px rgba(7, 23, 20, .28); }
 .voice-overlay.is-error { background: rgba(126, 47, 40, .97); }
-.voice-overlay-icon { display: grid; width: 48px; height: 48px; place-items: center; border-radius: 50%; color: var(--deep); background: var(--mint); }
+.voice-overlay-icon { display: grid; width: 54px; height: 54px; place-items: center; border-radius: 50%; color: var(--deep); background: var(--mint); }
 .voice-overlay.is-thinking .voice-overlay-icon { color: var(--paper); background: var(--coral); }
 .voice-overlay.is-done .voice-overlay-icon { color: var(--deep); background: var(--paper); }
 .voice-overlay-copy { min-width: 0; }
-.voice-overlay-copy small, .voice-overlay-copy strong { display: block; }
+.voice-overlay-copy small, .voice-overlay-copy strong, .voice-overlay-copy em { display: block; }
 .voice-overlay-copy small { color: var(--mint); font-size: 7px; font-weight: 800; letter-spacing: .2em; }
-.voice-overlay-copy strong { margin-top: 2px; overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.voice-overlay-copy strong { margin-top: 2px; overflow: hidden; font-size: 18px; text-overflow: ellipsis; white-space: nowrap; }
+.voice-overlay-copy em { margin-top: 2px; overflow: hidden; color: rgba(255, 250, 240, .72); font-size: 10px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
 .voice-bars { display: flex; align-items: center; gap: 3px; height: 28px; }
 .voice-bars i { display: block; width: 3px; height: 9px; border-radius: 2px; background: var(--mint); animation: voice-bar 720ms ease-in-out infinite alternate; }
 .voice-bars i:nth-child(2), .voice-bars i:nth-child(4) { height: 18px; animation-delay: -240ms; }
 .voice-bars i:nth-child(3) { height: 25px; animation-delay: -420ms; }
-.overlay-spinner { width: 22px; height: 22px; border: 2px solid rgba(255, 250, 240, .28); border-right-color: var(--mint); border-radius: 50%; animation: state-spin 720ms linear infinite; }
+.overlay-spinner { width: 26px; height: 26px; border: 3px solid rgba(255, 250, 240, .28); border-right-color: var(--paper); border-radius: 50%; animation: state-spin 720ms linear infinite; }
 .shortcut-key { min-width: 120px; min-height: 38px; border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 11px; color: var(--deep); background: var(--background); font-size: 11px; font-weight: 700; white-space: nowrap; }
 .shortcut-key:hover, .shortcut-key.is-capturing { border-color: var(--deep); background: var(--paper-tint); }
 .shortcut-key.is-capturing { color: var(--coral); }

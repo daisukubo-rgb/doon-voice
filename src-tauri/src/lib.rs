@@ -203,6 +203,11 @@ fn emit_voice_shortcut(app: &AppHandle) {
             let _ = window.set_focusable(true);
         }
     }
+    // Render the status pill from the native shortcut callback as well as from
+    // the WebView.  When another application is frontmost WebKit may take a
+    // moment to wake; showing it here keeps the global shortcut feedback
+    // visible immediately and does not depend on the main window's focus.
+    let _ = set_voice_overlay(app.clone(), "listening".to_string());
     let _ = app.emit("doon-voice-shortcut", ());
 }
 
@@ -289,7 +294,7 @@ fn set_voice_overlay(app: AppHandle, state: String) -> Result<(), String> {
             WebviewUrl::App(format!("index.html?overlay={state}").into()),
         )
         .title("DOON Voice")
-        .inner_size(320.0, 72.0)
+        .inner_size(380.0, 86.0)
         .resizable(false)
         .decorations(false)
         .transparent(true)
@@ -304,7 +309,7 @@ fn set_voice_overlay(app: AppHandle, state: String) -> Result<(), String> {
     if let Some(main) = app.get_webview_window("main") {
         if let Ok(Some(monitor)) = main.current_monitor() {
             let scale = monitor.scale_factor();
-            let overlay_width = (320.0 * scale) as i32;
+            let overlay_width = (380.0 * scale) as i32;
             let bottom_margin = (92.0 * scale) as i32;
             let position = monitor.position();
             let size = monitor.size();
@@ -316,12 +321,21 @@ fn set_voice_overlay(app: AppHandle, state: String) -> Result<(), String> {
     // The status pill must never become the active application. Keeping it
     // non-focusable preserves the user's caret in the app they were typing in.
     let _ = window.set_focusable(false);
+    // Order the window before emitting so a newly-created WebView has a
+    // chance to install its event listener.  Re-emit shortly afterwards to
+    // cover the first-load race (especially for the listening → thinking
+    // transition after a global shortcut).
+    window
+        .show()
+        .map_err(|_| "音声状態を表示できませんでした。".to_string())?;
     window
         .emit("voice-overlay-state", &state)
         .map_err(|_| "音声状態を更新できませんでした。".to_string())?;
-    window
-        .show()
-        .map_err(|_| "音声状態を表示できませんでした。".to_string())
+    if state == "thinking" {
+        std::thread::sleep(Duration::from_millis(50));
+        let _ = window.emit("voice-overlay-state", &state);
+    }
+    Ok(())
 }
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]

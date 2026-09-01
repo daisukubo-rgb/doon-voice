@@ -507,9 +507,10 @@ function VoiceOverlay() {
     };
   }, []);
   const label = state === "listening" ? "聞いています" : state === "thinking" ? "考えています" : state === "done" ? "入力しました" : "入力できませんでした";
+  const detail = state === "listening" ? "音声を受け取っています" : state === "thinking" ? "選択したAIで文章を整えています" : state === "done" ? "カーソル位置へ入力しました" : "クリップボードに保存しました";
   return <main className={`voice-overlay is-${state}`} aria-live="assertive">
     <span className="voice-overlay-icon"><Mic size={25} strokeWidth={1.9} /></span>
-    <span className="voice-overlay-copy"><small>DOON VOICE</small><strong>{label}</strong></span>
+    <span className="voice-overlay-copy"><small>DOON VOICE</small><strong>{label}</strong><em>{detail}</em></span>
     {state === "listening" ? <span className="voice-bars" aria-hidden="true"><i /><i /><i /><i /><i /></span> : state === "thinking" ? <span className="overlay-spinner" aria-hidden="true" /> : state === "error" ? <X size={21} strokeWidth={2.2} /> : <Check size={21} strokeWidth={2.2} />}
   </main>;
 }
