@@ -25,11 +25,17 @@ jobs:
       matrix:
         include:
           - name: macOS Intel
-            runner: macos-13
+            runner: macos-14
+            target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin
           - name: macOS Apple Silicon
             runner: macos-14
+            target: ''
+            args: ''
           - name: Windows
             runner: windows-latest
+            target: ''
+            args: ''
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -38,6 +44,9 @@ jobs:
           node-version: 22
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install cross-compilation target
+        if: matrix.target != ''
+        run: rustup target add ${{ matrix.target }}
       - run: npm ci
       - name: Build and upload installer
         uses: tauri-apps/tauri-action@v0
@@ -45,6 +54,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: .
+          args: ${{ matrix.args }}
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: DOON Voice ${{ env.RELEASE_TAG }}
           releaseBody: |
