@@ -32,7 +32,7 @@ GitHubの [Releases](https://github.com/daisukubo-rgb/doon-voice/releases) か�
 - macOS Intel: `DOON.Voice-macOS-Intel.zip` を展開し、中の `.dmg` を開きます。
 - Windows: `DOON.Voice-Windows.zip` を展開し、中の `.msi` を実行します。
 
-GitHub Releasesには、各インストーラーを入れたZIPも添付します。ZIPを展開し、中のDMG（macOS）またはMSI/インストーラー（Windows）をダブルクリックしてください。
+GitHub Releasesには、各インストーラーを入れたZIPも添付します。ZIPを展開し、中のDMG（macOS）またはMSI/インストーラー（Windows）をダブルクリックしてください。配布ZIPには、初回設定と基本操作をまとめた `README.txt` も同梱しています。
 
 初回起動後、`接続と設定` でDOON Voice専用の高精度音声認識モデル（約574MB）を取得してください。マイクを許可し、入力先にカーソルを置いて開始・停止キーを押すと、完成した文章がその入力欄へ直接入り、同時にクリップボードにも保存されます。
 
