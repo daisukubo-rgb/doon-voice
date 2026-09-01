@@ -72,6 +72,6 @@ npm run package:zip    # 生成済みインストーラーをZIPで包む
 scripts/test-desktop-distribution.sh
 ```
 
-`v0.5.3` のようなタグをGitHubへpushすると、GitHub ActionsがmacOS用 `.dmg` とWindows用 `.msi` をビルドし、下書きReleaseへ添付します。公開前に各OSで音声認識・直接入力・AI接続を確認してください。
+`v0.5.3` のようなタグをGitHubへpushすると、GitHub ActionsがmacOS用 `.dmg` とWindows用 `.msi` をビルドし、公開Releaseへ添付します。公開前に各OSで音声認識・直接入力・AI接続を確認してください。購入者へは、個別ファイルではなく [公開Releaseページ](https://github.com/daisukubo-rgb/doon-voice/releases/latest) を案内してください。
 
 ソースリポジトリの共有・各自ビルドには署名不要です。GitHub Releasesのインストーラーは未署名でも動作しますが、OSの警告を減らすにはApple公証とWindowsコード署名証明書を別途設定します。
