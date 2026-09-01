@@ -28,8 +28,9 @@ WindowsではRustの導入後に、Visual Studio Installerで「Desktop developm
 
 GitHubの [Releases](https://github.com/daisukubo-rgb/doon-voice/releases) からOSに合うファイルを取得します。
 
-- macOS: `.dmg` を開き、DOON VoiceをApplicationsへ移動します。
-- Windows: `.msi` を実行します。
+- macOS Apple Silicon: `DOON.Voice-macOS.zip` を展開し、中の `.dmg` を開きます。
+- macOS Intel: `DOON.Voice-macOS-Intel.zip` を展開し、中の `.dmg` を開きます。
+- Windows: `DOON.Voice-Windows.zip` を展開し、中の `.msi` を実行します。
 
 GitHub Releasesには、各インストーラーを入れたZIPも添付します。ZIPを展開し、中のDMG（macOS）またはMSI/インストーラー（Windows）をダブルクリックしてください。
 
