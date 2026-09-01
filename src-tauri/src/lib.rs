@@ -67,6 +67,53 @@ fn user_npm_cli_path(home: &Path, name: &str) -> PathBuf {
     home.join(".npm-global").join("bin").join(name)
 }
 
+#[cfg(target_os = "macos")]
+fn user_local_cli_path(home: &Path, name: &str) -> PathBuf {
+    home.join(".local").join("bin").join(name)
+}
+
+fn cli_path_environment() -> OsString {
+    let mut paths = std::env::var_os("PATH")
+        .map(|value| std::env::split_paths(&value).collect::<Vec<_>>())
+        .unwrap_or_default();
+
+    #[cfg(target_os = "macos")]
+    {
+        let mut homes = Vec::new();
+        if let Some(home) = std::env::var_os("HOME") {
+            homes.push(PathBuf::from(home));
+        }
+        if let Some(user) = std::env::var_os("USER") {
+            homes.push(PathBuf::from("/Users").join(user));
+        }
+        for home in homes {
+            paths.push(home.join(".npm-global").join("bin"));
+            paths.push(home.join(".local").join("bin"));
+        }
+        paths.extend([
+            PathBuf::from("/opt/homebrew/bin"),
+            PathBuf::from("/usr/local/bin"),
+            PathBuf::from("/usr/bin"),
+            PathBuf::from("/bin"),
+        ]);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            paths.push(PathBuf::from(local).join("Programs").join("Ollama"));
+        }
+    }
+
+    let mut unique = Vec::new();
+    for path in paths {
+        if !unique.iter().any(|existing: &PathBuf| existing == &path) {
+            unique.push(path);
+        }
+    }
+    std::env::join_paths(unique).unwrap_or_else(|_| OsString::from("/usr/bin:/bin"))
+}
+
 fn command_path(name: &str) -> PathBuf {
     #[cfg(target_os = "macos")]
     {
@@ -82,6 +129,10 @@ fn command_path(name: &str) -> PathBuf {
         }
         for home in homes {
             let candidate = user_npm_cli_path(&home, name);
+            if candidate.is_file() {
+                return candidate;
+            }
+            let candidate = user_local_cli_path(&home, name);
             if candidate.is_file() {
                 return candidate;
             }
@@ -262,6 +313,9 @@ fn set_voice_overlay(app: AppHandle, state: String) -> Result<(), String> {
             let _ = window.set_position(Position::Physical(PhysicalPosition::new(x, y)));
         }
     }
+    // The status pill must never become the active application. Keeping it
+    // non-focusable preserves the user's caret in the app they were typing in.
+    let _ = window.set_focusable(false);
     window
         .emit("voice-overlay-state", &state)
         .map_err(|_| "音声状態を更新できませんでした。".to_string())?;
@@ -321,15 +375,25 @@ fn request_direct_input_permission() -> Result<bool, String> {
 fn send_paste_shortcut() -> Result<(), String> {
     let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
         .map_err(|_| "直接入力を開始できませんでした。".to_string())?;
+    // Sending only a V event with the Command flag is ignored by some native
+    // applications. Emit the complete Command+V sequence instead.
+    let command_down = CGEvent::new_keyboard_event(source.clone(), 55, true)
+        .map_err(|_| "直接入力を開始できませんでした。".to_string())?;
+    let command_up = CGEvent::new_keyboard_event(source.clone(), 55, false)
+        .map_err(|_| "直接入力を開始できませんでした。".to_string())?;
     let down = CGEvent::new_keyboard_event(source.clone(), 9, true)
         .map_err(|_| "直接入力を開始できませんでした。".to_string())?;
     let up = CGEvent::new_keyboard_event(source, 9, false)
         .map_err(|_| "直接入力を開始できませんでした。".to_string())?;
+    command_down.post(CGEventTapLocation::Session);
+    std::thread::sleep(Duration::from_millis(12));
     down.set_flags(CGEventFlags::CGEventFlagCommand);
     up.set_flags(CGEventFlags::CGEventFlagCommand);
-    down.post(CGEventTapLocation::HID);
+    down.post(CGEventTapLocation::Session);
     std::thread::sleep(Duration::from_millis(25));
-    up.post(CGEventTapLocation::HID);
+    up.post(CGEventTapLocation::Session);
+    std::thread::sleep(Duration::from_millis(12));
+    command_up.post(CGEventTapLocation::Session);
     Ok(())
 }
 #[cfg(target_os = "windows")]
@@ -358,7 +422,7 @@ fn paste_to_active_app(text: String) -> Result<(), String> {
     if !direct_input_allowed() {
         return Err(direct_input_permission_message().into());
     }
-    std::thread::sleep(Duration::from_millis(60));
+    std::thread::sleep(Duration::from_millis(80));
     send_paste_shortcut()
 }
 #[tauri::command]
@@ -498,6 +562,7 @@ fn login_status_is_authenticated(provider: &Provider, success: bool, output: &st
 fn provider_authenticated(provider: &Provider) -> bool {
     let run = match Command::new(command_path(provider.cmd()))
         .args(login_status_args(provider))
+        .env("PATH", cli_path_environment())
         .output()
     {
         Ok(run) => run,
@@ -640,6 +705,7 @@ fn pull_local_model() -> Result<(), String> {
     }
     let mut child = Command::new(command_path("ollama"))
         .args(["pull", LOCAL_MODEL])
+        .env("PATH", cli_path_environment())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -1102,6 +1168,7 @@ fn process_with_codex(app: &AppHandle, prompt: &str) -> Result<String, String> {
         let mut child = Command::new(command_path("codex"))
             .args(codex_exec_arguments(&output))
             .current_dir(&dir)
+            .env("PATH", cli_path_environment())
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -1139,6 +1206,7 @@ fn process_with_claude(app: &AppHandle, prompt: &str) -> Result<String, String> 
                 "text",
             ])
             .current_dir(&dir)
+            .env("PATH", cli_path_environment())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
