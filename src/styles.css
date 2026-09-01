@@ -59,10 +59,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--coral); out
 .voice-stage h1 { margin: 18px 0 0; color: var(--deep); font-size: clamp(38px, 5vw, 58px); font-weight: 650; letter-spacing: -.055em; line-height: 1.12; white-space: nowrap; }
 .voice-stage h1 em { color: var(--coral); font-style: normal; }
 .voice-stage > p { margin: 12px 0 0; color: var(--muted); font-size: 12px; }
-.record-button { display: grid; grid-template-columns: 46px 1fr auto; align-items: center; gap: 12px; min-width: 230px; min-height: 66px; margin-top: 22px; border: 1px solid var(--deep); border-radius: 6px; padding: 8px 12px 8px 9px; color: var(--paper); background: var(--deep); text-align: left; transition: transform 160ms ease, background 160ms ease; }
+.record-button { position: relative; display: grid; grid-template-columns: 46px 1fr auto; align-items: center; gap: 12px; min-width: 230px; min-height: 66px; margin-top: 22px; border: 1px solid var(--deep); border-radius: 6px; padding: 8px 12px 8px 9px; color: var(--paper); background: var(--deep); text-align: left; transition: transform 160ms ease, background 160ms ease; }
 .record-button:hover { transform: translateY(-2px); background: var(--deep-2); }
 .record-button-icon { display: grid; width: 46px; height: 46px; place-items: center; border-radius: 50%; color: var(--deep); background: var(--mint); }
-.record-button strong { font-size: 15px; }
+.record-button strong { position: absolute; left: 50%; font-size: 15px; transform: translateX(-50%); white-space: nowrap; }
 .record-button small { border-left: 1px solid rgba(255, 250, 240, .22); padding-left: 11px; color: rgba(255, 250, 240, .7); font-size: 9px; white-space: nowrap; }
 .voice-stage.is-recording .record-button { background: var(--coral); border-color: var(--coral); }
 .voice-stage.is-recording .record-button-icon { background: var(--paper); }

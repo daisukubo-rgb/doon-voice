@@ -272,13 +272,20 @@ fn set_voice_overlay(app: AppHandle, state: String) -> Result<(), String> {
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
-    fn AXIsProcessTrusted() -> bool;
     fn AXIsProcessTrustedWithOptions(options: core_foundation::dictionary::CFDictionaryRef)
         -> bool;
 }
 #[cfg(target_os = "macos")]
 fn direct_input_allowed() -> bool {
-    unsafe { AXIsProcessTrusted() }
+    // AXIsProcessTrusted() can retain the value from the first check while the
+    // user is toggling the permission in System Settings. Calling the options
+    // variant with prompting disabled forces macOS to re-read the current TCC
+    // state without opening another dialog.
+    let options: CFDictionary<CFString, CFBoolean> = CFDictionary::from_CFType_pairs(&[(
+        CFString::new("AXTrustedCheckOptionPrompt"),
+        CFBoolean::false_value(),
+    )]);
+    unsafe { AXIsProcessTrustedWithOptions(options.as_concrete_TypeRef()) }
 }
 #[cfg(not(target_os = "macos"))]
 fn direct_input_allowed() -> bool {
