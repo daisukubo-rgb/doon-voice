@@ -1,0 +1,33 @@
+{
+  "name": "doon-voice-desktop",
+  "private": true,
+  "version": "0.5.2",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "tauri": "tauri",
+    "app": "tauri dev",
+    "dist": "tauri build",
+    "setup": "node scripts/setup.mjs",
+    "doctor": "node scripts/setup.mjs --check-only"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/plugin-global-shortcut": "^2.3.2",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.8.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.4.0",
+    "typescript": "~5.7.2",
+    "vite": "^6.0.0"
+  }
+}

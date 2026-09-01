@@ -1,0 +1,56 @@
+name: DOON Voice Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release tag (例: v0.5.3)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+
+jobs:
+  package:
+    name: ${{ matrix.name }} installer
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS Intel
+            runner: macos-13
+          - name: macOS Apple Silicon
+            runner: macos-14
+          - name: Windows
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - name: Build and upload installer
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: .
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: DOON Voice ${{ env.RELEASE_TAG }}
+          releaseBody: |
+            DOON Voiceの配布版です。
+
+            macOSはDMG、WindowsはMSIをダウンロードしてください。
+            初回起動後に音声認識モデルを取得し、必要なAIを接続してください。
+          releaseDraft: true
+          prerelease: false
