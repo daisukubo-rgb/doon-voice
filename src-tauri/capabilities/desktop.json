@@ -10,7 +10,6 @@
   ],
   "permissions": [
     "global-shortcut:allow-register",
-    "global-shortcut:allow-unregister",
-    "shell:allow-execute"
+    "global-shortcut:allow-unregister"
   ]
 }

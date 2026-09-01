@@ -14,7 +14,10 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
@@ -46,6 +49,26 @@ const CODEX_EXEC_OPTIONS: &[&str] = &[
     "--sandbox",
     "read-only",
 ];
+static TRANSCRIPTION_DOWNLOAD_RUNNING: AtomicBool = AtomicBool::new(false);
+static LOCAL_MODEL_PULL_RUNNING: AtomicBool = AtomicBool::new(false);
+
+struct ExclusiveOperation<'a>(&'a AtomicBool);
+
+impl Drop for ExclusiveOperation<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+fn begin_exclusive_operation<'a>(
+    running: &'a AtomicBool,
+    message: &str,
+) -> Result<ExclusiveOperation<'a>, String> {
+    running
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .map(|_| ExclusiveOperation(running))
+        .map_err(|_| message.to_string())
+}
 
 fn codex_exec_arguments(output: &Path) -> Vec<OsString> {
     let mut args = CODEX_EXEC_OPTIONS
@@ -713,10 +736,14 @@ async fn open_local_llm_install() -> Result<(), String> {
     }
 }
 #[tauri::command]
-fn pull_local_model() -> Result<(), String> {
+async fn pull_local_model() -> Result<(), String> {
     if !ollama_installed() {
         return Err("先にOllamaをインストールしてください。".into());
     }
+    let operation = begin_exclusive_operation(
+        &LOCAL_MODEL_PULL_RUNNING,
+        "Gemma 4 E2Bを取得中です。完了までお待ちください。",
+    )?;
     let mut child = Command::new(command_path("ollama"))
         .args(["pull", LOCAL_MODEL])
         .env("PATH", cli_path_environment())
@@ -724,10 +751,19 @@ fn pull_local_model() -> Result<(), String> {
         .stderr(Stdio::null())
         .spawn()
         .map_err(|_| "高速ローカルAIの取得を開始できませんでした。".to_string())?;
-    std::thread::spawn(move || {
-        let _ = child.wait();
-    });
-    Ok(())
+    tokio::task::spawn_blocking(move || {
+        let _operation = operation;
+        let status = child
+            .wait()
+            .map_err(|_| "高速ローカルAIの取得結果を確認できませんでした。".to_string())?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err("高速ローカルAIを取得できませんでした。接続を確認して再試行してください。".into())
+        }
+    })
+    .await
+    .map_err(|_| "高速ローカルAIの取得が中断されました。".to_string())?
 }
 
 fn voice_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -756,33 +792,44 @@ async fn download_transcription_model(app: AppHandle) -> Result<(), String> {
     if target.is_file() {
         return Ok(());
     }
+    let _operation = begin_exclusive_operation(
+        &TRANSCRIPTION_DOWNLOAD_RUNNING,
+        "音声認識モデルを取得中です。完了までお待ちください。",
+    )?;
     let part = target.with_extension("part");
-    let mut r = download_client()?
-        .get(MODEL_URL)
-        .send()
-        .await
-        .map_err(|_| "モデルをダウンロードできませんでした。".to_string())?;
-    if !r.status().is_success() {
-        return Err("モデルの配布元が応答できませんでした。".into());
-    }
-    let mut f = tokio::fs::File::create(&part)
-        .await
-        .map_err(|_| "モデルを保存できませんでした。".to_string())?;
-    while let Some(c) = r
-        .chunk()
-        .await
-        .map_err(|_| "モデルのダウンロードが途中で切れました。".to_string())?
-    {
-        f.write_all(&c)
+    let result = async {
+        let mut r = download_client()?
+            .get(MODEL_URL)
+            .send()
+            .await
+            .map_err(|_| "モデルをダウンロードできませんでした。".to_string())?;
+        if !r.status().is_success() {
+            return Err("モデルの配布元が応答できませんでした。".into());
+        }
+        let mut f = tokio::fs::File::create(&part)
             .await
             .map_err(|_| "モデルを保存できませんでした。".to_string())?;
+        while let Some(c) = r
+            .chunk()
+            .await
+            .map_err(|_| "モデルのダウンロードが途中で切れました。".to_string())?
+        {
+            f.write_all(&c)
+                .await
+                .map_err(|_| "モデルを保存できませんでした。".to_string())?;
+        }
+        f.flush()
+            .await
+            .map_err(|_| "モデルを保存できませんでした。".to_string())?;
+        tokio::fs::rename(&part, target)
+            .await
+            .map_err(|_| "モデルを有効化できませんでした。".to_string())
     }
-    f.flush()
-        .await
-        .map_err(|_| "モデルを保存できませんでした。".to_string())?;
-    tokio::fs::rename(part, target)
-        .await
-        .map_err(|_| "モデルを有効化できませんでした。".to_string())
+    .await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(part).await;
+    }
+    result
 }
 fn platform() -> &'static str {
     if cfg!(target_os = "macos") {

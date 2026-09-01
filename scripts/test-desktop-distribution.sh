@@ -57,6 +57,11 @@ if ! rg -F -q 'tauri_plugin_global_shortcut' "$RUST_SOURCE" || ! rg -F -q 'globa
   exit 1
 fi
 
+if rg -F -q 'shell:allow-execute' "$SHORTCUT_CAPABILITY"; then
+  print -u2 'FAIL: フロントエンドへ不要なシェル実行権限が付与されています'
+  exit 1
+fi
+
 if ! rg -F -q 'codex login' "$RUST_SOURCE" || ! rg -F -q 'claude' "$RUST_SOURCE"; then
   print -u2 'FAIL: 公式CLIのログイン導線がありません'
   exit 1
