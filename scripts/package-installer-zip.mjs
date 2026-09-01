@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync, copyFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, basename, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = resolve(new URL("..", import.meta.url).pathname);
+const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const bundleRoot = join(root, "src-tauri", "target", "release", "bundle");
 const outputRoot = join(root, "dist");
 
@@ -20,7 +21,7 @@ function packageMac() {
   if (!installer) throw new Error("macOS用DMGが見つかりません。先に npm run dist を実行してください。");
   const staging = mkdtempSync(join(tmpdir(), "doon-voice-installer-"));
   const packageDir = join(staging, "DOON Voice Installer");
-  execFileSync("mkdir", ["-p", packageDir]);
+  mkdirSync(packageDir, { recursive: true });
   copyFileSync(installer, join(packageDir, basename(installer)));
   writeFileSync(join(packageDir, "インストール方法.txt"), "DMGをダブルクリックして開き、DOON VoiceをApplicationsへ移動してください。\n", "utf8");
   const output = join(outputRoot, "DOON Voice-macOS.zip");
@@ -44,7 +45,7 @@ function packageWindows() {
   console.log(`作成しました: ${output}`);
 }
 
-if (!existsSync(outputRoot)) execFileSync("mkdir", ["-p", outputRoot]);
+if (!existsSync(outputRoot)) mkdirSync(outputRoot, { recursive: true });
 if (process.platform === "darwin") packageMac();
 else if (process.platform === "win32") packageWindows();
 else throw new Error("ZIP配布パッケージはmacOSまたはWindows上で作成してください。");
