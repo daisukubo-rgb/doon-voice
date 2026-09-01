@@ -357,7 +357,7 @@ function MainApp() {
   }
 
   async function openDirectInputSettings() {
-    try { await appInvoke("open_direct_input_settings"); setNotice("アクセシビリティ設定を開きました。DOON Voiceを許可してください"); }
+    try { await appInvoke("open_direct_input_settings"); setNotice("アクセシビリティ設定を開きました。DOON Voiceが2つある場合は古い方を削除し、現在のアプリをオンにしてください"); }
     catch (error) { setNotice(errorMessage(error, "直接入力の設定を開けませんでした")); }
   }
 
@@ -368,7 +368,7 @@ function MainApp() {
       if (allowed) {
         setNotice("カーソル位置への入力を許可しました");
       } else {
-        setNotice("アクセシビリティでDOON Voiceをオンにしてください。許可後に自動更新します");
+        setNotice("アクセシビリティで現在のDOON Voiceをオンにしてください。2つある場合は古い方を削除すると反映されます");
       }
     } catch (error) {
       setNotice(errorMessage(error, "直接入力の許可を確認できませんでした"));

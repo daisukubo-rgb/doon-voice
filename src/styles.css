@@ -63,7 +63,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--coral); out
 .record-button:hover { transform: translateY(-2px); background: var(--deep-2); }
 .record-button-icon { display: grid; width: 46px; height: 46px; place-items: center; border-radius: 50%; color: var(--deep); background: var(--mint); }
 .record-button strong { position: absolute; left: 50%; font-size: 15px; transform: translateX(-50%); white-space: nowrap; }
-.record-button small { border-left: 1px solid rgba(255, 250, 240, .22); padding-left: 11px; color: rgba(255, 250, 240, .7); font-size: 9px; white-space: nowrap; }
+.record-button small { grid-column: 3; grid-row: 1; justify-self: end; border-left: 1px solid rgba(255, 250, 240, .22); padding-left: 11px; color: rgba(255, 250, 240, .7); font-size: 9px; white-space: nowrap; }
 .voice-stage.is-recording .record-button { background: var(--coral); border-color: var(--coral); }
 .voice-stage.is-recording .record-button-icon { background: var(--paper); }
 
