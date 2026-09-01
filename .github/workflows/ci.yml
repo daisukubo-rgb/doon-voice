@@ -12,6 +12,7 @@ on:
       - "package-lock.json"
       - "vite.config.ts"
       - "tsconfig.json"
+      - "tsconfig.test.json"
       - ".github/workflows/**"
   pull_request:
     branches: [main]
@@ -24,6 +25,7 @@ on:
       - "package-lock.json"
       - "vite.config.ts"
       - "tsconfig.json"
+      - "tsconfig.test.json"
       - ".github/workflows/**"
 
 jobs:
@@ -41,6 +43,7 @@ jobs:
           components: rustfmt, clippy
       - run: npm ci
       - run: npm run build
+      - run: npm test
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
@@ -59,6 +62,7 @@ jobs:
           components: rustfmt, clippy
       - run: npm ci
       - run: npm run build
+      - run: npm test
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets --no-run
       - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings

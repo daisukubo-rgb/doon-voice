@@ -9,6 +9,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "test": "npm run test:compile && node --test --experimental-test-coverage .test-dist/test/*.test.mjs",
+    "test:compile": "node -e \"require('node:fs').rmSync('.test-dist',{recursive:true,force:true})\" && tsc -p tsconfig.test.json",
     "tauri": "tauri",
     "app": "tauri dev",
     "dist": "tauri build",

@@ -32,6 +32,11 @@ if ! rg -F -q '"setup": "node scripts/setup.mjs"' "$PACKAGE_JSON" || ! rg -F -q 
   exit 1
 fi
 
+if ! rg -F -q '"test": "npm run test:compile' "$PACKAGE_JSON" || ! rg -F -q -- '- run: npm test' "$PROJECT_DIR/.github/workflows/ci.yml"; then
+  print -u2 'FAIL: TypeScriptの単体テストがローカル実行とCIの両方に定義されていません'
+  exit 1
+fi
+
 if ! rg -F -q 'npm run setup' "$README" || ! rg -F -q 'npm run doctor' "$README"; then
   print -u2 'FAIL: READMEにリポジトリからのセットアップ手順がありません'
   exit 1
