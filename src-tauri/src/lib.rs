@@ -1370,6 +1370,18 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicBool;
+
+    #[test]
+    fn モデル取得は同時に一つだけ実行する() {
+        let running = AtomicBool::new(false);
+        let first = begin_exclusive_operation(&running, "モデルを取得中です")
+            .expect("最初の取得は開始できる");
+        assert!(begin_exclusive_operation(&running, "モデルを取得中です").is_err());
+        drop(first);
+        assert!(begin_exclusive_operation(&running, "モデルを取得中です").is_ok());
+    }
+
     #[test]
     fn 本文だけを返す() {
         assert_eq!(clean("<think>x</think>\n本文").unwrap(), "本文");
