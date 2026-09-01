@@ -31,6 +31,10 @@ const MODEL_URL: &str =
 const MAX_TEXT: usize = 20_000;
 const MAX_WAV: usize = 240 * 1024 * 1024;
 const LOCAL_MODEL: &str = "gemma4:e2b";
+#[cfg(target_os = "macos")]
+const OLLAMA_MAC_URL: &str = "https://ollama.com/download/Ollama-darwin.zip";
+#[cfg(target_os = "windows")]
+const OLLAMA_WINDOWS_URL: &str = "https://ollama.com/download/OllamaSetup.exe";
 const JAPANESE_TRANSCRIPTION_PROMPT: &str =
     "日本語の音声入力です。句読点を自然に入れ、固有名詞や専門用語を正確に認識してください。";
 const CODEX_FAST_MODEL: &str = "gpt-5.6-luna";
@@ -80,6 +84,39 @@ fn command_path(name: &str) -> PathBuf {
             let candidate = user_npm_cli_path(&home, name);
             if candidate.is_file() {
                 return candidate;
+            }
+        }
+        if name == "ollama" {
+            for candidate in [
+                PathBuf::from("/opt/homebrew/bin/ollama"),
+                PathBuf::from("/usr/local/bin/ollama"),
+                PathBuf::from("/Applications/Ollama.app/Contents/Resources/ollama"),
+            ] {
+                if candidate.is_file() {
+                    return candidate;
+                }
+            }
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if name == "ollama" {
+            let mut candidates = Vec::new();
+            if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+                candidates.push(
+                    PathBuf::from(local)
+                        .join("Programs")
+                        .join("Ollama")
+                        .join("ollama.exe"),
+                );
+            }
+            if let Some(programs) = std::env::var_os("PROGRAMFILES") {
+                candidates.push(PathBuf::from(programs).join("Ollama").join("ollama.exe"));
+            }
+            for candidate in candidates {
+                if candidate.is_file() {
+                    return candidate;
+                }
             }
         }
     }
@@ -511,23 +548,78 @@ async fn local_llm_status() -> LocalLlmStatus {
         }],
     }
 }
+async fn download_to_path(url: &str, target: &Path) -> Result<(), String> {
+    let part = target.with_extension("part");
+    let mut response = download_client()?
+        .get(url)
+        .send()
+        .await
+        .map_err(|_| "Ollamaのインストーラーをダウンロードできませんでした。".to_string())?;
+    if !response.status().is_success() {
+        return Err("Ollamaの公式配布元が応答できませんでした。".into());
+    }
+    let mut file = tokio::fs::File::create(&part)
+        .await
+        .map_err(|_| "インストーラーを保存できませんでした。".to_string())?;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "インストーラーのダウンロードが途中で切れました。".to_string())?
+    {
+        file.write_all(&chunk)
+            .await
+            .map_err(|_| "インストーラーを保存できませんでした。".to_string())?;
+    }
+    file.flush()
+        .await
+        .map_err(|_| "インストーラーを保存できませんでした。".to_string())?;
+    tokio::fs::rename(part, target)
+        .await
+        .map_err(|_| "インストーラーを有効化できませんでした。".to_string())
+}
+
 #[tauri::command]
-fn open_local_llm_install() -> Result<(), String> {
+async fn open_local_llm_install() -> Result<(), String> {
+    let work = std::env::temp_dir().join(format!(
+        "doon-voice-ollama-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&work)
+        .map_err(|_| "インストーラーの保存先を作成できませんでした。".to_string())?;
     #[cfg(target_os = "macos")]
     {
+        let archive = work.join("Ollama-darwin.zip");
+        download_to_path(OLLAMA_MAC_URL, &archive).await?;
+        let extracted = Command::new("ditto")
+            .args(["-x", "-k"])
+            .arg(&archive)
+            .arg(&work)
+            .status()
+            .map_err(|_| "Ollamaを展開できませんでした。".to_string())?;
+        if !extracted.success() {
+            return Err("Ollamaを展開できませんでした。".into());
+        }
+        let app = work.join("Ollama.app");
+        if !app.is_dir() {
+            return Err("Ollamaアプリが見つかりませんでした。".into());
+        }
         Command::new("open")
-            .arg("https://ollama.com/download")
+            .arg(app)
             .spawn()
             .map(|_| ())
-            .map_err(|_| "Ollamaの公式サイトを開けませんでした。".into())
+            .map_err(|_| "Ollamaのインストーラーを起動できませんでした。".into())
     }
     #[cfg(target_os = "windows")]
     {
-        Command::new("cmd")
-            .args(["/C", "start", "", "https://ollama.com/download"])
+        let installer = work.join("OllamaSetup.exe");
+        download_to_path(OLLAMA_WINDOWS_URL, &installer).await?;
+        Command::new(&installer)
             .spawn()
             .map(|_| ())
-            .map_err(|_| "Ollamaの公式サイトを開けませんでした。".into())
+            .map_err(|_| "Ollamaのインストーラーを起動できませんでした。".into())
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {

@@ -62,7 +62,7 @@ if ! rg -F -q 'local_llm_status' "$RUST_SOURCE" || ! rg -F -q 'pull_local_model'
   exit 1
 fi
 
-if ! rg -F -q 'ローカルAI' "$FRONTEND" || ! rg -F -q 'Ollamaを入れる' "$FRONTEND"; then
+if ! rg -F -q 'ローカルAI' "$FRONTEND" || ! rg -F -q 'Ollamaを自動インストール' "$FRONTEND"; then
   print -u2 'FAIL: 端末内LLMを使うUIがありません'
   exit 1
 fi
