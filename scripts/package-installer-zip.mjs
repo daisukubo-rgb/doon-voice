@@ -7,8 +7,10 @@ import { join, basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
-const bundleRoot = join(root, "src-tauri", "target", "release", "bundle");
+const tauriTarget = process.env.TAURI_TARGET;
+const bundleRoot = join(root, "src-tauri", "target", ...(tauriTarget ? [tauriTarget, "release"] : ["release"]), "bundle");
 const outputRoot = join(root, "dist");
+const packageSuffix = process.env.DOON_VOICE_PACKAGE_SUFFIX || (process.platform === "darwin" ? "macOS" : "Windows");
 
 function firstFile(directory, extensions) {
   if (!existsSync(directory)) return null;
@@ -24,7 +26,7 @@ function packageMac() {
   mkdirSync(packageDir, { recursive: true });
   copyFileSync(installer, join(packageDir, basename(installer)));
   writeFileSync(join(packageDir, "インストール方法.txt"), "DMGをダブルクリックして開き、DOON VoiceをApplicationsへ移動してください。\n", "utf8");
-  const output = join(outputRoot, "DOON Voice-macOS.zip");
+  const output = join(outputRoot, `DOON Voice-${packageSuffix}.zip`);
   rmSync(output, { force: true });
   execFileSync("ditto", ["-c", "-k", "--sequesterRsrc", packageDir, output], { stdio: "inherit" });
   rmSync(staging, { recursive: true, force: true });
@@ -37,7 +39,7 @@ function packageWindows() {
   const staging = mkdtempSync(join(tmpdir(), "doon-voice-installer-"));
   const stagedInstaller = join(staging, basename(installer));
   copyFileSync(installer, stagedInstaller);
-  const output = join(outputRoot, "DOON Voice-Windows.zip");
+  const output = join(outputRoot, `DOON Voice-${packageSuffix}.zip`);
   rmSync(output, { force: true });
   const command = `Compress-Archive -Path '${stagedInstaller.replaceAll("'", "''")}' -DestinationPath '${output.replaceAll("'", "''")}' -Force`;
   execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], { stdio: "inherit" });

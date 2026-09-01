@@ -28,14 +28,17 @@ jobs:
             runner: macos-14
             target: x86_64-apple-darwin
             args: --target x86_64-apple-darwin
+            packageSuffix: macOS-Intel
           - name: macOS Apple Silicon
             runner: macos-14
             target: ''
             args: ''
+            packageSuffix: macOS
           - name: Windows
             runner: windows-latest
             target: ''
             args: ''
+            packageSuffix: Windows
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -66,6 +69,9 @@ jobs:
           prerelease: false
       - name: Package installer ZIP
         run: npm run package:zip
+        env:
+          TAURI_TARGET: ${{ matrix.target }}
+          DOON_VOICE_PACKAGE_SUFFIX: ${{ matrix.packageSuffix }}
       - name: Upload installer ZIP
         uses: softprops/action-gh-release@v2
         env:
