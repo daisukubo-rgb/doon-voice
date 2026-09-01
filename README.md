@@ -31,6 +31,8 @@ GitHubの [Releases](https://github.com/daisukubo-rgb/doon-voice/releases) か�
 - macOS: `.dmg` を開き、DOON VoiceをApplicationsへ移動します。
 - Windows: `.msi` を実行します。
 
+GitHub Releasesには、各インストーラーを入れたZIPも添付します。ZIPを展開し、中のDMG（macOS）またはMSI/インストーラー（Windows）をダブルクリックしてください。
+
 初回起動後、`接続と設定` でDOON Voice専用の高精度音声認識モデル（約574MB）を取得してください。マイクを許可し、入力先にカーソルを置いて開始・停止キーを押すと、完成した文章がその入力欄へ直接入り、同時にクリップボードにも保存されます。
 
 macOSでは「カーソル位置へ入力」の `許可する` を押し、システム設定のアクセシビリティでDOON Voiceをオンにしてください。マイクとアクセシビリティの許可はPCごとに必要です。
@@ -66,6 +68,7 @@ DOON Voiceは認証情報を保存しません。ChatGPT / Claudeのログイン
 npm ci
 npm run build          # フロントエンドの型チェックとビルド
 npm run dist           # このPC向けのインストーラーを生成
+npm run package:zip    # 生成済みインストーラーをZIPで包む
 scripts/test-desktop-distribution.sh
 ```
 

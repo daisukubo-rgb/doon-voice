@@ -54,3 +54,14 @@ jobs:
             初回起動後に音声認識モデルを取得し、必要なAIを接続してください。
           releaseDraft: true
           prerelease: false
+      - name: Package installer ZIP
+        run: npm run package:zip
+      - name: Upload installer ZIP
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          files: dist/DOON Voice-*.zip
+          draft: true
+          prerelease: false
