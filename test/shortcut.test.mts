@@ -49,6 +49,8 @@ assert(shortcutLabel("Ctrl+Alt+Space", false) === "Ctrl + Alt + Space", "Windows
 assert(DEFAULT_OUTPUT_TARGET === "codex", "標準の出力先はChatGPTにする");
 assert(outputTargetLabel("local") === "このPCのAI", "端末内AIの選択肢を表示する");
 assert(isOutputTarget("claude"), "Claudeを有効な出力先として扱う");
+assert(isOutputTarget("gemini"), "Geminiを有効な出力先として扱う");
+assert(outputTargetLabel("gemini") === "Gemini", "Antigravity経由のGeminiを表示する");
 assert(!isOutputTarget("unknown"), "未知の出力先は保存しない");
 
 console.info("PASS: ショートカットの変換と表示を検証しました");

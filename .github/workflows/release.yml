@@ -63,8 +63,9 @@ jobs:
           releaseBody: |
             DOON Voiceの配布版です。
 
-            macOSはDMG、WindowsはMSIをダウンロードしてください。
-            初回起動後に音声認識モデルを取得し、必要なAIを接続してください。
+            Assetsの `Source code (zip)` をダウンロードして展開し、macOSは `DOON Voiceを起動.command`、Windowsは `DOON Voiceを起動.bat` をダブルクリックしてください。初回だけ必要な部品を確認・セットアップし、そのままDOON Voiceを起動します。
+
+            DMGとMSIは、インストーラーを使いたい方向けの配布物です。
           releaseDraft: false
           prerelease: false
       - name: Package installer ZIP

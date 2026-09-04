@@ -8,6 +8,15 @@
 
 ソースから起動する場合、macOSの署名やWindowsの証明書は不要です。利用者のPC上でアプリをビルドします。
 
+GitHub ReleasesのAssetsにある `Source code (zip)` を取得し、先に中身をすべて展開してください。展開したフォルダを開き、OSに合うファイルをダブルクリックします。
+
+- macOS: `DOON Voiceを起動.command`
+- Windows: `DOON Voiceを起動.bat`
+
+初回は環境確認とセットアップを行ってからDOON Voiceを起動します。2回目以降は、使用する部品に変更がなければセットアップを飛ばして起動します。Node.jsが入っていない場合はダウンロードページを開きます。Rustなどが不足している場合は、画面に準備内容を表示して停止します。
+
+ターミナルから起動する場合は、次のコマンドを使います。
+
 ```bash
 git clone https://github.com/daisukubo-rgb/doon-voice.git
 cd doon-voice

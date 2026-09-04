@@ -10,17 +10,48 @@ FRONTEND="$DESKTOP_DIR/src/App.tsx"
 SHORTCUT_UTIL="$DESKTOP_DIR/src/shortcut.ts"
 SHORTCUT_CAPABILITY="$DESKTOP_DIR/src-tauri/capabilities/desktop.json"
 SETUP_SCRIPT="$DESKTOP_DIR/scripts/setup.mjs"
+LAUNCH_SCRIPT="$DESKTOP_DIR/scripts/launch.mjs"
+LAUNCH_TEST="$DESKTOP_DIR/scripts/test-launcher.mjs"
+MAC_LAUNCHER="$DESKTOP_DIR/DOON Voiceを起動.command"
+WINDOWS_LAUNCHER="$DESKTOP_DIR/DOON Voiceを起動.bat"
 PACKAGE_JSON="$DESKTOP_DIR/package.json"
 PRIVACY="$DESKTOP_DIR/docs/PRIVACY.md"
 README="$DESKTOP_DIR/README.md"
 WORKFLOW="$PROJECT_DIR/.github/workflows/release.yml"
 
-for required in "$TAURI_CONFIG" "$INFO_PLIST" "$RUST_SOURCE" "$FRONTEND" "$SHORTCUT_UTIL" "$SHORTCUT_CAPABILITY" "$SETUP_SCRIPT" "$PACKAGE_JSON" "$PRIVACY" "$README" "$WORKFLOW"; do
+for required in "$TAURI_CONFIG" "$INFO_PLIST" "$RUST_SOURCE" "$FRONTEND" "$SHORTCUT_UTIL" "$SHORTCUT_CAPABILITY" "$SETUP_SCRIPT" "$LAUNCH_SCRIPT" "$LAUNCH_TEST" "$MAC_LAUNCHER" "$WINDOWS_LAUNCHER" "$PACKAGE_JSON" "$PRIVACY" "$README" "$WORKFLOW"; do
   if [[ ! -f "$required" ]]; then
     print -u2 "FAIL: 配布に必要なファイルがありません: $required"
     exit 1
   fi
 done
+
+if [[ ! -x "$MAC_LAUNCHER" ]]; then
+  print -u2 'FAIL: macOS用ダブルクリックランチャーに実行権限がありません'
+  exit 1
+fi
+
+if ! rg -F -q 'scripts/launch.mjs' "$MAC_LAUNCHER" || ! rg -F -q 'scripts\launch.mjs' "$WINDOWS_LAUNCHER"; then
+  print -u2 'FAIL: OS別ランチャーが共通のセットアップ・起動処理を呼び出していません'
+  exit 1
+fi
+
+if ! rg -F -q 'npm run setup' "$LAUNCH_SCRIPT" || ! rg -F -q 'npm run app' "$LAUNCH_SCRIPT"; then
+  print -u2 'FAIL: ダブルクリック時の初回セットアップとアプリ起動が定義されていません'
+  exit 1
+fi
+
+if ! rg -F -q 'visualStudioBuildToolsAvailable' "$SETUP_SCRIPT" || ! rg -F -q 'webView2RuntimeAvailable' "$SETUP_SCRIPT"; then
+  print -u2 'FAIL: WindowsのC++ビルド環境とWebView2を初回セットアップで確認していません'
+  exit 1
+fi
+
+if ! rg -F -q 'result.error' "$LAUNCH_SCRIPT" || ! rg -F -q 'result.signal' "$LAUNCH_SCRIPT"; then
+  print -u2 'FAIL: npm起動失敗時の原因表示がありません'
+  exit 1
+fi
+
+node "$LAUNCH_TEST"
 
 if ! rg -F -q 'NSMicrophoneUsageDescription' "$INFO_PLIST"; then
   print -u2 'FAIL: macOSのマイク利用目的がInfo.plistに定義されていません'

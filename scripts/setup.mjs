@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import process from "node:process";
+import { join } from "node:path";
 
 const checkOnly = process.argv.includes("--check-only");
 const isWindows = process.platform === "win32";
@@ -31,6 +33,34 @@ function majorVersion(value) {
   return match ? Number(match[1]) : 0;
 }
 
+function visualStudioBuildToolsAvailable() {
+  if (!isWindows) return true;
+  if (available("cl")) return true;
+
+  const programFilesX86 = process.env["ProgramFiles(x86)"];
+  if (!programFilesX86) return false;
+  const vswhere = join(programFilesX86, "Microsoft Visual Studio", "Installer", "vswhere.exe");
+  if (!existsSync(vswhere)) return false;
+
+  const result = spawnSync(vswhere, [
+    "-latest",
+    "-products",
+    "*",
+    "-requires",
+    "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+    "-property",
+    "installationPath",
+  ], { encoding: "utf8" });
+  return result.status === 0 && Boolean(result.stdout?.trim());
+}
+
+function webView2RuntimeAvailable() {
+  if (!isWindows) return true;
+  const roots = [process.env["ProgramFiles(x86)"], process.env.ProgramFiles, process.env.LOCALAPPDATA]
+    .filter(Boolean);
+  return roots.some((root) => existsSync(join(root, "Microsoft", "EdgeWebView", "Application")));
+}
+
 const nodeVersion = version(process.execPath);
 const checks = [
   ["Node.js", majorVersion(nodeVersion) >= 20, nodeVersion],
@@ -40,6 +70,11 @@ const checks = [
 
 if (process.platform === "darwin") {
   checks.push(["Xcode Command Line Tools", available("xcode-select") && works("xcode-select", ["-p"]), "macOSのビルドに必要"]);
+}
+
+if (isWindows) {
+  checks.push(["Visual Studio Build Tools (C++)", visualStudioBuildToolsAvailable(), "Windows版のビルドに必要"]);
+  checks.push(["WebView2 Runtime", webView2RuntimeAvailable(), "DOON Voiceの画面表示に必要"]);
 }
 
 console.log("DOON Voice セットアップ確認");

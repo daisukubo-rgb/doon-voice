@@ -1,3 +1,6 @@
+mod cloud_runtime;
+mod native_audio;
+
 #[cfg(target_os = "macos")]
 use core_foundation::{
     base::TCFType, boolean::CFBoolean, dictionary::CFDictionary, string::CFString,
@@ -11,7 +14,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     ffi::OsString,
-    io::Write,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -22,17 +24,23 @@ use std::{
 };
 use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, Position, State, WebviewUrl,
-    WebviewWindowBuilder,
+    WebviewWindowBuilder, WindowEvent,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_shell::{process::CommandEvent, ShellExt};
 use tokio::io::AsyncWriteExt;
+
+use cloud_runtime::{CloudKind, CloudRuntime, CloudSpec};
+use native_audio::NativeAudioRecorder;
 
 const MODEL: &str = "ggml-large-v3-turbo-q5_0.bin";
 const MODEL_URL: &str =
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin?download=true";
 const MAX_TEXT: usize = 20_000;
 const MAX_WAV: usize = 240 * 1024 * 1024;
+const EMPTY_AI_RESPONSE: &str = "文章を受け取れませんでした。もう一度話してください。";
+const CLAUDE_SUBSCRIPTION_UNAVAILABLE: &str =
+    "Claudeはログイン済みですが、Claude Codeの利用が無効です。ChatGPTまたはローカルAIを選んでください。";
 const LOCAL_MODEL: &str = "gemma4:e2b";
 #[cfg(target_os = "macos")]
 const OLLAMA_MAC_URL: &str = "https://ollama.com/download/Ollama-darwin.zip";
@@ -42,13 +50,7 @@ const JAPANESE_TRANSCRIPTION_PROMPT: &str =
     "日本語の音声入力です。句読点を自然に入れ、固有名詞や専門用語を正確に認識してください。";
 const CODEX_FAST_MODEL: &str = "gpt-5.6-luna";
 const CLAUDE_FAST_MODEL: &str = "haiku";
-const CODEX_EXEC_OPTIONS: &[&str] = &[
-    "exec",
-    "--ephemeral",
-    "--skip-git-repo-check",
-    "--sandbox",
-    "read-only",
-];
+const ANTIGRAVITY_FLASH_MODEL: &str = "Gemini 3.6 Flash (Low)";
 static TRANSCRIPTION_DOWNLOAD_RUNNING: AtomicBool = AtomicBool::new(false);
 static LOCAL_MODEL_PULL_RUNNING: AtomicBool = AtomicBool::new(false);
 
@@ -68,21 +70,6 @@ fn begin_exclusive_operation<'a>(
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .map(|_| ExclusiveOperation(running))
         .map_err(|_| message.to_string())
-}
-
-fn codex_exec_arguments(output: &Path) -> Vec<OsString> {
-    let mut args = CODEX_EXEC_OPTIONS
-        .iter()
-        .map(OsString::from)
-        .collect::<Vec<_>>();
-    args.extend([
-        OsString::from("--model"),
-        OsString::from(CODEX_FAST_MODEL),
-        OsString::from("--output-last-message"),
-        output.as_os_str().to_owned(),
-        OsString::from("-"),
-    ]);
-    args
 }
 
 #[cfg(target_os = "macos")]
@@ -204,7 +191,7 @@ fn direct_input_permission_message() -> &'static str {
 fn overlay_state_label(state: &str) -> Option<&'static str> {
     match state {
         "listening" => Some("聞いています"),
-        "thinking" => Some("文章を整えています"),
+        "thinking" => Some("考えています"),
         "done" => Some("入力しました"),
         "error" => Some("入力できませんでした"),
         "hidden" => Some(""),
@@ -212,33 +199,92 @@ fn overlay_state_label(state: &str) -> Option<&'static str> {
     }
 }
 
+fn overlay_url_with_state(mut url: tauri::Url, state: &str) -> Result<tauri::Url, String> {
+    overlay_state_label(state).ok_or_else(|| "表示状態が不正です。".to_string())?;
+    url.set_query(Some(&format!("overlay={state}")));
+    Ok(url)
+}
+
 struct VoiceShortcutState(Mutex<Option<String>>);
 
-fn emit_voice_shortcut(app: &AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        // WebKit can suspend a minimized window. Restore it without focusing so the
-        // active app keeps receiving keyboard input and the audio event can arrive.
-        if window.is_minimized().unwrap_or(false) {
-            // Keep the window from becoming the active application when macOS
-            // restores it; only the WebView needs to resume its event loop.
-            let _ = window.set_focusable(false);
-            let _ = window.unminimize();
-            let _ = window.set_focusable(true);
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum BackgroundVoicePhase {
+    Idle,
+    Starting,
+    Recording,
+    Processing,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BackgroundVoiceAction {
+    StartRecording,
+    StopAndProcess,
+    CancelStarting,
+    Ignore,
+}
+
+fn background_voice_action(phase: BackgroundVoicePhase) -> BackgroundVoiceAction {
+    match phase {
+        BackgroundVoicePhase::Idle => BackgroundVoiceAction::StartRecording,
+        BackgroundVoicePhase::Recording => BackgroundVoiceAction::StopAndProcess,
+        BackgroundVoicePhase::Starting => BackgroundVoiceAction::CancelStarting,
+        BackgroundVoicePhase::Processing => BackgroundVoiceAction::Ignore,
+    }
+}
+
+#[derive(Clone, Serialize)]
+struct BackgroundVoiceSnapshot {
+    state: BackgroundVoicePhase,
+    transcript: String,
+    output: String,
+    message: String,
+}
+
+struct BackgroundVoiceRuntime {
+    phase: BackgroundVoicePhase,
+    recorder: Option<NativeAudioRecorder>,
+    config: VoiceRuntimeConfig,
+    transcript: String,
+    output: String,
+    message: String,
+    generation: u64,
+}
+
+impl BackgroundVoiceRuntime {
+    fn new(config: VoiceRuntimeConfig) -> Self {
+        Self {
+            phase: BackgroundVoicePhase::Idle,
+            recorder: None,
+            config,
+            transcript: String::new(),
+            output: String::new(),
+            message: String::new(),
+            generation: 0,
         }
     }
-    // Render the status pill from the native shortcut callback as well as from
-    // the WebView.  When another application is frontmost WebKit may take a
-    // moment to wake; showing it here keeps the global shortcut feedback
-    // visible immediately and does not depend on the main window's focus.
-    let _ = set_voice_overlay(app.clone(), "listening".to_string());
-    let _ = app.emit("doon-voice-shortcut", ());
+
+    fn snapshot(&self) -> BackgroundVoiceSnapshot {
+        BackgroundVoiceSnapshot {
+            state: self.phase,
+            transcript: self.transcript.clone(),
+            output: self.output.clone(),
+            message: self.message.clone(),
+        }
+    }
+}
+
+struct BackgroundVoiceState(Mutex<BackgroundVoiceRuntime>);
+
+fn publish_background_voice(app: &AppHandle, snapshot: &BackgroundVoiceSnapshot) {
+    let _ = app.emit("background-voice-state", snapshot);
 }
 
 fn register_voice_shortcut_handler(app: &AppHandle, shortcut: &str) -> Result<(), String> {
     app.global_shortcut()
         .on_shortcut(shortcut, |app, _, event| {
             if event.state == ShortcutState::Pressed {
-                emit_voice_shortcut(app);
+                let _ = handle_background_voice_toggle(app);
             }
         })
         .map_err(|error| format!("ショートカットを登録できませんでした: {error}"))
@@ -249,6 +295,7 @@ fn set_voice_shortcut(
     app: AppHandle,
     shortcut: String,
     state: State<'_, VoiceShortcutState>,
+    voice: State<'_, BackgroundVoiceState>,
 ) -> Result<(), String> {
     let shortcut = shortcut.trim().to_string();
     if shortcut.is_empty() {
@@ -259,25 +306,35 @@ fn set_voice_shortcut(
         .0
         .lock()
         .map_err(|_| "ショートカット状態を確認できませんでした。")?;
-    if registered.as_deref() == Some(shortcut.as_str()) {
-        return Ok(());
-    }
+    let already_registered = registered.as_deref() == Some(shortcut.as_str());
 
-    let previous = registered.clone();
-    if let Some(previous) = previous.as_deref() {
-        app.global_shortcut()
-            .unregister(previous)
-            .map_err(|error| format!("以前のショートカットを解除できませんでした: {error}"))?;
-    }
-
-    if let Err(error) = register_voice_shortcut_handler(&app, &shortcut) {
+    if !already_registered {
+        let previous = registered.clone();
         if let Some(previous) = previous.as_deref() {
-            let _ = register_voice_shortcut_handler(&app, previous);
+            app.global_shortcut()
+                .unregister(previous)
+                .map_err(|error| format!("以前のショートカットを解除できませんでした: {error}"))?;
         }
-        return Err(error);
+
+        if let Err(error) = register_voice_shortcut_handler(&app, &shortcut) {
+            if let Some(previous) = previous.as_deref() {
+                let _ = register_voice_shortcut_handler(&app, previous);
+            }
+            return Err(error);
+        }
+        *registered = Some(shortcut.clone());
     }
-    *registered = Some(shortcut);
-    Ok(())
+    drop(registered);
+
+    let config = {
+        let mut runtime = voice
+            .0
+            .lock()
+            .map_err(|_| "音声入力の設定を更新できませんでした。")?;
+        runtime.config.shortcut = shortcut;
+        runtime.config.clone()
+    };
+    save_voice_runtime_config(&app, &config)
 }
 
 #[tauri::command]
@@ -298,6 +355,50 @@ fn clear_voice_shortcut(
 }
 
 #[tauri::command]
+fn configure_background_voice(
+    app: AppHandle,
+    target: OutputTarget,
+    dictionary: Vec<String>,
+    state: State<'_, BackgroundVoiceState>,
+) -> Result<(), String> {
+    let config = {
+        let mut runtime = state
+            .0
+            .lock()
+            .map_err(|_| "音声入力の設定を更新できませんでした。")?;
+        runtime.config.target = target;
+        runtime.config.dictionary = dictionary
+            .into_iter()
+            .filter_map(|term| {
+                let term = term.trim().to_string();
+                (!term.is_empty() && term.chars().count() <= 80).then_some(term)
+            })
+            .take(100)
+            .collect();
+        runtime.config.clone()
+    };
+    save_voice_runtime_config(&app, &config)?;
+    prewarm_output_target(&app, target);
+    Ok(())
+}
+
+#[tauri::command]
+fn background_voice_status(
+    state: State<'_, BackgroundVoiceState>,
+) -> Result<BackgroundVoiceSnapshot, String> {
+    state
+        .0
+        .lock()
+        .map(|runtime| runtime.snapshot())
+        .map_err(|_| "音声入力の状態を読み取れませんでした。".to_string())
+}
+
+#[tauri::command]
+fn toggle_background_voice(app: AppHandle) -> Result<(), String> {
+    handle_background_voice_toggle(&app)
+}
+
+#[tauri::command]
 fn set_voice_overlay(app: AppHandle, state: String) -> Result<(), String> {
     overlay_state_label(&state).ok_or_else(|| "表示状態が不正です。".to_string())?;
     if state == "hidden" {
@@ -310,7 +411,16 @@ fn set_voice_overlay(app: AppHandle, state: String) -> Result<(), String> {
     }
 
     let window = match app.get_webview_window("voice-overlay") {
-        Some(window) => window,
+        Some(window) => {
+            let current_url = window
+                .url()
+                .map_err(|_| "音声状態の現在表示を読み取れませんでした。".to_string())?;
+            let next_url = overlay_url_with_state(current_url, &state)?;
+            window
+                .navigate(next_url)
+                .map_err(|_| "音声状態の表示を切り替えられませんでした。".to_string())?;
+            window
+        }
         None => WebviewWindowBuilder::new(
             &app,
             "voice-overlay",
@@ -344,20 +454,14 @@ fn set_voice_overlay(app: AppHandle, state: String) -> Result<(), String> {
     // The status pill must never become the active application. Keeping it
     // non-focusable preserves the user's caret in the app they were typing in.
     let _ = window.set_focusable(false);
-    // Order the window before emitting so a newly-created WebView has a
-    // chance to install its event listener.  Re-emit shortly afterwards to
-    // cover the first-load race (especially for the listening → thinking
-    // transition after a global shortcut).
+    // URLにも状態を保持することで、非表示中にWebView側のイベント受信が
+    // 遅延しても、再読み込み後の初期表示が実際の処理状態と一致する。
     window
         .show()
         .map_err(|_| "音声状態を表示できませんでした。".to_string())?;
     window
         .emit("voice-overlay-state", &state)
         .map_err(|_| "音声状態を更新できませんでした。".to_string())?;
-    if state == "thinking" {
-        std::thread::sleep(Duration::from_millis(50));
-        let _ = window.emit("voice-overlay-state", &state);
-    }
     Ok(())
 }
 #[cfg(target_os = "macos")]
@@ -482,24 +586,113 @@ fn open_direct_input_settings() -> Result<(), String> {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 enum Provider {
     Codex,
     Claude,
+    Gemini,
 }
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 enum OutputTarget {
     Codex,
     Claude,
+    Gemini,
     Local,
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+struct VoiceRuntimeConfig {
+    target: OutputTarget,
+    dictionary: Vec<String>,
+    shortcut: String,
+}
+
+impl Default for VoiceRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            target: OutputTarget::Codex,
+            dictionary: Vec::new(),
+            shortcut: "Control+P".into(),
+        }
+    }
+}
+
+fn voice_runtime_config_path(app: &AppHandle) -> Result<PathBuf, String> {
+    let directory = app
+        .path()
+        .app_config_dir()
+        .map_err(|_| "設定の保存先を特定できませんでした。".to_string())?;
+    std::fs::create_dir_all(&directory)
+        .map_err(|_| "設定の保存先を作成できませんでした。".to_string())?;
+    Ok(directory.join("voice-runtime.json"))
+}
+
+fn load_voice_runtime_config(app: &AppHandle) -> VoiceRuntimeConfig {
+    voice_runtime_config_path(app)
+        .and_then(|path| {
+            std::fs::read(path).map_err(|_| "設定はまだ保存されていません。".to_string())
+        })
+        .and_then(|bytes| {
+            serde_json::from_slice(&bytes)
+                .map_err(|_| "保存済みの設定を読み取れませんでした。".to_string())
+        })
+        .unwrap_or_default()
+}
+
+fn save_voice_runtime_config(app: &AppHandle, config: &VoiceRuntimeConfig) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(config)
+        .map_err(|_| "設定を保存できませんでした。".to_string())?;
+    std::fs::write(voice_runtime_config_path(app)?, bytes)
+        .map_err(|_| "設定を保存できませんでした。".to_string())
 }
 #[derive(Serialize)]
 struct ProviderStatus {
     provider: String,
     installed: bool,
     authenticated: bool,
+    usability: ProviderUsability,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ProviderUsability {
+    #[default]
+    Unknown,
+    Available,
+    Unavailable,
+}
+
+#[derive(Default)]
+struct ProviderHealthState(Mutex<HashMap<Provider, ProviderUsability>>);
+
+impl ProviderHealthState {
+    fn usability(&self, provider: Provider) -> ProviderUsability {
+        self.0
+            .lock()
+            .ok()
+            .and_then(|health| health.get(&provider).copied())
+            .unwrap_or_default()
+    }
+
+    fn set(&self, provider: Provider, usability: ProviderUsability) {
+        if let Ok(mut health) = self.0.lock() {
+            health.insert(provider, usability);
+        }
+    }
+
+    fn mark_available(&self, provider: Provider) {
+        self.set(provider, ProviderUsability::Available);
+    }
+
+    fn mark_unavailable(&self, provider: Provider) {
+        self.set(provider, ProviderUsability::Unavailable);
+    }
+
+    fn reset(&self, provider: Provider) {
+        self.set(provider, ProviderUsability::Unknown);
+    }
 }
 #[derive(Serialize)]
 struct LocalModelStatus {
@@ -538,9 +731,64 @@ impl Provider {
         match self {
             Self::Codex => "codex",
             Self::Claude => "claude",
+            Self::Gemini => "agy",
         }
     }
 }
+
+fn cloud_kind(provider: Provider) -> CloudKind {
+    match provider {
+        Provider::Codex => CloudKind::Codex,
+        Provider::Claude => CloudKind::Claude,
+        Provider::Gemini => CloudKind::Gemini,
+    }
+}
+
+fn cloud_spec(app: &AppHandle, provider: Provider) -> Result<CloudSpec, String> {
+    let cwd = voice_dir(app)?.join("cloud-runtime");
+    std::fs::create_dir_all(&cwd)
+        .map_err(|_| "クラウドAIの作業場所を準備できませんでした。".to_string())?;
+    let (model, timeout) = match provider {
+        Provider::Codex => (CODEX_FAST_MODEL, Duration::from_secs(90)),
+        Provider::Claude => (CLAUDE_FAST_MODEL, Duration::from_secs(90)),
+        Provider::Gemini => (ANTIGRAVITY_FLASH_MODEL, Duration::from_secs(45)),
+    };
+    Ok(CloudSpec {
+        kind: cloud_kind(provider),
+        executable: command_path(provider.cmd()),
+        path: cli_path_environment(),
+        cwd,
+        model: model.into(),
+        timeout,
+    })
+}
+
+fn prewarm_output_target(app: &AppHandle, target: OutputTarget) {
+    match target {
+        OutputTarget::Local => {
+            tauri::async_runtime::spawn(async {
+                let _ = prewarm_local_ai().await;
+            });
+        }
+        OutputTarget::Codex | OutputTarget::Claude | OutputTarget::Gemini => {
+            let provider = match target {
+                OutputTarget::Codex => Provider::Codex,
+                OutputTarget::Claude => Provider::Claude,
+                OutputTarget::Gemini => Provider::Gemini,
+                OutputTarget::Local => return,
+            };
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                let Ok(spec) = cloud_spec(&app, provider) else {
+                    return;
+                };
+                let cloud = app.state::<CloudRuntime>();
+                let _ = cloud.warm(spec);
+            });
+        }
+    }
+}
+
 fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(90))
@@ -580,6 +828,7 @@ fn login_status_args(provider: &Provider) -> &'static [&'static str] {
     match provider {
         Provider::Codex => &["login", "status"],
         Provider::Claude => &["auth", "status"],
+        Provider::Gemini => &["models"],
     }
 }
 
@@ -593,6 +842,7 @@ fn login_status_is_authenticated(provider: &Provider, success: bool, output: &st
             .ok()
             .and_then(|value| value.get("loggedIn").and_then(|entry| entry.as_bool()))
             .unwrap_or(false),
+        Provider::Gemini => output.contains("Gemini "),
     }
 }
 
@@ -611,19 +861,27 @@ fn provider_authenticated(provider: &Provider) -> bool {
 }
 
 #[tauri::command]
-fn provider_status(provider: Provider) -> ProviderStatus {
+fn provider_status(provider: Provider, health: State<'_, ProviderHealthState>) -> ProviderStatus {
     let installed = command_available(provider.cmd());
     ProviderStatus {
         provider: provider.cmd().into(),
         installed,
         authenticated: installed && provider_authenticated(&provider),
+        usability: health.usability(provider),
     }
 }
 #[tauri::command]
-fn start_official_login(provider: Provider) -> Result<(), String> {
+fn start_official_login(
+    provider: Provider,
+    health: State<'_, ProviderHealthState>,
+    cloud: State<'_, CloudRuntime>,
+) -> Result<(), String> {
+    health.reset(provider);
+    cloud.reset(cloud_kind(provider));
     match provider {
         Provider::Codex => launch_codex_login(),
         Provider::Claude => launch_claude_login(),
+        Provider::Gemini => launch_gemini_login(),
     }
 }
 #[tauri::command]
@@ -869,7 +1127,7 @@ fn clean(s: &str) -> Result<String, String> {
         .unwrap_or(s)
         .trim();
     if s.is_empty() {
-        return Err("文章を受け取れませんでした。もう一度話してください。".into());
+        return Err(EMPTY_AI_RESPONSE.into());
     }
     if s.chars().count() > MAX_TEXT {
         return Err("文章が長すぎます。短く区切って話してください。".into());
@@ -1157,6 +1415,16 @@ fn preserve_transcription_meaning<'a>(input: &'a str, output: &'a str) -> &'a st
         input
     }
 }
+fn use_ai_output_or_transcript(
+    transcript: &str,
+    polished: Result<String, String>,
+) -> Result<String, String> {
+    match polished {
+        Ok(polished) => Ok(preserve_transcription_meaning(transcript, &polished).to_string()),
+        Err(error) if error == EMPTY_AI_RESPONSE => Ok(transcript.to_string()),
+        Err(error) => Err(error),
+    }
+}
 fn local_generate_payload(prompt: &str) -> serde_json::Value {
     serde_json::json!({
         "model": LOCAL_MODEL,
@@ -1172,6 +1440,30 @@ fn local_generate_payload(prompt: &str) -> serde_json::Value {
         }
     })
 }
+fn local_warmup_payload() -> serde_json::Value {
+    serde_json::json!({
+        "model": LOCAL_MODEL,
+        "prompt": "",
+        "stream": false,
+        "keep_alive": "30m"
+    })
+}
+async fn prewarm_local_ai() -> Result<(), String> {
+    if !ollama_installed() {
+        return Ok(());
+    }
+    let response = client()?
+        .post("http://127.0.0.1:11434/api/generate")
+        .json(&local_warmup_payload())
+        .send()
+        .await
+        .map_err(|error| local_connection_error(&error))?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err("ローカルAIを事前起動できませんでした。".into())
+    }
+}
 fn local_connection_error(error: &reqwest::Error) -> String {
     if error.is_timeout() {
         return "ローカルAIの処理が時間切れになりました。文章を短くして、もう一度試してください。"
@@ -1181,15 +1473,6 @@ fn local_connection_error(error: &reqwest::Error) -> String {
         return "Ollamaが起動していません。Ollamaを開いてから、もう一度試してください。".into();
     }
     "ローカルAIと通信できませんでした。接続と設定から状態を確認してください。".into()
-}
-fn temp_work_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let n = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let d = voice_dir(app)?.join(format!("work-{n}"));
-    std::fs::create_dir_all(&d).map_err(|_| "文章処理の準備に失敗しました。".to_string())?;
-    Ok(d)
 }
 fn command_error(stderr: &[u8]) -> String {
     let detail = String::from_utf8_lossy(stderr);
@@ -1210,84 +1493,54 @@ fn command_error(stderr: &[u8]) -> String {
     "文章を整えられませんでした。接続と設定を確認して、もう一度試してください。".into()
 }
 
-fn command_start_error(label: &str, error: &std::io::Error) -> String {
-    let detail = error.to_string().to_ascii_lowercase();
-    if detail.contains("operation not permitted")
-        || detail.contains("permission denied")
-        || detail.contains("cannot be opened")
+fn provider_command_error(provider: &Provider, stderr: &[u8]) -> String {
+    let detail = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    if provider == &Provider::Claude
+        && (detail.contains("disabled claude subscription access")
+            || detail.contains("use an anthropic api key instead"))
     {
-        return format!(
-            "macOSが{label} CLIの起動をブロックしました。公式のCLIを最新版へ更新してから、もう一度接続してください。"
-        );
+        return CLAUDE_SUBSCRIPTION_UNAVAILABLE.into();
     }
-    format!("{label}を開始できませんでした。公式ログインとCLIのインストールを確認してください。")
+    command_error(stderr)
 }
-fn process_with_codex(app: &AppHandle, prompt: &str) -> Result<String, String> {
-    let dir = temp_work_dir(app)?;
-    let output = dir.join("result.txt");
-    let result = (|| {
-        let mut child = Command::new(command_path("codex"))
-            .args(codex_exec_arguments(&output))
-            .current_dir(&dir)
-            .env("PATH", cli_path_environment())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| command_start_error("Codex", &error))?;
-        if let Some(stdin) = child.stdin.as_mut() {
-            stdin
-                .write_all(prompt.as_bytes())
-                .map_err(|_| "文章をCodexへ渡せませんでした。".to_string())?;
-        }
-        let run = child
-            .wait_with_output()
-            .map_err(|_| "Codexの応答を受け取れませんでした。".to_string())?;
-        if !run.status.success() {
-            return Err(command_error(&run.stderr));
-        }
-        std::fs::read_to_string(&output).map_err(|_| "Codexの応答を読めませんでした。".to_string())
-    })();
-    let _ = std::fs::remove_dir_all(&dir);
-    result.and_then(|text| clean(&text))
+
+fn provider_preflight(health: &ProviderHealthState, provider: Provider) -> Result<(), String> {
+    if health.usability(provider) == ProviderUsability::Unavailable {
+        let message = match provider {
+            Provider::Claude => CLAUDE_SUBSCRIPTION_UNAVAILABLE,
+            Provider::Codex => "ChatGPTは現在利用できません。再ログインしてからお試しください。",
+            Provider::Gemini => {
+                "Geminiは現在利用できません。Antigravityへ再ログインしてからお試しください。"
+            }
+        };
+        return Err(message.into());
+    }
+    Ok(())
 }
-fn process_with_claude(app: &AppHandle, prompt: &str) -> Result<String, String> {
-    let dir = temp_work_dir(app)?;
-    let result = (|| {
-        let mut child = Command::new(command_path("claude"))
-            .args([
-                "-p",
-                "--model",
-                CLAUDE_FAST_MODEL,
-                "--safe-mode",
-                "--tools",
-                "",
-                "--no-session-persistence",
-                "--output-format",
-                "text",
-            ])
-            .current_dir(&dir)
-            .env("PATH", cli_path_environment())
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|error| command_start_error("Claude Code", &error))?;
-        if let Some(stdin) = child.stdin.as_mut() {
-            stdin
-                .write_all(prompt.as_bytes())
-                .map_err(|_| "文章をClaudeへ渡せませんでした。".to_string())?;
-        }
-        let run = child
-            .wait_with_output()
-            .map_err(|_| "Claudeの応答を受け取れませんでした。".to_string())?;
-        if !run.status.success() {
-            return Err(command_error(&run.stderr));
-        }
-        String::from_utf8(run.stdout).map_err(|_| "Claudeの応答を読めませんでした。".to_string())
-    })();
-    let _ = std::fs::remove_dir_all(&dir);
-    result.and_then(|text| clean(&text))
+
+fn provider_runtime_error(provider: Provider, error: String) -> String {
+    let lower = error.to_ascii_lowercase();
+    if provider == Provider::Gemini
+        && (lower.contains("credit")
+            || lower.contains("quota")
+            || lower.contains("resource_exhausted"))
+    {
+        return "Geminiの利用枠を確認してから、もう一度試してください。".into();
+    }
+    if provider == Provider::Gemini
+        && (lower.contains("authentication") || lower.contains("sign in"))
+    {
+        return "Antigravityへログインしてから、もう一度試してください。".into();
+    }
+    provider_command_error(&provider, error.as_bytes())
+}
+
+fn process_with_cloud(app: &AppHandle, provider: Provider, prompt: &str) -> Result<String, String> {
+    let spec = cloud_spec(app, provider)?;
+    app.state::<CloudRuntime>()
+        .rewrite(spec, prompt)
+        .map_err(|error| provider_runtime_error(provider, error))
+        .and_then(|text| clean(&text))
 }
 #[tauri::command]
 async fn process_voice_text(
@@ -1298,6 +1551,15 @@ async fn process_voice_text(
 ) -> Result<String, String> {
     let transcript = clean(&text)?;
     let p = prompt(&transcript, &dictionary);
+    let provider = match target {
+        OutputTarget::Codex => Some(Provider::Codex),
+        OutputTarget::Claude => Some(Provider::Claude),
+        OutputTarget::Gemini => Some(Provider::Gemini),
+        OutputTarget::Local => None,
+    };
+    if let Some(provider) = provider {
+        provider_preflight(&app.state::<ProviderHealthState>(), provider)?;
+    }
     let polished = match target {
         OutputTarget::Local => {
             let r = client()?
@@ -1324,14 +1586,274 @@ async fn process_voice_text(
                     .response,
             )
         }
-        OutputTarget::Codex => tokio::task::spawn_blocking(move || process_with_codex(&app, &p))
+        OutputTarget::Codex => {
+            let worker_app = app.clone();
+            tokio::task::spawn_blocking(move || {
+                process_with_cloud(&worker_app, Provider::Codex, &p)
+            })
             .await
-            .map_err(|_| "ChatGPTでの文章整形が中断されました。".to_string())?,
-        OutputTarget::Claude => tokio::task::spawn_blocking(move || process_with_claude(&app, &p))
+            .map_err(|_| "ChatGPTでの文章整形が中断されました。".to_string())?
+        }
+        OutputTarget::Claude => {
+            let worker_app = app.clone();
+            tokio::task::spawn_blocking(move || {
+                process_with_cloud(&worker_app, Provider::Claude, &p)
+            })
             .await
-            .map_err(|_| "Claudeでの文章整形が中断されました。".to_string())?,
-    }?;
-    Ok(preserve_transcription_meaning(&transcript, &polished).to_string())
+            .map_err(|_| "Claudeでの文章整形が中断されました。".to_string())?
+        }
+        OutputTarget::Gemini => {
+            let worker_app = app.clone();
+            tokio::task::spawn_blocking(move || {
+                process_with_cloud(&worker_app, Provider::Gemini, &p)
+            })
+            .await
+            .map_err(|_| "Geminiでの文章整形が中断されました。".to_string())?
+        }
+    };
+    if let Some(provider) = provider {
+        let health = app.state::<ProviderHealthState>();
+        match &polished {
+            Ok(_) => health.mark_available(provider),
+            Err(error) if error == CLAUDE_SUBSCRIPTION_UNAVAILABLE => {
+                health.mark_unavailable(provider)
+            }
+            Err(_) => {}
+        }
+    }
+    use_ai_output_or_transcript(&transcript, polished)
+}
+
+fn handle_background_voice_toggle(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<BackgroundVoiceState>();
+    let action = {
+        let runtime = state
+            .0
+            .lock()
+            .map_err(|_| "音声入力の状態を確認できませんでした。")?;
+        background_voice_action(runtime.phase)
+    };
+
+    match action {
+        BackgroundVoiceAction::StartRecording => start_background_recording(app, &state),
+        BackgroundVoiceAction::StopAndProcess => stop_and_process_background_recording(app, &state),
+        BackgroundVoiceAction::CancelStarting => cancel_background_recording_start(app, &state),
+        BackgroundVoiceAction::Ignore => Ok(()),
+    }
+}
+
+fn start_background_recording(
+    app: &AppHandle,
+    state: &State<'_, BackgroundVoiceState>,
+) -> Result<(), String> {
+    if !model_path(app)?.is_file() {
+        return background_voice_error(app, state, "先に音声認識モデルを取得してください。".into());
+    }
+
+    let (generation, snapshot) = {
+        let mut runtime = state
+            .0
+            .lock()
+            .map_err(|_| "音声入力を開始できませんでした。")?;
+        if runtime.phase != BackgroundVoicePhase::Idle {
+            return Ok(());
+        }
+        runtime.phase = BackgroundVoicePhase::Starting;
+        runtime.generation = runtime.generation.wrapping_add(1);
+        runtime.message = "マイクを準備しています".into();
+        (runtime.generation, runtime.snapshot())
+    };
+    let _ = set_voice_overlay(app.clone(), "listening".into());
+    publish_background_voice(app, &snapshot);
+
+    let app = app.clone();
+    std::thread::spawn(move || match NativeAudioRecorder::start() {
+        Ok(recorder) => {
+            let snapshot = {
+                let state = app.state::<BackgroundVoiceState>();
+                let mut runtime = match state.0.lock() {
+                    Ok(runtime) => runtime,
+                    Err(_) => return,
+                };
+                if runtime.generation != generation
+                    || runtime.phase != BackgroundVoicePhase::Starting
+                {
+                    return;
+                }
+                runtime.recorder = Some(recorder);
+                runtime.phase = BackgroundVoicePhase::Recording;
+                runtime.transcript.clear();
+                runtime.output.clear();
+                runtime.message = "音声を受け取っています".into();
+                runtime.snapshot()
+            };
+            publish_background_voice(&app, &snapshot);
+        }
+        Err(error) => {
+            let state = app.state::<BackgroundVoiceState>();
+            let current_generation = state
+                .0
+                .lock()
+                .map(|runtime| runtime.generation)
+                .unwrap_or_default();
+            if current_generation == generation {
+                let _ = background_voice_error(&app, &state, error);
+            }
+        }
+    });
+    Ok(())
+}
+
+fn cancel_background_recording_start(
+    app: &AppHandle,
+    state: &State<'_, BackgroundVoiceState>,
+) -> Result<(), String> {
+    let snapshot = {
+        let mut runtime = state
+            .0
+            .lock()
+            .map_err(|_| "マイクの準備を中止できませんでした。")?;
+        if runtime.phase != BackgroundVoicePhase::Starting {
+            return Ok(());
+        }
+        runtime.generation = runtime.generation.wrapping_add(1);
+        runtime.phase = BackgroundVoicePhase::Idle;
+        runtime.message = "音声入力を中止しました".into();
+        runtime.snapshot()
+    };
+    let _ = set_voice_overlay(app.clone(), "hidden".into());
+    publish_background_voice(app, &snapshot);
+    Ok(())
+}
+
+fn stop_and_process_background_recording(
+    app: &AppHandle,
+    state: &State<'_, BackgroundVoiceState>,
+) -> Result<(), String> {
+    let (recorder, config, generation, snapshot) = {
+        let mut runtime = state.0.lock().map_err(|_| "録音を停止できませんでした。")?;
+        if runtime.phase != BackgroundVoicePhase::Recording {
+            return Ok(());
+        }
+        let recorder = runtime
+            .recorder
+            .take()
+            .ok_or_else(|| "録音データを受け取れませんでした。".to_string())?;
+        runtime.phase = BackgroundVoicePhase::Processing;
+        runtime.message = "音声を文字にしています".into();
+        (
+            recorder,
+            runtime.config.clone(),
+            runtime.generation,
+            runtime.snapshot(),
+        )
+    };
+    let _ = set_voice_overlay(app.clone(), "thinking".into());
+    publish_background_voice(app, &snapshot);
+
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        process_background_recording(app, recorder, config, generation).await;
+    });
+    Ok(())
+}
+
+async fn process_background_recording(
+    app: AppHandle,
+    recorder: NativeAudioRecorder,
+    config: VoiceRuntimeConfig,
+    generation: u64,
+) {
+    let result = async {
+        let audio = recorder.finish()?;
+        let transcript = transcribe_voice(app.clone(), audio, config.dictionary.clone()).await?;
+        let snapshot = {
+            let state = app.state::<BackgroundVoiceState>();
+            let mut runtime = state
+                .0
+                .lock()
+                .map_err(|_| "音声入力の状態を更新できませんでした。".to_string())?;
+            runtime.transcript = transcript.clone();
+            runtime.message = "選択したAIで文章を整えています".into();
+            runtime.snapshot()
+        };
+        publish_background_voice(&app, &snapshot);
+        let output = process_voice_text(
+            app.clone(),
+            config.target,
+            transcript.clone(),
+            config.dictionary,
+        )
+        .await?;
+        paste_to_active_app(output.clone())?;
+        Ok::<_, String>((transcript, output))
+    }
+    .await;
+
+    let (overlay, delay, snapshot) = {
+        let state = app.state::<BackgroundVoiceState>();
+        let mut runtime = match state.0.lock() {
+            Ok(runtime) => runtime,
+            Err(_) => return,
+        };
+        if runtime.generation != generation {
+            return;
+        }
+        runtime.phase = BackgroundVoicePhase::Idle;
+        match result {
+            Ok((transcript, output)) => {
+                runtime.transcript = transcript;
+                runtime.output = output;
+                runtime.message = "カーソル位置へ文章を入力しました".into();
+                ("done", Duration::from_millis(1200), runtime.snapshot())
+            }
+            Err(error) => {
+                runtime.message = error;
+                ("error", Duration::from_millis(1800), runtime.snapshot())
+            }
+        }
+    };
+    let _ = set_voice_overlay(app.clone(), overlay.into());
+    publish_background_voice(&app, &snapshot);
+    schedule_overlay_hide(app, generation, delay);
+}
+
+fn background_voice_error(
+    app: &AppHandle,
+    state: &State<'_, BackgroundVoiceState>,
+    error: String,
+) -> Result<(), String> {
+    let (generation, snapshot) = {
+        let mut runtime = state
+            .0
+            .lock()
+            .map_err(|_| "音声入力の状態を更新できませんでした。")?;
+        runtime.phase = BackgroundVoicePhase::Idle;
+        runtime.recorder = None;
+        runtime.message = error;
+        (runtime.generation, runtime.snapshot())
+    };
+    let _ = set_voice_overlay(app.clone(), "error".into());
+    publish_background_voice(app, &snapshot);
+    schedule_overlay_hide(app.clone(), generation, Duration::from_millis(1800));
+    Ok(())
+}
+
+fn schedule_overlay_hide(app: AppHandle, generation: u64, delay: Duration) {
+    std::thread::spawn(move || {
+        std::thread::sleep(delay);
+        let state = app.state::<BackgroundVoiceState>();
+        let should_hide = state
+            .0
+            .lock()
+            .map(|runtime| {
+                runtime.generation == generation && runtime.phase == BackgroundVoicePhase::Idle
+            })
+            .unwrap_or(false);
+        if should_hide {
+            let _ = set_voice_overlay(app, "hidden".into());
+        }
+    });
 }
 #[cfg(target_os = "macos")]
 fn launch_codex_login() -> Result<(), String> {
@@ -1375,6 +1897,33 @@ fn launch_claude_login() -> Result<(), String> {
         .map(|_| ())
         .map_err(|_| "Claude Codeを開始できませんでした。".into())
 }
+#[cfg(target_os = "macos")]
+fn launch_gemini_login() -> Result<(), String> {
+    let command = command_path("agy");
+    Command::new("osascript")
+        .args([
+            "-e",
+            &format!(
+                "tell application \"Terminal\" to do script \"'{}'\"",
+                command.display()
+            ),
+        ])
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| "Antigravityを開始できませんでした。".into())
+}
+#[cfg(target_os = "windows")]
+fn launch_gemini_login() -> Result<(), String> {
+    Command::new("cmd")
+        .args(["/C", "start", "", "cmd", "/K", "agy"])
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| "Antigravityを開始できませんでした。".into())
+}
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn launch_gemini_login() -> Result<(), String> {
+    Err("このOSでは対応していません。".into())
+}
 #[cfg(target_os = "windows")]
 fn launch_claude_login() -> Result<(), String> {
     Command::new("cmd")
@@ -1388,10 +1937,49 @@ fn launch_claude_login() -> Result<(), String> {
     Err("このOSでは対応していません。".into())
 }
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .manage(VoiceShortcutState(Mutex::new(None)))
+        .manage(ProviderHealthState::default())
+        .manage(CloudRuntime::default())
+        .manage(BackgroundVoiceState(Mutex::new(
+            BackgroundVoiceRuntime::new(VoiceRuntimeConfig::default()),
+        )))
+        .setup(|app| {
+            let handle = app.handle();
+            let config = load_voice_runtime_config(handle);
+            prewarm_output_target(handle, config.target);
+            {
+                let state = handle.state::<BackgroundVoiceState>();
+                if let Ok(mut runtime) = state.0.lock() {
+                    runtime.config = config.clone();
+                };
+            }
+            match register_voice_shortcut_handler(handle, &config.shortcut) {
+                Ok(()) => {
+                    let state = handle.state::<VoiceShortcutState>();
+                    if let Ok(mut registered) = state.0.lock() {
+                        *registered = Some(config.shortcut);
+                    };
+                }
+                Err(error) => {
+                    let state = handle.state::<BackgroundVoiceState>();
+                    if let Ok(mut runtime) = state.0.lock() {
+                        runtime.message = error;
+                    };
+                }
+            }
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if window.label() == "main" {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             provider_status,
             start_official_login,
@@ -1408,10 +1996,23 @@ pub fn run() {
             open_direct_input_settings,
             set_voice_overlay,
             set_voice_shortcut,
-            clear_voice_shortcut
+            clear_voice_shortcut,
+            configure_background_voice,
+            background_voice_status,
+            toggle_background_voice
         ])
-        .run(tauri::generate_context!())
+        .build(tauri::generate_context!())
         .expect("DOON Voiceを起動できませんでした");
+
+    app.run(|app, event| {
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen { .. } = event {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }
+    });
 }
 
 #[cfg(test)]
@@ -1434,6 +2035,22 @@ mod tests {
         assert_eq!(clean("<think>x</think>\n本文").unwrap(), "本文");
         assert!(clean(" ").is_err());
     }
+
+    #[test]
+    fn ai応答が空でも文字起こしを失わない() {
+        assert_eq!(
+            use_ai_output_or_transcript(
+                "はい",
+                Err("文章を受け取れませんでした。もう一度話してください。".into())
+            )
+            .unwrap(),
+            "はい"
+        );
+        assert_eq!(
+            use_ai_output_or_transcript("はい", Err("接続エラー".into())).unwrap_err(),
+            "接続エラー"
+        );
+    }
     #[test]
     fn 直接入力の権限案内は送信先を明示する() {
         assert!(direct_input_permission_message().contains("アクセシビリティ"));
@@ -1447,24 +2064,6 @@ mod tests {
             user_npm_cli_path(Path::new("/Users/example"), "codex"),
             PathBuf::from("/Users/example/.npm-global/bin/codex")
         );
-    }
-
-    #[test]
-    fn codex_exec_options_are_supported() {
-        assert!(CODEX_EXEC_OPTIONS.contains(&"--sandbox"));
-        assert!(!CODEX_EXEC_OPTIONS.contains(&"--ask-for-approval"));
-    }
-
-    #[test]
-    fn codexの出力保存先をオプション直後へ渡す() {
-        let output = Path::new("/tmp/doon-voice-result.txt");
-        let args = codex_exec_arguments(output);
-        let flag = args
-            .iter()
-            .position(|arg| arg == "--output-last-message")
-            .expect("出力オプションが必要");
-        assert_eq!(args[flag + 1], output.as_os_str());
-        assert_eq!(args.last().expect("標準入力指定が必要"), "-");
     }
 
     #[test]
@@ -1497,6 +2096,15 @@ mod tests {
         assert_eq!(payload["keep_alive"], "30m");
         assert_eq!(payload["options"]["num_ctx"], 2048);
         assert_eq!(payload["options"]["num_predict"], 256);
+    }
+
+    #[test]
+    fn ローカルaiを本文生成なしで事前起動する() {
+        let payload = local_warmup_payload();
+        assert_eq!(payload["model"], "gemma4:e2b");
+        assert_eq!(payload["keep_alive"], "30m");
+        assert_eq!(payload["prompt"], "");
+        assert_eq!(payload["stream"], false);
     }
 
     #[test]
@@ -1556,16 +2164,99 @@ mod tests {
     fn 公式cliごとの認証確認引数を返す() {
         assert_eq!(login_status_args(&Provider::Codex), &["login", "status"]);
         assert_eq!(login_status_args(&Provider::Claude), &["auth", "status"]);
+        assert_eq!(login_status_args(&Provider::Gemini), &["models"]);
+    }
+
+    #[test]
+    fn antigravityはflash_lowを使う() {
+        assert_eq!(ANTIGRAVITY_FLASH_MODEL, "Gemini 3.6 Flash (Low)");
+        assert!(login_status_is_authenticated(
+            &Provider::Gemini,
+            true,
+            "Gemini 3.6 Flash (Low)\nGemini 3.1 Pro (High)"
+        ));
+    }
+
+    #[test]
+    fn claudeの契約利用不可を明示して次回は即時停止する() {
+        let health = ProviderHealthState::default();
+        let error = provider_command_error(
+            &Provider::Claude,
+            b"Your organization has disabled Claude subscription access for Claude Code",
+        );
+        assert_eq!(error, CLAUDE_SUBSCRIPTION_UNAVAILABLE);
+        health.mark_unavailable(Provider::Claude);
+        assert_eq!(
+            health.usability(Provider::Claude),
+            ProviderUsability::Unavailable
+        );
+        assert_eq!(
+            provider_preflight(&health, Provider::Claude),
+            Err(CLAUDE_SUBSCRIPTION_UNAVAILABLE.to_string())
+        );
+    }
+
+    #[test]
+    fn 実行成功後だけ利用可能として扱う() {
+        let health = ProviderHealthState::default();
+        assert_eq!(
+            health.usability(Provider::Codex),
+            ProviderUsability::Unknown
+        );
+        health.mark_available(Provider::Codex);
+        assert_eq!(
+            health.usability(Provider::Codex),
+            ProviderUsability::Available
+        );
     }
 
     #[test]
     fn 音声オーバーレイの状態を限定する() {
-        assert!(overlay_state_label("listening").is_some());
-        assert!(overlay_state_label("thinking").is_some());
-        assert!(overlay_state_label("done").is_some());
-        assert!(overlay_state_label("error").is_some());
-        assert!(overlay_state_label("hidden").is_some());
+        assert_eq!(overlay_state_label("listening"), Some("聞いています"));
+        assert_eq!(overlay_state_label("thinking"), Some("考えています"));
+        assert_eq!(overlay_state_label("done"), Some("入力しました"));
+        assert_eq!(overlay_state_label("error"), Some("入力できませんでした"));
+        assert_eq!(overlay_state_label("hidden"), Some(""));
         assert!(overlay_state_label("unknown").is_none());
+    }
+
+    #[test]
+    fn 既存の小型uiもurlの状態を考えていますへ更新する() {
+        let current = tauri::Url::parse("tauri://localhost/index.html?overlay=listening")
+            .expect("有効なテストURL");
+        let updated = overlay_url_with_state(current, "thinking").expect("有効な表示状態");
+        assert_eq!(updated.query(), Some("overlay=thinking"));
+        assert!(overlay_url_with_state(updated, "unknown").is_err());
+    }
+
+    #[test]
+    fn 非表示音声入力は常駐側の状態だけで開始と停止を決める() {
+        assert_eq!(
+            background_voice_action(BackgroundVoicePhase::Idle),
+            BackgroundVoiceAction::StartRecording
+        );
+        assert_eq!(
+            background_voice_action(BackgroundVoicePhase::Recording),
+            BackgroundVoiceAction::StopAndProcess
+        );
+        assert_eq!(
+            background_voice_action(BackgroundVoicePhase::Starting),
+            BackgroundVoiceAction::CancelStarting
+        );
+        assert_eq!(
+            background_voice_action(BackgroundVoicePhase::Processing),
+            BackgroundVoiceAction::Ignore
+        );
+    }
+
+    #[test]
+    fn ネイティブ録音をwhisper用wavへ変換する() {
+        let wav = native_audio::encode_pcm_wav(&[0.0, 1.0, -1.0], 48_000);
+        assert_eq!(&wav[..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(u32::from_le_bytes(wav[24..28].try_into().unwrap()), 48_000);
+        assert_eq!(i16::from_le_bytes(wav[46..48].try_into().unwrap()), 32_767);
+        assert_eq!(i16::from_le_bytes(wav[48..50].try_into().unwrap()), -32_768);
     }
 
     #[test]
@@ -1646,8 +2337,6 @@ mod tests {
     fn macosのcliブロックを利用者へ説明する() {
         let message = command_error(b"codex cannot be opened because it contains malware");
         assert!(message.contains("macOSがCodex CLIの起動をブロックしました"));
-        let start = command_start_error("Codex", &std::io::Error::from_raw_os_error(1));
-        assert!(start.contains("Codex CLI"));
     }
 
     #[cfg(target_os = "macos")]

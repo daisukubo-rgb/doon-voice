@@ -4,33 +4,47 @@ import { Check, CircleAlert, Download, ExternalLink, Mic, Plus, RefreshCw, WifiO
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { DEFAULT_OUTPUT_TARGET, isOutputTarget, OutputTarget, outputTargetLabel } from "./output-target";
 import { DEFAULT_SHORTCUT, shortcutCaptureResult, shortcutLabel } from "./shortcut";
-import { AudioRecorder, startAudioRecorder } from "./audio-recorder";
 
-type ProviderId = "codex" | "claude";
+type ProviderId = "codex" | "claude" | "gemini";
+type ProviderConnections = Record<ProviderId, boolean>;
 type View = "home" | "dictionary" | "settings";
-type ProviderStatus = { installed: boolean; authenticated: boolean; provider: ProviderId };
+type ProviderStatus = {
+  installed: boolean;
+  authenticated: boolean;
+  provider: ProviderId;
+  usability: "unknown" | "available" | "unavailable";
+};
 type LocalModel = { id: "gemma4_e2b"; name: string; size: string; installed: boolean };
 type LocalLlmStatus = { installed: boolean; running: boolean; models: LocalModel[] };
 type TranscriptionStatus = { downloaded: boolean; name: string; size: string };
 type BrandGlyphName = "coach" | "dx" | "loop" | "move" | "spark" | "speed" | "system" | "work";
+type BackgroundVoiceSnapshot = {
+  state: "idle" | "starting" | "recording" | "processing";
+  transcript: string;
+  output: string;
+  message: string;
+};
 
 const providers: Array<{ id: ProviderId; label: string; detail: string; glyph: BrandGlyphName }> = [
   { id: "codex", label: "ChatGPT", detail: "Codexで接続", glyph: "spark" },
   { id: "claude", label: "Claude", detail: "Claude Codeで接続", glyph: "coach" },
+  { id: "gemini", label: "Gemini", detail: "Antigravityで接続", glyph: "loop" },
 ];
 
 function BrandGlyph({ name, className = "" }: { name: BrandGlyphName; className?: string }) {
+  // DOON独自絵柄は、ユーザー指定により操作記号ではなくブランド表現として維持する。
   return <img className={`brand-glyph ${className}`.trim()} src={`/brand/icons/doon-glyph-${name}.png`} alt="" aria-hidden="true" />;
 }
 
 function appInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (isTauriApp()) return invoke<T>(command, args);
   const preview: Record<string, unknown> = {
-    provider_status: { installed: true, authenticated: false },
+    provider_status: { installed: true, authenticated: false, usability: "unknown" },
     local_llm_status: { installed: true, running: true, models: [{ id: "gemma4_e2b", name: "Gemma 4 E2B", size: "7.2 GB", installed: true }] },
     transcription_status: { downloaded: true, name: "DOON Voice 高精度音声認識", size: "約574 MB" },
     direct_input_status: true,
     request_direct_input_permission: true,
+    background_voice_status: { state: "idle", transcript: "", output: "", message: "" },
   };
   return Promise.resolve(preview[command] as T);
 }
@@ -57,6 +71,16 @@ function savedOutputTarget(): OutputTarget {
   } catch { return DEFAULT_OUTPUT_TARGET; }
 }
 
+function savedProviderConnections(selected: OutputTarget): ProviderConnections {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem("doon-voice-provider-connections") || "null");
+    if (saved && typeof saved === "object") {
+      return { codex: saved.codex === true, claude: saved.claude === true, gemini: saved.gemini === true };
+    }
+  } catch { /* 保存値が壊れている場合は現在選択中のAIだけを引き継ぐ */ }
+  return { codex: selected === "codex", claude: selected === "claude", gemini: selected === "gemini" };
+}
+
 function savedList<T>(key: string): T[] {
   try {
     const value = JSON.parse(window.localStorage.getItem(key) || "[]");
@@ -71,11 +95,12 @@ function duration(seconds: number) {
 }
 
 type OverlayState = "listening" | "thinking" | "done" | "error" | "hidden";
-const MIN_THINKING_MS = 900;
 
 function MainApp() {
+  const initialOutputTarget = useRef(savedOutputTarget()).current;
   const [view, setView] = useState<View>("home");
-  const [statuses, setStatuses] = useState<Record<ProviderId, ProviderStatus | null>>({ codex: null, claude: null });
+  const [statuses, setStatuses] = useState<Record<ProviderId, ProviderStatus | null>>({ codex: null, claude: null, gemini: null });
+  const [connectedProviders, setConnectedProviders] = useState<ProviderConnections>(() => savedProviderConnections(initialOutputTarget));
   const [local, setLocal] = useState<LocalLlmStatus | null>(null);
   const [installingOllama, setInstallingOllama] = useState(false);
   const [pullingLocalModel, setPullingLocalModel] = useState(false);
@@ -87,19 +112,17 @@ function MainApp() {
   const [termDraft, setTermDraft] = useState("");
   const [shortcut, setShortcut] = useState(savedShortcut);
   const [capturingShortcut, setCapturingShortcut] = useState(false);
-  const [outputTarget, setOutputTarget] = useState<OutputTarget>(savedOutputTarget);
+  const [outputTarget, setOutputTarget] = useState<OutputTarget>(initialOutputTarget);
   const [transcription, setTranscription] = useState<TranscriptionStatus | null>(null);
   const [transcript, setTranscript] = useState("");
   const [output, setOutput] = useState("");
   const [processing, setProcessing] = useState(false);
   const [directInputAllowed, setDirectInputAllowed] = useState<boolean | null>(null);
-  const [connectingProviders, setConnectingProviders] = useState<Record<ProviderId, boolean>>({ codex: false, claude: false });
-  const recorderRef = useRef<AudioRecorder | null>(null);
+  const [connectingProviders, setConnectingProviders] = useState<Record<ProviderId, boolean>>({ codex: false, claude: false, gemini: false });
   const startRef = useRef<number | null>(null);
   const registeredShortcutRef = useRef<string | null>(null);
   const capturedFromShortcutRef = useRef<string | null>(null);
   const shortcutButtonRef = useRef<HTMLButtonElement | null>(null);
-  const toggleRecordingRef = useRef<() => void>(() => {});
   const pullingLocalModelRef = useRef(false);
   const downloadingTranscriptionRef = useRef(false);
 
@@ -119,15 +142,15 @@ function MainApp() {
       window.clearInterval(timer);
     };
   }, []);
-  useEffect(() => () => { void recorderRef.current?.stop(); }, []);
-  useEffect(() => () => { void setVoiceOverlay("hidden"); }, []);
-  useEffect(() => () => {
-    if (isTauriApp()) void appInvoke("clear_voice_shortcut").catch(() => undefined);
-  }, []);
   useEffect(() => {
     if (!isTauriApp()) return;
     let stopListening: (() => void) | undefined;
-    void listen("doon-voice-shortcut", () => { toggleRecordingRef.current(); }).then((unlisten) => {
+    void appInvoke<BackgroundVoiceSnapshot>("background_voice_status")
+      .then(applyBackgroundVoiceSnapshot)
+      .catch(() => undefined);
+    void listen<BackgroundVoiceSnapshot>("background-voice-state", (event) => {
+      applyBackgroundVoiceSnapshot(event.payload);
+    }).then((unlisten) => {
       stopListening = unlisten;
     });
     return () => stopListening?.();
@@ -141,6 +164,33 @@ function MainApp() {
   }, [recording]);
   useEffect(() => { if (capturingShortcut) shortcutButtonRef.current?.focus(); }, [capturingShortcut]);
   useEffect(() => { window.localStorage.setItem("doon-voice-dictionary", JSON.stringify(terms)); }, [terms]);
+  useEffect(() => {
+    if (!isTauriApp()) return;
+    void appInvoke("configure_background_voice", { target: outputTarget, dictionary: terms })
+      .catch((error) => setNotice(errorMessage(error, "音声入力の設定を保存できませんでした")));
+  }, [outputTarget, terms]);
+
+  function applyBackgroundVoiceSnapshot(snapshot: BackgroundVoiceSnapshot) {
+    const isRecording = snapshot.state === "recording";
+    setRecording(isRecording);
+    setProcessing(snapshot.state === "starting" || snapshot.state === "processing");
+    if (isRecording && startRef.current === null) {
+      startRef.current = Date.now();
+      setElapsed(0);
+    } else if (!isRecording) {
+      startRef.current = null;
+      setElapsed(0);
+    }
+    setTranscript(snapshot.transcript);
+    setOutput(snapshot.output);
+    if (snapshot.message) {
+      setNotice(snapshot.message);
+      if (snapshot.message.includes("アクセシビリティ")) setDirectInputAllowed(false);
+    }
+    if (snapshot.state === "idle" && (snapshot.output || snapshot.message.includes("利用が無効"))) {
+      void refreshAll();
+    }
+  }
 
   async function refreshAll() {
     const [entries, localStatus, transcriptionStatus, directInputStatus] = await Promise.all([
@@ -154,90 +204,20 @@ function MainApp() {
     setConnectingProviders((current) => ({
       codex: current.codex && !providerStatuses.codex.authenticated,
       claude: current.claude && !providerStatuses.claude.authenticated,
+      gemini: current.gemini && !providerStatuses.gemini.authenticated,
     }));
     setLocal(localStatus);
     setTranscription(transcriptionStatus);
     setDirectInputAllowed(directInputStatus);
   }
 
-  async function stopMicrophone() {
-    const recorder = recorderRef.current;
-    recorderRef.current = null;
-    startRef.current = null;
-    setRecording(false);
-    setElapsed(0);
-    setProcessing(true);
-    setNotice("音声を文字にしています");
-    const thinkingStartedAt = performance.now();
-    await setVoiceOverlay("thinking");
-    // Give the overlay webview one frame to paint before a fast local response
-    // can move it to the completed state.
-    await new Promise((resolve) => window.setTimeout(resolve, 80));
-    try {
-      const audio = await recorder?.stop();
-      if (!audio) throw new Error("録音を受け取れませんでした。");
-      const recognized = await appInvoke<string>("transcribe_voice", { audio: Array.from(audio), dictionary: terms });
-      setTranscript(recognized);
-      setNotice(`${outputTargetLabel(outputTarget)} で文章を整えています`);
-      const result = await appInvoke<string>("process_voice_text", { target: outputTarget, text: recognized, dictionary: terms });
-      setOutput(result);
-      try {
-        await appInvoke("paste_to_active_app", { text: result });
-        const remainingThinkingMs = Math.max(0, MIN_THINKING_MS - (performance.now() - thinkingStartedAt));
-        if (remainingThinkingMs > 0) await new Promise((resolve) => window.setTimeout(resolve, remainingThinkingMs));
-        setNotice("カーソル位置へ文章を入力しました");
-        void setVoiceOverlay("done");
-        window.setTimeout(() => { void setVoiceOverlay("hidden"); }, 1200);
-      }
-      catch (error) {
-        const message = errorMessage(error, "文章をクリップボードに保存しました");
-        if (message.includes("アクセシビリティ")) {
-          setDirectInputAllowed(false);
-          setView("settings");
-          void requestDirectInputPermission();
-        }
-        setNotice(message);
-        void setVoiceOverlay("error");
-        window.setTimeout(() => { void setVoiceOverlay("hidden"); }, 1800);
-      }
-    } catch (error) {
-      const remainingThinkingMs = Math.max(0, MIN_THINKING_MS - (performance.now() - thinkingStartedAt));
-      if (remainingThinkingMs > 0) await new Promise((resolve) => window.setTimeout(resolve, remainingThinkingMs));
-      setNotice(errorMessage(error, "音声を処理できませんでした。もう一度試してください。"));
-      void setVoiceOverlay("error");
-      window.setTimeout(() => { void setVoiceOverlay("hidden"); }, 1800);
-    } finally { setProcessing(false); }
-  }
-
   async function toggleRecording() {
-    if (processing) return;
-    if (recording) { await stopMicrophone(); return; }
-    if (!transcription?.downloaded) {
-      setView("settings");
-      setNotice("先に音声認識モデルを取得してください");
-      return;
-    }
     try {
-      recorderRef.current = await startAudioRecorder();
-      startRef.current = Date.now();
-      setElapsed(0);
-      setRecording(true);
-      setTranscript("");
-      setOutput("");
-      setNotice("音声を受け取っています");
-      void setVoiceOverlay("listening");
+      await appInvoke("toggle_background_voice");
     } catch (error) {
-      setNotice(errorMessage(error, "マイクを許可すると音声入力を始められます"));
+      setNotice(errorMessage(error, "音声入力を切り替えられませんでした"));
     }
   }
-
-  async function setVoiceOverlay(state: OverlayState) {
-    if (!isTauriApp()) return;
-    try { await appInvoke("set_voice_overlay", { state }); }
-    catch { /* 状態表示だけの失敗で音声入力は止めない */ }
-  }
-
-  toggleRecordingRef.current = () => { void toggleRecording(); };
 
   async function applyShortcut(next: string, notify = true) {
     const previous = registeredShortcutRef.current;
@@ -307,13 +287,13 @@ function MainApp() {
 
   async function connect(provider: ProviderId) {
     if (!statuses[provider]?.installed) {
-      setNotice(provider === "codex" ? "Codex CLIを入れてから接続してください" : "Claude Codeを入れてから接続してください");
+      setNotice(provider === "codex" ? "Codex CLIを入れてから接続してください" : provider === "claude" ? "Claude Codeを入れてから接続してください" : "Antigravity CLIを入れてから接続してください");
       return;
     }
     try {
       setConnectingProviders((current) => ({ ...current, [provider]: true }));
       await appInvoke("start_official_login", { provider });
-      setNotice(`${provider === "codex" ? "ChatGPT" : "Claude"} に接続しています`);
+      setNotice(`${provider === "codex" ? "ChatGPT" : provider === "claude" ? "Claude" : "Gemini"} のログインを確認しています`);
       void waitForProviderConnection(provider);
     } catch (error) {
       setConnectingProviders((current) => ({ ...current, [provider]: false }));
@@ -322,21 +302,26 @@ function MainApp() {
   }
 
   async function waitForProviderConnection(provider: ProviderId) {
-    const label = provider === "codex" ? "ChatGPT" : "Claude";
+    const label = provider === "codex" ? "ChatGPT" : provider === "claude" ? "Claude" : "Gemini";
     for (let attempt = 0; attempt < 60; attempt += 1) {
       await new Promise((resolve) => window.setTimeout(resolve, 1500));
       try {
         const status = await appInvoke<ProviderStatus>("provider_status", { provider });
         setStatuses((current) => ({ ...current, [provider]: status }));
         if (status.authenticated) {
+          setConnectedProviders((current) => {
+            const next = ({ ...current, [provider]: true });
+            window.localStorage.setItem("doon-voice-provider-connections", JSON.stringify(next));
+            return next;
+          });
           setConnectingProviders((current) => ({ ...current, [provider]: false }));
-          setNotice(`${label}に接続しました`);
+          setNotice(`${label}へログインしました。実際の利用可否は最初の文章整形時に確認します`);
           return;
         }
       } catch { /* 接続画面を開いたまま次の確認を続ける */ }
     }
     setConnectingProviders((current) => ({ ...current, [provider]: false }));
-    setNotice(`${label}の接続を確認できませんでした。接続画面でログインしてから状態を更新してください`);
+    setNotice(`${label}のログインを確認できませんでした。ログイン画面を確認してから状態を更新してください`);
   }
 
   function chooseOutputTarget(target: OutputTarget) {
@@ -440,19 +425,24 @@ function MainApp() {
     return () => window.clearInterval(timer);
   }, [isMac, view]);
   function providerDisplayState(id: ProviderId, selected: boolean) {
+    if (statuses[id]?.usability === "unavailable") return { label: "利用不可", className: "state-unavailable" };
     if (selected) return { label: "選択中", className: "state-selected" };
-    if (connectingProviders[id]) return { label: "接続中", className: "state-connecting" };
-    if (statuses[id]?.authenticated) return { label: "接続済み", className: "state-connected" };
-    if (statuses[id]?.installed) return { label: "接続可能", className: "state-available" };
+    if (connectingProviders[id]) return { label: "ログイン中", className: "state-connecting" };
+    if (connectedProviders[id] && statuses[id]?.usability === "available") return { label: "利用可能", className: "state-connected" };
+    if (connectedProviders[id] && statuses[id]?.authenticated) return { label: "ログイン済み", className: "state-available" };
+    if (statuses[id]?.installed) return { label: "ログイン可能", className: "state-available" };
     return { label: "未導入", className: "state-unavailable" };
   }
   const codexDisplay = providerDisplayState("codex", outputTarget === "codex");
   const claudeDisplay = providerDisplayState("claude", outputTarget === "claude");
+  const geminiDisplay = providerDisplayState("gemini", outputTarget === "gemini");
   const selectedOutput = outputTarget === "codex"
-    ? { label: "ChatGPT", detail: "GPT-5.6 Luna", ready: Boolean(statuses.codex?.authenticated) }
+    ? { label: "ChatGPT", detail: "GPT-5.6 Luna", ready: statuses.codex?.usability === "available" }
     : outputTarget === "claude"
-      ? { label: "Claude", detail: "Haiku", ready: Boolean(statuses.claude?.authenticated) }
-      : { label: "このPCのAI", detail: localModel?.name || "未準備", ready: localReady };
+      ? { label: "Claude", detail: "Haiku", ready: statuses.claude?.usability === "available" }
+      : outputTarget === "gemini"
+        ? { label: "Gemini", detail: "Flash Low", ready: statuses.gemini?.usability === "available" }
+        : { label: "このPCのAI", detail: localModel?.name || "未準備", ready: localReady };
   const nav = [
     { id: "home" as const, label: "ホーム", glyph: "work" as const },
     { id: "dictionary" as const, label: "辞書", glyph: "coach" as const },
@@ -471,7 +461,7 @@ function MainApp() {
       {view === "home" && <section className="home-view" aria-labelledby="home-title">
         <section className={recording ? "voice-stage is-recording" : "voice-stage"} aria-label="音声入力">
           <div className="hero-brand"><img src="/brand/doon-logo.png" alt="DOON" /><span>VOICE</span></div>
-          <h1 id="home-title"><em>AIで</em>言語化を楽に</h1>
+          <h1 id="home-title"><em>AIで</em>言語化をイージーに</h1>
           <p>{recording ? `音声入力中 · ${duration(elapsed)}` : processing ? "文章を整えています" : "どのアプリにも、そのまま入力。"}</p>
           <button className="record-button" type="button" onClick={() => void toggleRecording()} disabled={processing} aria-label={recording ? "音声入力を停止" : "音声入力を開始"}><span className="record-button-icon"><Mic size={27} strokeWidth={1.8} /></span><strong>{recording ? "停止" : "話す"}</strong><small>{shortcutLabel(shortcut, isMac)}</small></button>
         </section>
@@ -480,6 +470,7 @@ function MainApp() {
           <div className="destination-list">
             <button className={outputTarget === "codex" ? "is-selected" : ""} type="button" onClick={() => chooseOutputTarget("codex")} aria-pressed={outputTarget === "codex"}><BrandGlyph name="spark" /><span><strong>ChatGPT</strong><small className={codexDisplay.className}>{codexDisplay.label}</small></span>{outputTarget === "codex" && <Check size={16} strokeWidth={2.1} />}</button>
             <button className={outputTarget === "claude" ? "is-selected" : ""} type="button" onClick={() => chooseOutputTarget("claude")} aria-pressed={outputTarget === "claude"}><BrandGlyph name="coach" /><span><strong>Claude</strong><small className={claudeDisplay.className}>{claudeDisplay.label}</small></span>{outputTarget === "claude" && <Check size={16} strokeWidth={2.1} />}</button>
+            <button className={outputTarget === "gemini" ? "is-selected" : ""} type="button" onClick={() => chooseOutputTarget("gemini")} aria-pressed={outputTarget === "gemini"}><BrandGlyph name="loop" /><span><strong>Gemini</strong><small className={geminiDisplay.className}>{geminiDisplay.label}</small></span>{outputTarget === "gemini" && <Check size={16} strokeWidth={2.1} />}</button>
             <button className={outputTarget === "local" ? "is-selected" : ""} type="button" onClick={() => chooseOutputTarget("local")} aria-pressed={outputTarget === "local"}><BrandGlyph name="dx" /><span><strong>このPCのAI</strong><small className={outputTarget === "local" ? "state-selected" : localReady ? "state-running" : "state-unavailable"}>{outputTarget === "local" ? "選択中" : localReady ? "稼働中" : "未準備"}</small></span>{outputTarget === "local" && <Check size={16} strokeWidth={2.1} />}</button>
           </div>
         </section>
@@ -492,7 +483,7 @@ function MainApp() {
         {notice && <p className="notice" role="status">{notice}</p>}
       </section>}
 
-      {view === "dictionary" && <section className="simple-view" aria-labelledby="dictionary-title"><div className="view-heading"><span>PERSONAL DICTIONARY</span><h1 id="dictionary-title">辞書</h1><p>固有名詞や大切な言葉を登録します。</p></div><form className="term-form" onSubmit={addTerm}><input value={termDraft} onChange={(event) => setTermDraft(event.target.value)} placeholder="言葉を追加" aria-label="辞書に追加する言葉" /><button type="submit"><Plus size={16} strokeWidth={2} /> 追加</button></form>{terms.length ? <ul className="term-list">{terms.map((term) => <li key={term}>{term}<button type="button" onClick={() => setTerms((current) => current.filter((item) => item !== term))} aria-label={`${term}を削除`}>×</button></li>)}</ul> : <div className="empty-state"><BrandGlyph name="coach" /><p>まだ登録した言葉はありません。</p></div>}</section>}
+      {view === "dictionary" && <section className="simple-view" aria-labelledby="dictionary-title"><div className="view-heading"><span>PERSONAL DICTIONARY</span><h1 id="dictionary-title">辞書</h1></div><form className="term-form" onSubmit={addTerm}><input value={termDraft} onChange={(event) => setTermDraft(event.target.value)} placeholder="言葉を追加" aria-label="辞書に追加する言葉" /><button type="submit"><Plus size={16} strokeWidth={2} /> 追加</button></form>{terms.length ? <ul className="term-list">{terms.map((term) => <li key={term}>{term}<button type="button" onClick={() => setTerms((current) => current.filter((item) => item !== term))} aria-label={`${term}を削除`}><X size={14} strokeWidth={2} /></button></li>)}</ul> : <div className="empty-state"><BrandGlyph name="coach" /><p>登録した言葉はありません</p></div>}</section>}
 
       {view === "settings" && <section className="simple-view settings-view" aria-labelledby="settings-title">
         <div className="view-heading"><span>SETTINGS</span><h1 id="settings-title">接続と設定</h1></div>
@@ -501,12 +492,13 @@ function MainApp() {
           <div className="output-choice-list" role="radiogroup" aria-label="文章を整えるAI">
             <button className={outputTarget === "codex" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "codex"} onClick={() => chooseOutputTarget("codex")}><BrandGlyph name="spark" /><span><strong>ChatGPT</strong><small>Codexで整える</small></span>{outputTarget === "codex" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
             <button className={outputTarget === "claude" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "claude"} onClick={() => chooseOutputTarget("claude")}><BrandGlyph name="coach" /><span><strong>Claude</strong><small>Claude Codeで整える</small></span>{outputTarget === "claude" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
+            <button className={outputTarget === "gemini" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "gemini"} onClick={() => chooseOutputTarget("gemini")}><BrandGlyph name="loop" /><span><strong>Gemini</strong><small>Antigravity Flashで整える</small></span>{outputTarget === "gemini" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
             <button className={outputTarget === "local" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "local"} onClick={() => chooseOutputTarget("local")}><BrandGlyph name="dx" /><span><strong>このPCのAI</strong><small>Gemma 4 E2Bで高速整形</small></span>{outputTarget === "local" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
           </div>
         </section>
         <div className="settings-list direct-input-settings"><article><span className="setting-icon"><BrandGlyph name="move" /></span><div><h2>カーソル位置へ入力</h2><p>{directInputAllowed ? "ほかのアプリへ直接入力できます。" : "macOSのアクセシビリティ許可が必要です。"}</p></div><span className={directInputAllowed ? "setting-state state-permitted" : "setting-state state-unavailable"}>{directInputAllowed ? <Check size={15} strokeWidth={2.3} /> : <CircleAlert size={15} strokeWidth={2} />}{directInputAllowed ? "許可済み" : "未許可"}</span>{isMac ? <button className="outline-action" type="button" onClick={() => void (directInputAllowed ? openDirectInputSettings() : requestDirectInputPermission())}>{directInputAllowed ? "設定を開く" : "許可する"} <ExternalLink size={15} /></button> : <span />}</article></div>
         <div className="settings-list transcription-settings"><article><span className="setting-icon"><BrandGlyph name="work" /></span><div><h2>音声認識</h2><p>{transcription?.downloaded ? "日本語音声認識をこのPCで行います。" : "話した言葉を文字にする日本語モデルです。"}</p></div><span className={transcription?.downloaded ? "setting-state state-installed" : "setting-state state-unavailable"}>{transcription?.downloaded ? <Check size={15} strokeWidth={2.3} /> : <Download size={15} strokeWidth={2} />}{transcription?.downloaded ? "モデル取得済み" : downloadingTranscription ? "取得中" : transcription?.size || "未取得"}</span>{transcription?.downloaded ? <span /> : <button className="outline-action" type="button" onClick={() => void downloadTranscriptionModel()} disabled={downloadingTranscription}>{downloadingTranscription ? "取得中" : "モデルを取得"} <Download size={15} /></button>}</article></div>
-        <div className="settings-list">{providers.map(({ id, label, glyph }) => { const status = providerDisplayState(id, false); const connecting = connectingProviders[id]; const connected = statuses[id]?.authenticated; return <article key={id}><span className="setting-icon"><BrandGlyph name={glyph} /></span><div><h2>{label}</h2><p>{id === "codex" ? "GPT-5.6 Lunaで高速整形" : "Claude Haikuで高速整形"}</p></div><span className={`setting-state ${status.className}`}>{connecting ? <span className="state-connecting-mark" aria-hidden="true" /> : connected ? <Check size={15} strokeWidth={2.3} /> : statuses[id]?.installed ? <span className="state-ring" aria-hidden="true" /> : <CircleAlert size={15} strokeWidth={2} />}{status.label}</span><button className="outline-action" type="button" onClick={() => void connect(id)} disabled={connecting}>{connecting ? "接続中" : connected ? "再接続" : "接続する"} {!connecting && <ExternalLink size={15} strokeWidth={1.9} />}</button></article>; })}<article><span className="setting-icon"><BrandGlyph name="dx" /></span><div><h2>ローカルAI</h2><p>{localReady ? "Gemma 4 E2BがこのPCで稼働中です。" : "Gemma 4 E2BをDOON Voice用に取得します。"}</p></div><span className={localReady ? "setting-state state-running" : "setting-state state-unavailable"}>{localReady ? <span className="state-live-dot" aria-hidden="true" /> : <WifiOff size={15} strokeWidth={2} />}{localReady ? "稼働中" : pullingLocalModel ? "取得中" : "未準備"}</span>{!local?.installed ? <button className="outline-action" type="button" onClick={() => void installOllama()} disabled={installingOllama}>{installingOllama ? "Ollamaを取得中" : "Ollamaを自動インストール"} <Download size={15} /></button> : !localModel?.installed ? <button className="outline-action" type="button" onClick={() => void pullModel()} disabled={pullingLocalModel}>{pullingLocalModel ? "取得中" : "Gemmaを取得"} <Download size={15} /></button> : <span />}</article><article className="shortcut-row"><span className="setting-icon"><BrandGlyph name="speed" /></span><div><h2>開始・停止キー</h2><p>{capturingShortcut ? "押した組み合わせを登録します。Escで取り消せます。" : "音声入力の開始と停止"}</p></div><button ref={shortcutButtonRef} className={capturingShortcut ? "shortcut-key is-capturing" : "shortcut-key"} type="button" onClick={() => void beginShortcutCapture()} aria-label="開始・停止キーを変更" aria-pressed={capturingShortcut}>{capturingShortcut ? "キーを押す" : shortcutLabel(shortcut, navigator.userAgent.includes("Mac"))}</button><button className="outline-action" type="button" onClick={() => void applyShortcut(DEFAULT_SHORTCUT)}>標準に戻す</button></article></div>{notice && <p className="notice" role="status">{notice}</p>}</section>}
+        <div className="settings-list">{providers.map(({ id, label, glyph }) => { const status = providerDisplayState(id, false); const connecting = connectingProviders[id]; const loggedIn = connectedProviders[id] && statuses[id]?.authenticated; const unavailable = statuses[id]?.usability === "unavailable"; const detail = id === "codex" ? "GPT-5.6 Lunaで高速整形" : id === "gemini" ? "Gemini 3.6 Flash (Low)で高速整形" : unavailable ? "現在の契約ではClaude Codeを利用できません" : "Claude Haikuで高速整形"; return <article key={id}><span className="setting-icon"><BrandGlyph name={glyph} /></span><div><h2>{label}</h2><p>{detail}</p></div><span className={`setting-state ${status.className}`}>{connecting ? <span className="state-connecting-mark" aria-hidden="true" /> : unavailable ? <CircleAlert size={15} strokeWidth={2} /> : loggedIn ? <Check size={15} strokeWidth={2.3} /> : statuses[id]?.installed ? <span className="state-ring" aria-hidden="true" /> : <CircleAlert size={15} strokeWidth={2} />}{status.label}</span><button className="outline-action" type="button" onClick={() => void connect(id)} disabled={connecting}>{connecting ? "ログイン中" : loggedIn ? "再ログイン" : "ログインする"} {!connecting && <ExternalLink size={15} strokeWidth={1.9} />}</button></article>; })}<article><span className="setting-icon"><BrandGlyph name="dx" /></span><div><h2>ローカルAI</h2><p>{localReady ? "Gemma 4 E2BがこのPCで稼働中です。" : "Gemma 4 E2BをDOON Voice用に取得します。"}</p></div><span className={localReady ? "setting-state state-running" : "setting-state state-unavailable"}>{localReady ? <span className="state-live-dot" aria-hidden="true" /> : <WifiOff size={15} strokeWidth={2} />}{localReady ? "稼働中" : pullingLocalModel ? "取得中" : "未準備"}</span>{!local?.installed ? <button className="outline-action" type="button" onClick={() => void installOllama()} disabled={installingOllama}>{installingOllama ? "Ollamaを取得中" : "Ollamaを自動インストール"} <Download size={15} /></button> : !localModel?.installed ? <button className="outline-action" type="button" onClick={() => void pullModel()} disabled={pullingLocalModel}>{pullingLocalModel ? "取得中" : "Gemmaを取得"} <Download size={15} /></button> : <span />}</article><article className="shortcut-row"><span className="setting-icon"><BrandGlyph name="speed" /></span><div><h2>開始・停止キー</h2><p>{capturingShortcut ? "押した組み合わせを登録します。Escで取り消せます。" : "音声入力の開始と停止"}</p></div><button ref={shortcutButtonRef} className={capturingShortcut ? "shortcut-key is-capturing" : "shortcut-key"} type="button" onClick={() => void beginShortcutCapture()} aria-label="開始・停止キーを変更" aria-pressed={capturingShortcut}>{capturingShortcut ? "キーを押す" : shortcutLabel(shortcut, navigator.userAgent.includes("Mac"))}</button><button className="outline-action" type="button" onClick={() => void applyShortcut(DEFAULT_SHORTCUT)}>標準に戻す</button></article></div>{notice && <p className="notice" role="status">{notice}</p>}</section>}
     </section>
 
   </main>;
@@ -519,6 +511,9 @@ function VoiceOverlay() {
   );
   useEffect(() => {
     document.documentElement.classList.add("is-overlay");
+    if (!isTauriApp()) {
+      return () => document.documentElement.classList.remove("is-overlay");
+    }
     let stopListening: (() => void) | undefined;
     void listen<string>("voice-overlay-state", (event) => {
       if (event.payload === "listening" || event.payload === "thinking" || event.payload === "done" || event.payload === "error") {
