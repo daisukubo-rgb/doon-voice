@@ -1,0 +1,12 @@
+* text=auto
+*.mjs text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.rs text eol=lf
+*.sh text eol=lf
+*.command text eol=lf
+*.yml text eol=lf
+package-lock.json text eol=lf
+src-tauri/Cargo.lock text eol=lf
+# Preserve upstream license bytes and their recorded SHA-256 on every OS.
+docs/licenses/** -text

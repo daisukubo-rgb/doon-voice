@@ -1,16 +1,15 @@
 #!/usr/bin/env node
 
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import process from "node:process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runNpm as spawnNpm } from "./npm-runner.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const packageLock = join(root, "package-lock.json");
 const marker = join(root, "node_modules", ".doon-voice-setup.json");
-const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 const setupLabel = "npm run setup";
 const appLabel = "npm run app";
 
@@ -28,10 +27,9 @@ function setupIsCurrent(fingerprint) {
 }
 
 function runNpm(script) {
-  const result = spawnSync(npmCommand, ["run", script], {
+  const result = spawnNpm(["run", script], {
     cwd: root,
     stdio: "inherit",
-    shell: process.platform === "win32",
   });
   if (result.error) {
     console.error(`npmを起動できませんでした: ${result.error.message}`);

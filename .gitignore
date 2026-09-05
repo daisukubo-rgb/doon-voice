@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .test-dist/
+output/playwright/
 src-tauri/target/
 .DS_Store
 *.log

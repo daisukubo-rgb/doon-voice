@@ -2,7 +2,6 @@
 
 import { spawnSync } from "node:child_process";
 import {
-  chmodSync,
   copyFileSync,
   existsSync,
   mkdtempSync,
@@ -30,27 +29,13 @@ function makeFixture(name) {
   mkdirSync(scripts, { recursive: true });
   mkdirSync(bin, { recursive: true });
   copyFileSync(sourceLauncher, join(scripts, "launch.mjs"));
+  copyFileSync(join(projectRoot, "scripts", "npm-runner.mjs"), join(scripts, "npm-runner.mjs"));
   writeFileSync(join(root, "package-lock.json"), '{"version":1}\n', "utf8");
 
-  if (process.platform === "win32") {
-    writeFileSync(join(bin, "npm.cmd"), [
-      "@echo off",
-      "echo %*>>\"%FAKE_NPM_LOG%\"",
-      "if \"%2\"==\"setup\" exit /b %FAKE_SETUP_EXIT%",
-      "exit /b %FAKE_APP_EXIT%",
-      "",
-    ].join("\r\n"), "utf8");
-  } else {
-    const fakeNpm = join(bin, "npm");
-    writeFileSync(fakeNpm, [
-      "#!/bin/sh",
-      "printf '%s\\n' \"$*\" >> \"$FAKE_NPM_LOG\"",
-      "if [ \"$2\" = \"setup\" ]; then exit \"$FAKE_SETUP_EXIT\"; fi",
-      "exit \"$FAKE_APP_EXIT\"",
-      "",
-    ].join("\n"), "utf8");
-    chmodSync(fakeNpm, 0o755);
-  }
+  writeFileSync(join(bin, "npm-cli.cjs"), [
+    "require('node:fs').appendFileSync(process.env.FAKE_NPM_LOG, process.argv.slice(2).join(' ') + '\\n');",
+    "process.exit(Number(process.argv[3] === 'setup' ? process.env.FAKE_SETUP_EXIT : process.env.FAKE_APP_EXIT));",
+  ].join("\n"), "utf8");
 
   return { root, log: join(root, "npm.log"), launcher: join(scripts, "launch.mjs") };
 }
@@ -61,6 +46,7 @@ function run(fixture, args = [], overrides = {}) {
     env: {
       ...process.env,
       PATH: `${join(fixture.root, "bin")}${delimiter}${process.env.PATH ?? ""}`,
+      npm_execpath: join(fixture.root, "bin", "npm-cli.cjs"),
       FAKE_NPM_LOG: fixture.log,
       FAKE_SETUP_EXIT: "0",
       FAKE_APP_EXIT: "0",

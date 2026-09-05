@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { installerArch, selectInstaller } from "../scripts/package-installer-zip.mjs";
+import { npmInvocation, runNpm } from "../scripts/npm-runner.mjs";
+import { verifyLicenses } from "../scripts/check-licenses.mjs";
 
 const project = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const version = JSON.parse(readFileSync(join(project, "package.json"), "utf8")).version;
@@ -96,4 +99,77 @@ test("実依存の著作権とライセンス全文が収録されアプリ同�
   assert.match(notices, /licenses/);
   const config = JSON.parse(readFileSync(join(project, "src-tauri", "tauri.conf.json"), "utf8"));
   assert.equal(config.bundle.resources["../docs/licenses"], "licenses");
+  const cpal = readFileSync(join(project, "docs", "licenses", "cargo", "cpal-0.16.0", "LICENSE"), "utf8");
+  assert.match(cpal, /Apache License/);
+  assert.match(cpal, /END OF TERMS AND CONDITIONS/);
+  assert.ok(verifyLicenses(join(project, "docs"), true) > 0);
+});
+
+test("npm runnerはWindowsでもNodeを選び、記号入りの引数をそのまま渡す", (t) => {
+  const root = fixture(t);
+  const entry = join(root, "npm-cli.cjs");
+  writeFileSync(entry, "console.log(JSON.stringify(process.argv.slice(2)));");
+  const env = { ...process.env, npm_execpath: entry };
+  assert.deepEqual(npmInvocation({ env, platform: "win32" }), { command: process.execPath, args: [realpathSync(entry)] });
+  const args = ["run", "task & echo injected", "$(echo injected)", "quote'\" space"];
+  const result = runNpm(args, { env, encoding: "utf8" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), args);
+});
+
+test("npm実行ファイルが見つからないと具体的な原因を返す", () => {
+  assert.throws(() => npmInvocation({ env: {}, execPath: "/definitely-missing/node.exe", platform: "win32" }), /npm.*見つかりません/);
+});
+
+test("Windows梱包はversion/archを照合しMSIとNSISの曖昧さも拒否する", (t) => {
+  const root = fixture(t);
+  const directory = join(root, "bundle");
+  mkdirSync(join(directory, "msi"), { recursive: true });
+  mkdirSync(join(directory, "nsis"));
+  writeFileSync(join(directory, "msi", `DOON Voice_${version}_arm64_en-US.msi`), "other arch");
+  const expected = join(directory, "msi", `DOON Voice_${version}_x64_en-US.msi`);
+  writeFileSync(expected, "current");
+  const options = { directory, productName: "DOON Voice", version, platform: "win32", arch: "x64" };
+  assert.equal(selectInstaller(options), expected);
+  writeFileSync(join(directory, "nsis", `DOON Voice_${version}_x64_setup.exe`), "second current");
+  assert.throws(() => selectInstaller(options), /複数/);
+  assert.equal(installerArch("darwin", "x86_64-apple-darwin", "arm64"), "x64");
+  assert.throws(() => installerArch("darwin", "x86_64-pc-windows-msvc", "arm64"), /一致しません/);
+  assert.throws(() => installerArch("win32", "", "ia32"), /未対応/);
+});
+
+test("同梱LICENSEの欠落や改変をハッシュ検査で拒否する", (t) => {
+  const root = fixture(t);
+  const docs = join(root, "docs");
+  const license = join(docs, "licenses", "npm", "lucide-react", "LICENSE");
+  writeFileSync(license, "license removed");
+  assert.throws(() => verifyLicenses(docs), /原文が一致しません/);
+  rmSync(license);
+  assert.throws(() => verifyLicenses(docs), /ENOENT/);
+});
+
+test("配布内の音声エンジンも来歴一覧と照合し、別binaryへの差し替えを拒否する", (t) => {
+  const root = fixture(t);
+  const docs = join(root, "docs");
+  cpSync(join(project, "src-tauri", "resources", "engine"), join(docs, "engine"), { recursive: true });
+  assert.ok(verifyLicenses(docs) > 0);
+  const manifest = JSON.parse(readFileSync(join(docs, "licenses", "engine-inventory.json"), "utf8"));
+  const entry = manifest.files.find((file) => file.path.startsWith("src-tauri/resources/"));
+  writeFileSync(join(docs, entry.path.slice("src-tauri/resources/".length)), "unexpected binary");
+  assert.throws(() => verifyLicenses(docs), /同梱エンジンが記録と一致しません/);
+});
+
+test("CIはテストとランチャーの変更を検査しReleaseは対象タグの全検査後に公開する", () => {
+  const ci = readFileSync(join(project, ".github", "workflows", "ci.yml"), "utf8");
+  const release = readFileSync(join(project, ".github", "workflows", "release.yml"), "utf8");
+  for (const path of ["test/**", "DOON Voiceを起動.command", "DOON Voiceを起動.bat"]) assert.equal(ci.split(`"${path}"`).length - 1, 2);
+  assert.ok(!ci.includes("--no-run"));
+  assert.match(ci, /node scripts\/setup\.mjs/);
+  assert.match(release, /refs\/tags\/\$RELEASE_TAG\^\{commit\}/);
+  assert.match(release, /ref: \$\{\{ needs\.resolve\.outputs\.commit \}\}/);
+  assert.match(release, /needs: \[resolve, quality\]/);
+  assert.match(release, /needs: \[resolve, package\]/);
+  assert.match(release, /- run: npm test/);
+  assert.match(release, /node scripts\/verify-installer-licenses\.mjs/);
+  assert.match(release, /node scripts\/test-windows-engine\.mjs/);
 });

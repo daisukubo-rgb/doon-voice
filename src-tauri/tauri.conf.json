@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "DOON Voice",
-  "version": "0.5.15",
+  "version": "0.5.16",
   "identifier": "com.doon.voice.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -31,13 +31,14 @@
     "externalBin": ["binaries/whisper-cli"],
     "resources": {
       "resources/engine": "engine",
-      "../docs/OSS-NOTICES.md": "OSS-NOTICES.md"
+      "../docs/OSS-NOTICES.md": "OSS-NOTICES.md",
+      "../docs/licenses": "licenses"
     },
     "icon": [
       "icons/icon-512.png",
       "icons/favicon.ico"
     ],
-    "macOS": { "minimumSystemVersion": "12.0" },
+    "macOS": { "minimumSystemVersion": "12.0", "signingIdentity": "-" },
     "shortDescription": "話した内容を仕事の文章に整えるアプリ"
   }
 }

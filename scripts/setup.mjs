@@ -4,11 +4,11 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import process from "node:process";
 import { join } from "node:path";
+import { runNpm } from "./npm-runner.mjs";
 
 const checkOnly = process.argv.includes("--check-only");
 const isWindows = process.platform === "win32";
 const lookup = isWindows ? "where" : "which";
-const npmCommand = isWindows ? "npm.cmd" : "npm";
 
 function available(command) {
   const result = spawnSync(lookup, [command], { stdio: "ignore" });
@@ -84,7 +84,9 @@ for (const [name, ok, detail] of checks) {
 
 if (!checkOnly) {
   console.log("\nnpm依存関係をインストールしています…");
-  const result = spawnSync(npmCommand, ["ci"], { stdio: "inherit" });
+  const result = runNpm(["ci"], { stdio: "inherit" });
+  if (result.error) console.error(`npmを起動できませんでした: ${result.error.message}`);
+  if (result.signal) console.error(`npmがシグナル ${result.signal} で終了しました。`);
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
@@ -96,7 +98,7 @@ if (missing.length > 0) {
   } else if (process.platform === "darwin") {
     console.error("macOSではRustとXcode Command Line Toolsを準備してください。");
   }
-  console.error("Ollama、Codex CLI、Claude Code、AIモデルはDOON Voiceの接続と設定から別途準備します。");
+  console.error("Ollama、Codex CLI、Claude Code、Gemini用agy、AIモデルはDOON Voiceの接続と設定から別途準備します。");
   process.exit(1);
 }
 

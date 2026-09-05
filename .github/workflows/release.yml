@@ -7,18 +7,71 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release tag (例: v0.5.3)"
+        description: "Existing release tag (例: v0.5.15)"
         required: true
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
 
 jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.tag.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: tag
+        name: Resolve existing tag and validate its version
+        shell: bash
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+          commit=$(git rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")
+          git checkout --detach "$commit"
+          node --input-type=module -e 'import{readFileSync}from"node:fs";const p=JSON.parse(readFileSync("package.json"));const t=JSON.parse(readFileSync("src-tauri/tauri.conf.json"));if(process.env.RELEASE_TAG!==`v${p.version}`||p.version!==t.version)throw Error("Tag and package versions differ");'
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+  quality:
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-14, windows-latest]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: npm ci
+      - name: Exercise real setup and npm ci on Windows
+        if: runner.os == 'Windows'
+        run: node scripts/setup.mjs
+      - name: Run bundled Windows speech engine
+        if: runner.os == 'Windows'
+        run: node scripts/test-windows-engine.mjs
+      - run: node scripts/check-licenses.mjs
+      - run: npm test
+      - run: npx playwright install chromium
+      - run: npm run test:ui
+      - run: npm run build
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets
+      - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
   package:
+    needs: [resolve, quality]
     name: ${{ matrix.name }} installer
     strategy:
       fail-fast: false
@@ -27,58 +80,80 @@ jobs:
           - name: macOS Intel
             runner: macos-14
             target: x86_64-apple-darwin
-            args: --target x86_64-apple-darwin
+            bundle: dmg
             packageSuffix: macOS-Intel
           - name: macOS Apple Silicon
             runner: macos-14
-            target: ''
-            args: ''
+            target: aarch64-apple-darwin
+            bundle: dmg
             packageSuffix: macOS
           - name: Windows
             runner: windows-latest
-            target: ''
-            args: ''
+            target: x86_64-pc-windows-msvc
+            bundle: msi
             packageSuffix: Windows
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install cross-compilation target
-        if: matrix.target != ''
-        run: rustup target add ${{ matrix.target }}
-      - run: npm ci
-      - name: Build and upload installer
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          projectPath: .
-          args: ${{ matrix.args }}
-          tagName: ${{ env.RELEASE_TAG }}
-          releaseName: DOON Voice ${{ env.RELEASE_TAG }}
-          releaseBody: |
-            DOON Voiceの配布版です。
-
-            Assetsの `Source code (zip)` をダウンロードして展開し、macOSは `DOON Voiceを起動.command`、Windowsは `DOON Voiceを起動.bat` をダブルクリックしてください。初回だけ必要な部品を確認・セットアップし、そのままDOON Voiceを起動します。
-
-            DMGとMSIは、インストーラーを使いたい方向けの配布物です。
-          releaseDraft: false
-          prerelease: false
+          targets: ${{ matrix.target }}
+      - run: npm ci
+      - run: node scripts/check-licenses.mjs
+      - name: Build installer without publishing
+        run: npm run dist -- --target ${{ matrix.target }} --bundles ${{ matrix.bundle }}
+      - name: Verify licenses inside built installer
+        run: node scripts/verify-installer-licenses.mjs
+        env:
+          TAURI_TARGET: ${{ matrix.target }}
       - name: Package installer ZIP
         run: npm run package:zip
         env:
           TAURI_TARGET: ${{ matrix.target }}
           DOON_VOICE_PACKAGE_SUFFIX: ${{ matrix.packageSuffix }}
-      - name: Upload installer ZIP
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.packageSuffix }}
+          if-no-files-found: error
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
+            dist/DOON Voice-*.zip
+
+  publish:
+    needs: [resolve, package]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installer-*
+          path: installers
+      - name: Publish only after every platform passed
         uses: softprops/action-gh-release@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          files: dist/DOON Voice-*.zip
+          target_commitish: ${{ needs.resolve.outputs.commit }}
+          name: DOON Voice ${{ env.RELEASE_TAG }}
+          body: |
+            DOON Voiceの配布版です。
+
+            macOS用DMG、Windows用MSIと、使い方・OSS表示を同梱したZIPを添付しています。
+
+            ソースから起動する場合は Source code (zip) をすべて展開し、macOSは DOON Voiceを起動.command、Windowsは DOON Voiceを起動.bat を開いてください。Node.js、Rust、OS別のビルド環境が必要です。不足する環境は案内を表示して停止します。
+
+            未署名インストーラーはOSや組織のポリシーにより起動が制限される場合があります。
+          files: |
+            installers/**/*.dmg
+            installers/**/*.msi
+            installers/**/*.zip
+          fail_on_unmatched_files: true
           draft: false
           prerelease: false

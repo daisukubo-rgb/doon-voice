@@ -1,0 +1,189 @@
+{
+  "source": "https://github.com/ggml-org/whisper.cpp/releases/tag/v1.9.2",
+  "sourceNotes": "Windowsのwhisper/ggml/parakeet/SDL2は公式whisper-bin-x64.zipとSHA-256一致を確認。SDL2はPEバージョン2.28.5と上流release workflowが一致。MSVC DLLは同ZIPには含まれず出所確認が残る。macOSエンジンのバージョンは同梱名に基づき、再現ビルドによる来歴検証は未実施。",
+  "files": [
+    {
+      "path": "src-tauri/binaries/whisper-cli-aarch64-apple-darwin",
+      "sha256": "0958e44da7cdc7c901e4bd246f5c3c2b7ada83ccc51b332b88d19f41ca141dbd"
+    },
+    {
+      "path": "src-tauri/binaries/whisper-cli-x86_64-apple-darwin",
+      "sha256": "e9025b02feaa9c01c4a4a79d01f77f6693c5315d3a7472bac09b15e33a04605a"
+    },
+    {
+      "path": "src-tauri/binaries/whisper-cli-x86_64-pc-windows-msvc.exe",
+      "sha256": "95e3c0b0e778ad9499eb0125f97c1dcf437dd9eb4ea77050b043574f93c2631d",
+      "source": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/whisper-bin-x64.zip#Release/whisper-cli.exe"
+    },
+    {
+      "path": "src-tauri/resources/engine/macos-arm64/whisper/ggml-metal-embed.metal",
+      "sha256": "b52f2438dc15366c669704d1b1df0af83d32a8e62b2993d47b433ad42c9c2544"
+    },
+    {
+      "path": "src-tauri/resources/engine/macos-arm64/whisper/ggml-metal.metal",
+      "sha256": "41f55889ad573ad2077668bf0d239368444d3057731cbccae8a23abece1085d7"
+    },
+    {
+      "path": "src-tauri/resources/engine/macos-arm64/whisper/libggml-base.0.18.1.dylib",
+      "sha256": "4cc7d8ff3564d78c75c4d4899da88221faa2bbfeb02f7ecfd9cb72f9ae8bb588"
+    },
+    {
+      "path": "src-tauri/resources/engine/macos-arm64/whisper/libggml-blas.0.18.1.dylib",
+      "sha256": "dcc998081d29cf89f0fb67438d714eff25c12060e5e4f85e79583a116e4cabca"
+    },
+    {
+      "path": "src-tauri/resources/engine/macos-arm64/whisper/libggml-cpu.0.18.1.dylib",
+      "sha256": "15aaca4402049a6e280d1192a1b896ecd9f6bc807d39f184eb4b0d661d11ce93"
+    },
+    {
+      "path": "src-tauri/resources/engine/macos-arm64/whisper/libggml-metal.0.18.1.dylib",
+      "sha256": "d3eb2c1ca6212e0df22cffd0aedf0e2bb3d5bb004f0092d8162a598e9bf05f20"
+    },
+    {
+      "path": "src-tauri/resources/engine/macos-arm64/whisper/libggml.0.18.1.dylib",
+      "sha256": "970e2424e9ab96242a5178f05686508a4b51d2fe6a9932494b9927229c7aed87"
+    },
+    {
+      "path": "src-tauri/resources/engine/macos-arm64/whisper/libwhisper.1.9.2.dylib",
+      "sha256": "32e6ae0b63e8dac5b9b5bd1ba3b1c3208f110d86fadaf71476bbfa231129c9c7"
+    },
+    {
+      "path": "src-tauri/resources/engine/macos-x64/whisper/ggml-metal-embed.metal",
+      "sha256": "b52f2438dc15366c669704d1b1df0af83d32a8e62b2993d47b433ad42c9c2544"
+    },
+    {
+      "path": "src-tauri/resources/engine/macos-x64/whisper/ggml-metal.metal",
+      "sha256": "41f55889ad573ad2077668bf0d239368444d3057731cbccae8a23abece1085d7"
+    },
+    {
+      "path": "src-tauri/resources/engine/macos-x64/whisper/libggml-base.0.18.1.dylib",
+      "sha256": "799ddf6889dc8c283ba1107e41ae066d603396b6fa07f6341a741e63876ff727"
+    },
+    {
+      "path": "src-tauri/resources/engine/macos-x64/whisper/libggml-blas.0.18.1.dylib",
+      "sha256": "a8e238fcaf04ef7c271c2e92a010086e24b0448c80b0ba5919b3df5c84a802ef"
+    },
+    {
+      "path": "src-tauri/resources/engine/macos-x64/whisper/libggml-cpu.0.18.1.dylib",
+      "sha256": "71acf377072c59d87530ad748214aa4822b37c7e5a0adfae0a2f585b89b798aa"
+    },
+    {
+      "path": "src-tauri/resources/engine/macos-x64/whisper/libggml-metal.0.18.1.dylib",
+      "sha256": "d3eb2c1ca6212e0df22cffd0aedf0e2bb3d5bb004f0092d8162a598e9bf05f20"
+    },
+    {
+      "path": "src-tauri/resources/engine/macos-x64/whisper/libggml.0.18.1.dylib",
+      "sha256": "2f6ab275b55f0bba1ec8cc01602f18a24e043c98bcd28f216f11984cfbbf52b0"
+    },
+    {
+      "path": "src-tauri/resources/engine/macos-x64/whisper/libwhisper.1.9.2.dylib",
+      "sha256": "4b054c054a693c7d68177ed8428c746815b28cefd3aee34d87b07f497956c792"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/concrt140.dll",
+      "sha256": "2405355f0a58067b258f8df33c327e3a3d716eaac5a3a5aebb757842d85bd376"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/ggml-base.dll",
+      "sha256": "1482359d921b4c1b183d49db1d770f9b5e90d86a618b8b648d4845c2471ad6b0",
+      "source": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/whisper-bin-x64.zip#Release/ggml-base.dll"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/ggml-cpu-alderlake.dll",
+      "sha256": "d1c5411561361f7ce71ff8455ecf01f666f581b0608fa91a1dfe7d3fd6a25bd1",
+      "source": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/whisper-bin-x64.zip#Release/ggml-cpu-alderlake.dll"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/ggml-cpu-cannonlake.dll",
+      "sha256": "2ef36f05fa252ff4fdcb8d42ebce1ceba4f3d3de12b93bed15bdee6237dccd63",
+      "source": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/whisper-bin-x64.zip#Release/ggml-cpu-cannonlake.dll"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/ggml-cpu-cascadelake.dll",
+      "sha256": "505899aaf3f99c5d714361640f561458ea97f8a09eb0614568a66bead2115cb0",
+      "source": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/whisper-bin-x64.zip#Release/ggml-cpu-cascadelake.dll"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/ggml-cpu-haswell.dll",
+      "sha256": "f8cf2f35a06498d783d77fde42004dd54d2f8236b0d42ac323b94bba65a603c4",
+      "source": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/whisper-bin-x64.zip#Release/ggml-cpu-haswell.dll"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/ggml-cpu-icelake.dll",
+      "sha256": "78ad143ee2e674d037b4840ef33b5748a0659762a26e0ae2b621c4f9451cbde8",
+      "source": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/whisper-bin-x64.zip#Release/ggml-cpu-icelake.dll"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/ggml-cpu-sandybridge.dll",
+      "sha256": "ee47db7dc40fb30eca73e62a05306059c2c3c42aecddf2e8d6ad7e530069b815",
+      "source": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/whisper-bin-x64.zip#Release/ggml-cpu-sandybridge.dll"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/ggml-cpu-skylakex.dll",
+      "sha256": "164e2793897944a43ee071ce6c0b09018088bdf4dd8b14ac0755c58849cf8c50",
+      "source": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/whisper-bin-x64.zip#Release/ggml-cpu-skylakex.dll"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/ggml-cpu-sse42.dll",
+      "sha256": "7318a9a3b95a85b2453c437b274412bbbae89e5ecdf5babb19b99edc06ded063",
+      "source": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/whisper-bin-x64.zip#Release/ggml-cpu-sse42.dll"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/ggml-cpu-x64.dll",
+      "sha256": "af0f1c2f28ff9e3f472481dd969907bda85fa39d4fde17617d4bb0b389301b60",
+      "source": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/whisper-bin-x64.zip#Release/ggml-cpu-x64.dll"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/ggml.dll",
+      "sha256": "894c6237ee7849843213906a2b6a0b371aaa6234048d465f206d910ae846fafb",
+      "source": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/whisper-bin-x64.zip#Release/ggml.dll"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/msvcp140_1.dll",
+      "sha256": "bfad5aef4c63a669e3c140655cdfdf395b6c979b400a447bd5dcb65ed8826c3d"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/msvcp140_2.dll",
+      "sha256": "3ea06f0ee098b4823cb79599df3780e7f23cce52c19aac31d2a0d47efe33a5e9"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/msvcp140_atomic_wait.dll",
+      "sha256": "640b2aefced484d0368eea5bdd06addd0658a3a70a49256e560d6923b404a479"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/msvcp140_codecvt_ids.dll",
+      "sha256": "f2069a52880ec885ee7f0511186100eb7fada0411a2b4948fafea7735b878a18"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/msvcp140.dll",
+      "sha256": "0f885b509a685d2bbfa652fed26b5fb31d88fbdab0a978c641d1c7b8aa460aa9"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/parakeet.dll",
+      "sha256": "567c56a3c9b7383982e5777964f37f9f3cb930ef4a7ca907477e4e955f1cd0a4",
+      "source": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/whisper-bin-x64.zip#Release/parakeet.dll"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/SDL2.dll",
+      "sha256": "de23db1694a3c7a4a735e7ecd3d214b2023cc2267922c6c35d30c7fc7370d677",
+      "source": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/whisper-bin-x64.zip#Release/SDL2.dll"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/vcruntime140_1.dll",
+      "sha256": "1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/vcruntime140_threads.dll",
+      "sha256": "219915cf20822f34d5e7c1fdd4e21ae7f3396881096c51036225fb8f84b47afa"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/vcruntime140.dll",
+      "sha256": "d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/whisper.dll",
+      "sha256": "792fc523c7ad16e6b9c348e30ad5e5f591165cbcf6a80ca8d0db02a38ce3eea2",
+      "source": "https://github.com/ggml-org/whisper.cpp/releases/download/v1.9.2/whisper-bin-x64.zip#Release/whisper.dll"
+    }
+  ]
+}

@@ -8,6 +8,10 @@ on:
       - "src-tauri/**"
       - "public/**"
       - "scripts/**"
+      - "test/**"
+      - "docs/**"
+      - "DOON Voiceを起動.command"
+      - "DOON Voiceを起動.bat"
       - "package.json"
       - "package-lock.json"
       - "vite.config.ts"
@@ -21,6 +25,10 @@ on:
       - "src-tauri/**"
       - "public/**"
       - "scripts/**"
+      - "test/**"
+      - "docs/**"
+      - "DOON Voiceを起動.command"
+      - "DOON Voiceを起動.bat"
       - "package.json"
       - "package-lock.json"
       - "vite.config.ts"
@@ -42,11 +50,14 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: npm ci
+      - run: node scripts/check-licenses.mjs
       - run: npm run build
       - run: npm test
+      - run: npx playwright install chromium
+      - run: npm run test:ui
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-      - run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets
-      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets
+      - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 
   windows:
     name: Windows quality gate
@@ -61,8 +72,14 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: npm ci
+      - name: Exercise real setup and npm ci on Windows
+        run: node scripts/setup.mjs
+      - run: node scripts/test-windows-engine.mjs
+      - run: node scripts/check-licenses.mjs
       - run: npm run build
       - run: npm test
+      - run: npx playwright install chromium
+      - run: npm run test:ui
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
-      - run: cargo test --manifest-path src-tauri/Cargo.toml --all-targets --no-run
-      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets
+      - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
