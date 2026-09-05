@@ -119,7 +119,7 @@ fn partial_recordings_require_manual_review_even_after_retry() {
 
 #[test]
 fn failed_engine_shutdown_preserves_partial_text_and_blocks_more_recording() {
-    let result = failed_whisper_shutdown("残っている原文", "停止失敗").unwrap();
+    let result = failed_whisper_shutdown("残っている原文", "停止失敗");
     assert_eq!(result.text, "残っている原文");
     assert!(result.restart_required);
     let mut runtime = BackgroundVoiceRuntime::new(VoiceRuntimeConfig::default());
