@@ -4,7 +4,10 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     path::PathBuf,
     process::{Child, Command, Stdio},
-    sync::{atomic::{AtomicBool, Ordering}, mpsc, Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, Mutex,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -52,10 +55,16 @@ impl CloudRuntime {
     }
 
     pub(crate) fn rewrite(&self, spec: CloudSpec, prompt: &str) -> Result<String, String> {
+        if spec.cancelled.load(Ordering::Acquire) {
+            return Err("文章整形を中止しました。原文はDOON Voiceで確認できます。".into());
+        }
         let mut slot = self
             .slot(spec.kind)
             .lock()
             .map_err(|_| "クラウドAIの常駐接続を利用できませんでした。".to_string())?;
+        if spec.cancelled.load(Ordering::Acquire) {
+            return Err("文章整形を中止しました。原文はDOON Voiceで確認できます。".into());
+        }
         let client = ensure_client(&mut slot, &spec)?;
         client.set_cancellation(Arc::clone(&spec.cancelled));
         let result = client.rewrite(prompt, spec.timeout);
@@ -183,8 +192,13 @@ impl JsonLineProcess {
         let errors = sender.clone();
         thread::spawn(move || {
             for input in inputs {
-                if stdin_writer.write_all(&input).and_then(|_| stdin_writer.flush()).is_err() {
-                    let _ = errors.send(json!({"error": {"message": "CLIへ文章を渡せませんでした。"}}));
+                if stdin_writer
+                    .write_all(&input)
+                    .and_then(|_| stdin_writer.flush())
+                    .is_err()
+                {
+                    let _ =
+                        errors.send(json!({"error": {"message": "CLIへ文章を渡せませんでした。"}}));
                     break;
                 }
             }
@@ -202,12 +216,31 @@ impl JsonLineProcess {
         let stderr = Arc::new(Mutex::new(String::new()));
         let captured = Arc::clone(&stderr);
         thread::spawn(move || {
-            let mut text = String::new();
-            let _ = BufReader::new(stderr_reader)
-                .take(32 * 1024)
-                .read_to_string(&mut text);
-            if let Ok(mut output) = captured.lock() {
-                *output = text;
+            let mut reader = BufReader::new(stderr_reader);
+            let mut retained = Vec::new();
+            let mut buffer = [0_u8; 4_096];
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(0) => break,
+                    Ok(bytes) => {
+                        let keep = bytes.min((32 * 1024_usize).saturating_sub(retained.len()));
+                        if keep > 0 {
+                            retained.extend_from_slice(&buffer[..keep]);
+                            if let Ok(mut output) = captured.lock() {
+                                *output = String::from_utf8_lossy(&retained).into_owned();
+                            }
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(error) => {
+                        if let Ok(mut output) = captured.lock() {
+                            if output.is_empty() {
+                                *output = format!("CLIのエラー出力を読み取れませんでした: {error}");
+                            }
+                        }
+                        break;
+                    }
+                }
             }
         });
 
@@ -221,8 +254,11 @@ impl JsonLineProcess {
     }
 
     fn send(&mut self, message: &Value) -> Result<(), String> {
-        let mut bytes = serde_json::to_vec(message)
-            .map_err(|_| "CLIへ文章を渡せませんでした。".to_string())?;
+        if self.cancelled.load(Ordering::Acquire) {
+            return Err("文章整形を中止しました。原文はDOON Voiceで確認できます。".into());
+        }
+        let mut bytes =
+            serde_json::to_vec(message).map_err(|_| "CLIへ文章を渡せませんでした。".to_string())?;
         bytes.push(b'\n');
         self.stdin
             .try_send(bytes)
@@ -238,7 +274,10 @@ impl JsonLineProcess {
             if remaining.is_zero() {
                 return Err("CLIの応答が時間切れになりました。".into());
             }
-            match self.messages.recv_timeout(remaining.min(Duration::from_millis(100))) {
+            match self
+                .messages
+                .recv_timeout(remaining.min(Duration::from_millis(100)))
+            {
                 Ok(message) => return Ok(message),
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(mpsc::RecvTimeoutError::Disconnected) => return Err(self.failure_detail()),
@@ -328,13 +367,27 @@ impl CodexClient {
 
         let mut turn_id = None;
         let mut completed_items: Vec<Value> = Vec::new();
+        let mut early_completions: Vec<Value> = Vec::new();
         loop {
-            let message = self.process.receive(deadline)?;
-            if let Some(error) = rpc_error(&message) {
+            // A fast turn can finish before the turn/start acknowledgement.
+            // Retain its completion until the acknowledgement identifies it.
+            let ready_completion = turn_id.as_deref().and_then(|turn_id| {
+                early_completions.iter().position(|event| {
+                    event.pointer("/params/turn/id").and_then(Value::as_str) == Some(turn_id)
+                })
+            });
+            let message = match ready_completion {
+                Some(index) => early_completions.remove(index),
+                None => self.process.receive(deadline)?,
+            };
+            if let Some(error) = rpc_error_for_request(&message, turn_request_id) {
                 return Err(error);
             }
             if message.get("id").and_then(Value::as_u64) == Some(turn_request_id) {
-                turn_id = message.pointer("/result/turn/id").and_then(Value::as_str).map(str::to_owned);
+                turn_id = message
+                    .pointer("/result/turn/id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
                 if turn_id.is_none() {
                     return Err("Codexの応答IDを確認できませんでした。".into());
                 }
@@ -345,6 +398,11 @@ impl CodexClient {
             }
             match message.get("method").and_then(Value::as_str) {
                 Some("item/completed") => {
+                    if turn_id.as_deref().is_some_and(|turn_id| {
+                        message.pointer("/params/turnId").and_then(Value::as_str) != Some(turn_id)
+                    }) {
+                        continue;
+                    }
                     // Completed item text is authoritative, not progress deltas.
                     if completed_items.len() >= 128 {
                         return Err("Codexからの応答が多すぎます。".into());
@@ -353,29 +411,50 @@ impl CodexClient {
                 }
                 Some("turn/completed") => {
                     let completed_turn = message.pointer("/params/turn/id").and_then(Value::as_str);
+                    if turn_id.is_none() && completed_turn.is_some() {
+                        if early_completions.len() >= 128 {
+                            return Err("Codexからの応答が多すぎます。".into());
+                        }
+                        early_completions.push(message);
+                        continue;
+                    }
                     if completed_turn.is_none() || completed_turn != turn_id.as_deref() {
                         continue;
                     }
                     if !codex_turn_completed(&message) {
-                        return Err("Codexの文章整形が完了しませんでした。原文を確認してください。".into());
+                        return Err(
+                            "Codexの文章整形が完了しませんでした。原文を確認してください。".into(),
+                        );
                     }
-                    let items: Vec<&Value> = message.pointer("/params/turn/items")
+                    let items: Vec<&Value> = message
+                        .pointer("/params/turn/items")
                         .and_then(Value::as_array)
                         .filter(|items| !items.is_empty())
                         .map(|items| items.iter().collect())
-                        .unwrap_or_else(|| completed_items.iter()
-                            .filter(|event| event.pointer("/params/turnId").and_then(Value::as_str) == completed_turn)
-                            .filter_map(|event| event.pointer("/params/item")).collect());
-                    let final_item = items.iter().rev().copied().find(|item|
+                        .unwrap_or_else(|| {
+                            completed_items
+                                .iter()
+                                .filter(|event| {
+                                    event.pointer("/params/turnId").and_then(Value::as_str)
+                                        == completed_turn
+                                })
+                                .filter_map(|event| event.pointer("/params/item"))
+                                .collect()
+                        });
+                    let final_item = items.iter().rev().copied().find(|item| {
                         item.get("type").and_then(Value::as_str) == Some("agentMessage")
-                        && item.get("phase").and_then(Value::as_str) == Some("final_answer"));
+                            && item.get("phase").and_then(Value::as_str) == Some("final_answer")
+                    });
                     // Older models omit phase: use only the last completed
                     // assistant item, never concatenate unrelated messages.
-                    let legacy_item = items.iter().rev().copied().find(|item|
+                    let legacy_item = items.iter().rev().copied().find(|item| {
                         item.get("type").and_then(Value::as_str) == Some("agentMessage")
-                        && item.get("phase").is_none_or(Value::is_null));
-                    let output = final_item.or(legacy_item)
-                        .and_then(|item| item.get("text")).and_then(Value::as_str)
+                            && item.get("phase").is_none_or(Value::is_null)
+                    });
+                    let output = final_item
+                        .or(legacy_item)
+                        .and_then(|item| item.get("text"))
+                        .and_then(Value::as_str)
                         .unwrap_or_default();
                     return nonempty(output.to_string(), "Codexから文章を受け取れませんでした。");
                 }
@@ -473,13 +552,23 @@ fn wait_for_response(
 ) -> Result<Value, String> {
     loop {
         let message = process.receive(deadline)?;
-        if let Some(error) = rpc_error(&message) {
+        if let Some(error) = rpc_error_for_request(&message, id) {
             return Err(error);
         }
         if message.get("id").and_then(Value::as_u64) == Some(id) {
             return Ok(message);
         }
     }
+}
+
+fn rpc_error_for_request(message: &Value, request_id: u64) -> Option<String> {
+    if message
+        .get("id")
+        .is_some_and(|id| id.as_u64() != Some(request_id))
+    {
+        return None;
+    }
+    rpc_error(message)
 }
 
 fn rpc_error(message: &Value) -> Option<String> {
@@ -516,8 +605,13 @@ pub(crate) fn codex_thread_start_request(id: u64, cwd: &str, model: &str) -> Val
 
 pub(crate) fn codex_turn_completed(message: &Value) -> bool {
     message.get("method").and_then(Value::as_str) == Some("turn/completed")
-        && message.pointer("/params/turn/status").and_then(Value::as_str) == Some("completed")
-        && message.pointer("/params/turn/error").is_none_or(Value::is_null)
+        && message
+            .pointer("/params/turn/status")
+            .and_then(Value::as_str)
+            == Some("completed")
+        && message
+            .pointer("/params/turn/error")
+            .is_none_or(Value::is_null)
 }
 
 pub(crate) fn claude_input(prompt: &str) -> Value {
@@ -570,7 +664,9 @@ mod tests {
 
     #[test]
     fn codex_fixture() {
-        let Ok(mode) = std::env::var("DOON_VOICE_TEST_CODEX_FIXTURE") else { return };
+        let Ok(mode) = std::env::var("DOON_VOICE_TEST_CODEX_FIXTURE") else {
+            return;
+        };
         let emit = |value: Value| {
             println!("{value}");
             std::io::stdout().flush().unwrap();
@@ -583,22 +679,58 @@ mod tests {
                 if mode != "completion-before-ack" {
                     emit(json!({"id": value["id"], "result": {"turn": {"id": "turn-test"}}}));
                 }
+                if mode == "waiting" {
+                    thread::sleep(Duration::from_secs(5));
+                    continue;
+                }
                 if mode == "unrelated-rpc-error" {
                     emit(json!({"id": 9999, "error": {"message": "unrelated request failed"}}));
                 }
                 if mode == "large-stderr" {
-                    std::io::stderr().write_all(&vec![b'x'; 512 * 1024]).unwrap();
+                    std::io::stderr()
+                        .write_all(&vec![b'x'; 512 * 1024])
+                        .unwrap();
                 }
-                for (id, phase, text) in [("one", "commentary", "整えます。"), ("two", "final_answer", "明日は会議です。")] {
-                    emit(json!({"method": "item/agentMessage/delta", "params": {"threadId": "thread-test", "turnId": "turn-test", "itemId": id, "delta": text}}));
-                    emit(json!({"method": "item/completed", "params": {"threadId": "thread-test", "turnId": "turn-test", "item": {"id": id, "type": "agentMessage", "phase": phase, "text": text}}}));
+                for (id, phase, text) in [
+                    ("one", "commentary", "整えます。"),
+                    ("two", "final_answer", "明日は会議です。"),
+                ] {
+                    emit(
+                        json!({"method": "item/agentMessage/delta", "params": {"threadId": "thread-test", "turnId": "turn-test", "itemId": id, "delta": text}}),
+                    );
+                    emit(
+                        json!({"method": "item/completed", "params": {"threadId": "thread-test", "turnId": "turn-test", "item": {"id": id, "type": "agentMessage", "phase": phase, "text": text}}}),
+                    );
                 }
-                emit(json!({"method": "turn/completed", "params": {"threadId": "another-thread", "turn": {"id": "another-turn", "status": "completed", "items": []}}}));
-                emit(json!({"method": "item/completed", "params": {"threadId": "thread-test", "turnId": "another-turn", "item": {"type": "agentMessage", "phase": "final_answer", "text": "別の発話。"}}}));
-                emit(json!({"method": "turn/completed", "params": {"threadId": "thread-test", "turn": {"id": "another-turn", "status": "failed", "error": {"message": "別の発話の失敗"}, "items": []}}}));
-                let status = if ["completion-before-ack", "unrelated-rpc-error", "large-stderr", "empty-final"].contains(&mode.as_str()) { "completed" } else { &mode };
-                let items = if mode == "empty-final" { json!([{"type": "agentMessage", "phase": "final_answer", "text": " "}]) } else { json!([]) };
-                emit(json!({"method": "turn/completed", "params": {"threadId": "thread-test", "turn": {"id": "turn-test", "status": status, "items": items, "error": if mode == "failed" {json!({"message": "fixture failed"})} else {Value::Null}}}}));
+                emit(
+                    json!({"method": "turn/completed", "params": {"threadId": "another-thread", "turn": {"id": "another-turn", "status": "completed", "items": []}}}),
+                );
+                emit(
+                    json!({"method": "item/completed", "params": {"threadId": "thread-test", "turnId": "another-turn", "item": {"type": "agentMessage", "phase": "final_answer", "text": "別の発話。"}}}),
+                );
+                emit(
+                    json!({"method": "turn/completed", "params": {"threadId": "thread-test", "turn": {"id": "another-turn", "status": "failed", "error": {"message": "別の発話の失敗"}, "items": []}}}),
+                );
+                let status = if [
+                    "completion-before-ack",
+                    "unrelated-rpc-error",
+                    "large-stderr",
+                    "empty-final",
+                ]
+                .contains(&mode.as_str())
+                {
+                    "completed"
+                } else {
+                    &mode
+                };
+                let items = if mode == "empty-final" {
+                    json!([{"type": "agentMessage", "phase": "final_answer", "text": " "}])
+                } else {
+                    json!([])
+                };
+                emit(
+                    json!({"method": "turn/completed", "params": {"threadId": "thread-test", "turn": {"id": "turn-test", "status": status, "items": items, "error": if mode == "failed" {json!({"message": "fixture failed"})} else {Value::Null}}}}),
+                );
                 if mode == "completion-before-ack" {
                     emit(json!({"id": value["id"], "result": {"turn": {"id": "turn-test"}}}));
                 }
@@ -609,76 +741,217 @@ mod tests {
     #[test]
     fn codex_uses_only_final_answer_and_rejects_failed_turns() {
         for mode in ["completed", "failed", "interrupted"] {
-            let fixture = format!("{}::codex_fixture", module_path!().split_once("::").unwrap().1);
+            let fixture = format!(
+                "{}::codex_fixture",
+                module_path!().split_once("::").unwrap().1
+            );
             let mut command = Command::new(std::env::current_exe().unwrap());
-            command.args(["--exact", &fixture, "--nocapture"]).env("DOON_VOICE_TEST_CODEX_FIXTURE", mode);
-            let mut client = CodexClient { process: JsonLineProcess::spawn(command).unwrap(), next_id: 1, cwd: std::env::temp_dir().to_string_lossy().into_owned(), model: "fixture".into() };
+            command
+                .args(["--exact", &fixture, "--nocapture"])
+                .env("DOON_VOICE_TEST_CODEX_FIXTURE", mode);
+            let mut client = CodexClient {
+                process: JsonLineProcess::spawn(command).unwrap(),
+                next_id: 1,
+                cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+                model: "fixture".into(),
+            };
             let result = client.rewrite("人工的なテスト文", Duration::from_secs(5));
-            if mode == "completed" { assert_eq!(result.unwrap(), "明日は会議です。"); }
-            else { assert!(result.is_err(), "{mode}: {result:?}"); }
+            if mode == "completed" {
+                assert_eq!(result.unwrap(), "明日は会議です。");
+            } else {
+                assert!(result.is_err(), "{mode}: {result:?}");
+            }
         }
     }
 
     fn fake_codex(mode: &str) -> CodexClient {
-        let fixture = format!("{}::codex_fixture", module_path!().split_once("::").unwrap().1);
+        let fixture = format!(
+            "{}::codex_fixture",
+            module_path!().split_once("::").unwrap().1
+        );
         let mut command = Command::new(std::env::current_exe().unwrap());
-        command.args(["--exact", &fixture, "--nocapture"]).env("DOON_VOICE_TEST_CODEX_FIXTURE", mode);
-        CodexClient { process: JsonLineProcess::spawn(command).unwrap(), next_id: 1, cwd: std::env::temp_dir().to_string_lossy().into_owned(), model: "fixture".into() }
+        command
+            .args(["--exact", &fixture, "--nocapture"])
+            .env("DOON_VOICE_TEST_CODEX_FIXTURE", mode);
+        CodexClient {
+            process: JsonLineProcess::spawn(command).unwrap(),
+            next_id: 1,
+            cwd: std::env::temp_dir().to_string_lossy().into_owned(),
+            model: "fixture".into(),
+        }
     }
 
     #[test]
     fn codex_accepts_completion_received_before_turn_start_ack() {
         let mut client = fake_codex("completion-before-ack");
-        assert_eq!(client.rewrite("人工的なテスト文", Duration::from_millis(500)).unwrap(), "明日は会議です。");
+        assert_eq!(
+            client
+                .rewrite("人工的なテスト文", Duration::from_millis(500))
+                .unwrap(),
+            "明日は会議です。"
+        );
     }
 
     #[test]
     fn codex_ignores_errors_and_items_for_unrelated_requests_and_turns() {
         let mut client = fake_codex("unrelated-rpc-error");
-        assert_eq!(client.rewrite("人工的なテスト文", Duration::from_secs(2)).unwrap(), "明日は会議です。");
+        assert_eq!(
+            client
+                .rewrite("人工的なテスト文", Duration::from_secs(2))
+                .unwrap(),
+            "明日は会議です。"
+        );
     }
 
     #[test]
     fn large_stderr_does_not_break_a_valid_final_answer() {
         let mut client = fake_codex("large-stderr");
-        assert_eq!(client.rewrite("人工的なテスト文", Duration::from_secs(2)).unwrap(), "明日は会議です。");
+        assert_eq!(
+            client
+                .rewrite("人工的なテスト文", Duration::from_secs(2))
+                .unwrap(),
+            "明日は会議です。"
+        );
     }
 
     #[test]
     fn empty_final_is_an_error_even_when_commentary_exists() {
         let mut client = fake_codex("empty-final");
-        assert!(client.rewrite("人工的なテスト文", Duration::from_secs(2)).is_err());
+        assert!(client
+            .rewrite("人工的なテスト文", Duration::from_secs(2))
+            .is_err());
     }
 
     #[test]
     fn pre_cancelled_send_does_not_enqueue_a_prompt() {
         let mut client = fake_codex("completed");
         client.process.cancelled.store(true, Ordering::Release);
-        assert!(client.process.send(&json!({"method": "turn/start", "params": {"input": "人工的なテスト文"}})).is_err());
+        assert!(client
+            .process
+            .send(&json!({"method": "turn/start", "params": {"input": "人工的なテスト文"}}))
+            .is_err());
     }
 
     #[test]
     fn pre_cancelled_rewrite_does_not_start_a_cli() {
         let runtime = CloudRuntime::default();
-        let result = runtime.rewrite(CloudSpec {
-            kind: CloudKind::Codex,
+        let result = runtime.rewrite(
+            CloudSpec {
+                kind: CloudKind::Codex,
+                executable: PathBuf::from("doon-deliberately-missing-cloud-test-cli"),
+                path: std::env::var_os("PATH").unwrap_or_default(),
+                cwd: std::env::temp_dir(),
+                model: "fixture".into(),
+                timeout: Duration::from_secs(1),
+                cancelled: Arc::new(AtomicBool::new(true)),
+            },
+            "人工的なテスト文",
+        );
+        assert!(result.unwrap_err().contains("中止"));
+    }
+
+    fn fake_spec(kind: CloudKind) -> CloudSpec {
+        CloudSpec {
+            kind,
             executable: PathBuf::from("doon-deliberately-missing-cloud-test-cli"),
             path: std::env::var_os("PATH").unwrap_or_default(),
             cwd: std::env::temp_dir(),
             model: "fixture".into(),
-            timeout: Duration::from_secs(1),
-            cancelled: Arc::new(AtomicBool::new(true)),
-        }, "人工的なテスト文");
-        assert!(result.unwrap_err().contains("中止"));
+            timeout: Duration::from_secs(2),
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    #[test]
+    fn stream_fixture() {
+        let Ok(kind) = std::env::var("DOON_VOICE_TEST_STREAM_KIND") else {
+            return;
+        };
+        for line in std::io::stdin().lock().lines() {
+            let _: Value = serde_json::from_str(&line.unwrap()).unwrap();
+            let result = if kind == "claude" {
+                json!({"type": "result", "subtype": "success", "is_error": false, "result": "明日は会議です。"})
+            } else {
+                json!({"event": "result", "result": {"status": "SUCCESS", "response": "明日は会議です。"}})
+            };
+            println!("{result}");
+            std::io::stdout().flush().unwrap();
+        }
+    }
+
+    #[test]
+    fn claude_and_gemini_release_the_conversation_after_each_rewrite() {
+        for (kind, name) in [(CloudKind::Claude, "claude"), (CloudKind::Gemini, "gemini")] {
+            let fixture = format!(
+                "{}::stream_fixture",
+                module_path!().split_once("::").unwrap().1
+            );
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args(["--exact", &fixture, "--nocapture"])
+                .env("DOON_VOICE_TEST_STREAM_KIND", name);
+            let stream = StreamClient {
+                process: JsonLineProcess::spawn(command).unwrap(),
+            };
+            let runtime = CloudRuntime::default();
+            *runtime.slot(kind).lock().unwrap() = Some(match kind {
+                CloudKind::Claude => CloudClient::Claude(stream),
+                CloudKind::Gemini => CloudClient::Gemini(stream),
+                CloudKind::Codex => unreachable!(),
+            });
+            assert_eq!(
+                runtime
+                    .rewrite(fake_spec(kind), "人工的なテスト文")
+                    .unwrap(),
+                "明日は会議です。"
+            );
+            assert!(runtime.process_id(kind).is_none());
+        }
+    }
+
+    #[test]
+    fn failed_and_empty_codex_results_invalidate_the_client() {
+        for mode in ["failed", "interrupted", "empty-final"] {
+            let runtime = CloudRuntime::default();
+            *runtime.codex.lock().unwrap() = Some(CloudClient::Codex(fake_codex(mode)));
+            assert!(runtime
+                .rewrite(fake_spec(CloudKind::Codex), "人工的なテスト文")
+                .is_err());
+            assert!(runtime.process_id(CloudKind::Codex).is_none());
+        }
+    }
+
+    #[test]
+    fn cancellation_during_rewrite_releases_the_client_promptly() {
+        let runtime = CloudRuntime::default();
+        *runtime.codex.lock().unwrap() = Some(CloudClient::Codex(fake_codex("waiting")));
+        let spec = fake_spec(CloudKind::Codex);
+        let cancelled = Arc::clone(&spec.cancelled);
+        thread::scope(|scope| {
+            scope.spawn(move || {
+                thread::sleep(Duration::from_millis(50));
+                cancelled.store(true, Ordering::Release);
+            });
+            let started = Instant::now();
+            assert!(runtime
+                .rewrite(spec, "人工的なテスト文")
+                .unwrap_err()
+                .contains("中止"));
+            assert!(started.elapsed() < Duration::from_secs(1));
+        });
+        assert!(runtime.process_id(CloudKind::Codex).is_none());
     }
 
     #[test]
     fn failed_or_interrupted_codex_turn_is_not_success() {
         for status in ["failed", "interrupted", "inProgress"] {
-            assert!(!codex_turn_completed(&json!({
-                "method": "turn/completed",
-                "params": {"threadId": "t", "turn": {"id": "u", "status": status}}
-            })), "status={status}");
+            assert!(
+                !codex_turn_completed(&json!({
+                    "method": "turn/completed",
+                    "params": {"threadId": "t", "turn": {"id": "u", "status": status}}
+                })),
+                "status={status}"
+            );
         }
     }
 
@@ -699,7 +972,9 @@ mod tests {
     #[test]
     fn codexの成功終了状態を確認する() {
         assert!(!codex_turn_completed(&json!({"method": "turn/completed"})));
-        assert!(codex_turn_completed(&json!({"method": "turn/completed", "params": {"turn": {"status": "completed"}}})));
+        assert!(codex_turn_completed(
+            &json!({"method": "turn/completed", "params": {"turn": {"status": "completed"}}})
+        ));
     }
 
     #[test]
@@ -767,7 +1042,7 @@ mod tests {
 
     #[test]
     #[ignore = "公式クラウドAIへ無害な短文を送る実通信テスト"]
-    fn chatgptとgeminiの常駐接続から最終文章を受け取る() {
+    fn chatgptとgeminiは発話分離方針を守って最終文章を受け取る() {
         let cwd = std::env::temp_dir().join("doon-voice-cloud-runtime-live-test");
         std::fs::create_dir_all(&cwd).expect("テスト用作業場所を作成できる");
         let path = std::env::var_os("PATH").unwrap_or_default();
@@ -793,13 +1068,18 @@ mod tests {
             let first = runtime
                 .rewrite(make_spec(), prompt)
                 .expect("常駐接続から文章を受け取れる");
-            let process_id = runtime.process_id(kind).expect("プロセスIDを取得できる");
+            let process_id = runtime.process_id(kind);
+            if kind == CloudKind::Codex {
+                assert!(process_id.is_some(), "Codexはプロセスを保持する");
+            } else {
+                assert!(process_id.is_none(), "Geminiは発話完了時に接続を閉じる");
+            }
             let second = runtime
                 .rewrite(make_spec(), prompt)
-                .expect("同じ常駐接続から2回目の文章を受け取れる");
+                .expect("発話を分離して2回目の文章を受け取れる");
             assert!(first.contains("10時"));
             assert!(second.contains("10時"));
-            assert_eq!(runtime.process_id(kind), Some(process_id));
+            assert_eq!(runtime.process_id(kind), process_id);
         }
     }
 }
