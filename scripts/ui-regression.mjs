@@ -23,10 +23,13 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
   const callbacks = new Map();
   const listeners = new Map();
   let nextId = 1;
-  const idle = { state: "idle", transcript: "", output: "", message: "", clipboard_saved: false, recovery_pending: false };
+  const idle = { state: "idle", generation: 1, transcript: "", output: "", message: "", clipboard_saved: false, recovery_pending: false };
   window.fixture = {
     calls: [], errors: [], authenticated, clipboard: "", clipboardFails: false,
     registeredShortcut: null, snapshot: { ...idle, ...snapshot },
+    deferClipboard: false, pendingClipboard: null, deferConfigs: false, rejectConfigs: false,
+    pendingConfigs: [], activeTarget: "codex", deferNextClear: false, pendingClear: null,
+    resolveConfig(index = 0) { const job = this.pendingConfigs.splice(index, 1)[0]; this.activeTarget = job.args.target; job.resolve(); },
     publish(patch) {
       this.snapshot = { ...this.snapshot, ...patch };
       this.emit("background-voice-state", this.snapshot);
@@ -43,6 +46,7 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
   window.setTimeout = (callback, ms, ...args) => timeout(callback, ms === 1500 ? 1 : ms, ...args);
   Object.defineProperty(navigator, "clipboard", { value: { async writeText(value) {
     if (window.fixture.clipboardFails) throw new Error("clipboard unavailable");
+    if (window.fixture.deferClipboard) await new Promise((resolve) => { window.fixture.pendingClipboard = resolve; });
     window.fixture.clipboard = value;
   } } });
   window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} };
@@ -51,15 +55,23 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
     async invoke(command, args) {
       const f = window.fixture;
       f.calls.push({ command, args });
+      if (["ack_voice_result", "clear_voice_result", "retry_voice_processing", "cancel_voice_processing"].includes(command) && args?.generation !== f.snapshot.generation) throw new Error("結果が更新されています");
       switch (command) {
         case "provider_status": return { provider: args.provider, installed: true, authenticated: Boolean(f.authenticated[args.provider]), usability: "unknown" };
         case "local_llm_status": return { installed: false, running: false, models: [] };
         case "transcription_status": return { downloaded: true, name: "音声認識", size: "574 MB" };
         case "direct_input_status": return true;
         case "background_voice_status": return f.snapshot;
-        case "configure_background_voice": return;
+        case "configure_background_voice":
+          if (f.rejectConfigs) throw new Error("設定を保存できませんでした");
+          if (f.deferConfigs) return new Promise((resolve) => f.pendingConfigs.push({ args, resolve }));
+          f.activeTarget = args.target;
+          return;
         case "set_voice_shortcut": f.registeredShortcut = args.shortcut; return;
-        case "clear_voice_shortcut": f.registeredShortcut = null; return;
+        case "clear_voice_shortcut":
+          f.registeredShortcut = null;
+          if (f.deferNextClear) { f.deferNextClear = false; return new Promise((resolve) => { f.pendingClear = resolve; }); }
+          return;
         case "start_official_login": return;
         case "toggle_background_voice": f.publish({ state: "starting" }); return;
         case "cancel_voice_processing": f.publish({ state: "idle", message: "処理を取り消しました" }); return;
@@ -134,6 +146,91 @@ try {
     await page.getByRole("button", { name: "破棄", exact: true }).click();
     await page.waitForFunction(() => window.fixture.snapshot.transcript === "");
     assert.equal(await page.getByRole("button", { name: "音声入力を開始" }).isEnabled(), true);
+    await page.close();
+  });
+
+  await check("late clipboard completion never acknowledges the next result generation", async () => {
+    const page = await pageFor({ snapshot: recovery });
+    await page.evaluate(() => { window.fixture.deferClipboard = true; });
+    await page.getByRole("button", { name: "原文をコピー", exact: true }).click();
+    await page.waitForFunction(() => window.fixture.pendingClipboard !== null);
+    await page.evaluate(() => {
+      window.fixture.publish({ generation: 2, transcript: "次の原文", clipboard_saved: false, recovery_pending: true });
+      window.fixture.pendingClipboard();
+    });
+    await page.getByRole("button", { name: "原文をコピー", exact: true }).waitFor();
+    await page.waitForFunction(() => !document.querySelector(".result-actions button")?.disabled);
+    assert.equal(await page.getByRole("button", { name: "音声入力を開始" }).isDisabled(), true);
+    assert.doesNotMatch(await page.locator(".result-actions").innerText(), /コピー済み/);
+    assert.equal(await page.evaluate(() => window.fixture.calls.some(({ command, args }) => command === "ack_voice_result" && args?.generation !== 1)), false);
+    await page.close();
+  });
+
+  await check("recording disables result operations while keeping stop available", async () => {
+    const page = await pageFor({ snapshot: { ...recovery, state: "recording", output: "前回の結果" } });
+    for (const name of ["原文をコピー", "文章をコピー", "再試行", "破棄"]) assert.equal(await page.getByRole("button", { name, exact: true }).isDisabled(), true);
+    assert.equal(await page.getByRole("button", { name: "音声入力を停止" }).isEnabled(), true);
+    await page.close();
+  });
+
+  await check("rejected configuration preserves the last acknowledged AI selection", async () => {
+    const page = await pageFor();
+    await page.evaluate(() => { window.fixture.rejectConfigs = true; });
+    await page.getByRole("button", { name: /^Claude/ }).click();
+    await page.getByText("設定を保存できませんでした", { exact: true }).first().waitFor();
+    assert.equal(await page.getByRole("button", { name: /^ChatGPT/ }).getAttribute("aria-pressed"), "true");
+    assert.notEqual(await page.evaluate(() => localStorage.getItem("doon-voice-output-target")), "claude");
+    assert.equal(await page.evaluate(() => window.fixture.activeTarget), "codex");
+    await page.close();
+  });
+
+  await check("rapid AI selections cannot commit an older configuration last", async () => {
+    const page = await pageFor();
+    await page.evaluate(() => { window.fixture.deferConfigs = true; });
+    await page.getByRole("button", { name: /^Claude/ }).click();
+    await page.getByRole("button", { name: /^Gemini/ }).click();
+    await page.waitForFunction(() => window.fixture.pendingConfigs.length > 0);
+    assert.equal(await page.getByRole("button", { name: /^ChatGPT/ }).getAttribute("aria-pressed"), "true");
+    const count = await page.evaluate(() => window.fixture.pendingConfigs.length);
+    if (count > 1) {
+      await page.evaluate(() => { window.fixture.resolveConfig(1); window.fixture.resolveConfig(0); });
+    } else {
+      await page.evaluate(() => window.fixture.resolveConfig());
+      await page.waitForFunction(() => window.fixture.pendingConfigs.length === 1);
+      await page.evaluate(() => window.fixture.resolveConfig());
+    }
+    await page.waitForFunction(() => localStorage.getItem("doon-voice-output-target") === "gemini");
+    assert.equal(await page.evaluate(() => window.fixture.activeTarget), "gemini");
+    assert.equal(await page.getByRole("button", { name: /^Gemini/ }).getAttribute("aria-pressed"), "true");
+    await page.close();
+  });
+
+  await check("retry rechecks result generation after a delayed configuration save", async () => {
+    const page = await pageFor({ snapshot: recovery });
+    await page.evaluate(() => { window.fixture.deferConfigs = true; });
+    await page.getByRole("button", { name: "再試行", exact: true }).click();
+    await page.waitForFunction(() => window.fixture.pendingConfigs.length === 1);
+    await page.evaluate(() => { window.fixture.publish({ generation: 2, transcript: "次の原文" }); window.fixture.resolveConfig(); });
+    await page.waitForFunction(() => !document.querySelector(".result-actions button")?.disabled);
+    assert.equal(await page.evaluate(() => window.fixture.calls.some(({ command }) => command === "retry_voice_processing")), false);
+    assert.equal(await page.evaluate(() => window.fixture.snapshot.recovery_pending), true);
+    await page.close();
+  });
+
+  await check("an old shortcut-clear response cannot restore over a newer shortcut", async () => {
+    const page = await pageFor();
+    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await page.evaluate(() => { window.fixture.deferNextClear = true; });
+    await page.getByRole("button", { name: "開始・停止キーを変更" }).click();
+    await page.waitForFunction(() => window.fixture.pendingClear !== null);
+    await page.getByRole("button", { name: "ホーム", exact: true }).click();
+    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await page.getByRole("button", { name: "開始・停止キーを変更" }).click();
+    await page.keyboard.press("Control+Shift+K");
+    await page.waitForFunction(() => window.fixture.registeredShortcut === "Ctrl+Shift+K");
+    await page.evaluate(() => window.fixture.pendingClear());
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await page.evaluate(() => window.fixture.registeredShortcut), "Ctrl+Shift+K");
     await page.close();
   });
 
