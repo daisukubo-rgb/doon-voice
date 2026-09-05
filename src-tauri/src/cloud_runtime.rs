@@ -943,6 +943,51 @@ mod tests {
     }
 
     #[test]
+    fn cancellation_is_observed_while_another_operation_holds_the_slot() {
+        let runtime = CloudRuntime::default();
+        let guard = runtime.codex.lock().unwrap();
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let (entered_sender, entered) = mpsc::channel();
+        let (done_sender, done) = mpsc::channel();
+        thread::scope(|scope| {
+            let worker_cancelled = Arc::clone(&cancelled);
+            let runtime_ref = &runtime;
+            scope.spawn(move || {
+                let mut spec = fake_spec(CloudKind::Codex);
+                spec.cancelled = worker_cancelled;
+                entered_sender.send(()).unwrap();
+                let result = runtime_ref.rewrite(spec, "人工的なテスト文");
+                done_sender.send(result).unwrap();
+            });
+            entered.recv().unwrap();
+            thread::sleep(Duration::from_millis(50));
+            cancelled.store(true, Ordering::Release);
+            let stopped_promptly = done.recv_timeout(Duration::from_millis(250)).is_ok();
+            drop(guard);
+            assert!(stopped_promptly, "warm等が接続を使用中でも取消を処理する");
+        });
+    }
+
+    #[test]
+    fn warm_times_out_while_another_operation_holds_the_slot() {
+        let runtime = CloudRuntime::default();
+        let guard = runtime.codex.lock().unwrap();
+        let (done_sender, done) = mpsc::channel();
+        thread::scope(|scope| {
+            let runtime_ref = &runtime;
+            scope.spawn(move || {
+                let mut spec = fake_spec(CloudKind::Codex);
+                spec.timeout = Duration::from_millis(50);
+                done_sender.send(runtime_ref.warm(spec)).unwrap();
+            });
+            let timed_out = done.recv_timeout(Duration::from_millis(250))
+                .is_ok_and(|result| result.is_err_and(|error| error.contains("時間")));
+            drop(guard);
+            assert!(timed_out, "常駐接続の待ち合わせにも実行期限を適用する");
+        });
+    }
+
+    #[test]
     fn failed_or_interrupted_codex_turn_is_not_success() {
         for status in ["failed", "interrupted", "inProgress"] {
             assert!(
