@@ -93,11 +93,12 @@ function savedProviderConnections(key = "doon-voice-provider-connections"): Prov
   return { codex: false, claude: false, gemini: false };
 }
 
-function savedList<T>(key: string): T[] {
+function savedDictionary(): { terms: unknown[]; unreadable: boolean } {
   try {
-    const value = JSON.parse(window.localStorage.getItem(key) || "[]");
-    return Array.isArray(value) ? value as T[] : [];
-  } catch { return []; }
+    const value: unknown = JSON.parse(window.localStorage.getItem("doon-voice-dictionary") ?? "[]");
+    if (Array.isArray(value)) return { terms: value, unreadable: false };
+  } catch { /* 読めない保存値は、利用者が削除するまで上書きしない */ }
+  return { terms: [], unreadable: true };
 }
 
 function duration(seconds: number) {
@@ -110,6 +111,7 @@ type OverlayState = "starting" | "listening" | "thinking" | "done" | "error" | "
 
 function MainApp() {
   const initialOutputTarget = useRef(savedOutputTarget()).current;
+  const initialDictionary = useRef(savedDictionary()).current;
   const [view, setView] = useState<View>("home");
   const [statuses, setStatuses] = useState<Record<ProviderId, ProviderStatus | null>>({ codex: null, claude: null, gemini: null });
   const [connectedProviders, setConnectedProviders] = useState<ProviderConnections>(() => savedProviderConnections());
@@ -121,7 +123,8 @@ function MainApp() {
   const [notice, setNotice] = useState("");
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
-  const [terms, setTerms] = useState<unknown[]>(() => savedList<unknown>("doon-voice-dictionary"));
+  const [terms, setTerms] = useState<unknown[]>(initialDictionary.terms);
+  const [unreadableDictionary, setUnreadableDictionary] = useState(initialDictionary.unreadable);
   const [termDraft, setTermDraft] = useState("");
   const [termError, setTermError] = useState("");
   const [shortcut, setShortcut] = useState(savedShortcut);
@@ -185,12 +188,14 @@ function MainApp() {
     return () => window.clearInterval(timer);
   }, [recording]);
   useEffect(() => { if (capturingShortcut) shortcutButtonRef.current?.focus(); }, [capturingShortcut]);
-  useEffect(() => { window.localStorage.setItem("doon-voice-dictionary", JSON.stringify(terms)); }, [terms]);
   useEffect(() => {
-    if (!isTauriApp() || dictionaryError(terms)) return;
+    if (!unreadableDictionary) window.localStorage.setItem("doon-voice-dictionary", JSON.stringify(terms));
+  }, [terms, unreadableDictionary]);
+  useEffect(() => {
+    if (!isTauriApp() || unreadableDictionary || dictionaryError(terms)) return;
     void appInvoke("configure_background_voice", { target: outputTarget, dictionary: terms })
       .catch((error) => setNotice(errorMessage(error, "音声入力の設定を保存できませんでした")));
-  }, [outputTarget, terms]);
+  }, [outputTarget, terms, unreadableDictionary]);
 
   function applyBackgroundVoiceSnapshot(snapshot: BackgroundVoiceSnapshot) {
     const isRecording = snapshot.state === "recording";
@@ -501,6 +506,7 @@ function MainApp() {
 
   function addTerm(event: FormEvent) {
     event.preventDefault();
+    if (unreadableDictionary) return;
     const term = termDraft.trim();
     if (!term) { setTermError("言葉を入力してください"); return; }
     if (terms.includes(term)) { setTermError("この言葉は登録済みです"); return; }
@@ -512,7 +518,7 @@ function MainApp() {
   }
 
   const localModel = local?.models[0];
-  const existingDictionaryError = dictionaryError(terms);
+  const existingDictionaryError = unreadableDictionary ? "保存された辞書を読み取れません。元の保存データは保持しています" : dictionaryError(terms);
   const busy = starting || processing;
   const localReady = Boolean(local?.running && localModel?.installed);
   const isMac = navigator.userAgent.includes("Mac");
@@ -599,9 +605,10 @@ function MainApp() {
 
       {view === "dictionary" && <section className="simple-view" aria-labelledby="dictionary-title">
         <div className="view-heading"><span>PERSONAL DICTIONARY</span><h1 id="dictionary-title">辞書</h1></div>
-        <form className="term-form" onSubmit={addTerm}><input value={termDraft} onChange={(event) => { setTermDraft(event.target.value); setTermError(""); }} placeholder="言葉を追加" aria-label="辞書に追加する言葉" aria-describedby="dictionary-limits" aria-invalid={Boolean(termError)} /><button type="submit"><Plus size={16} strokeWidth={2} /> 追加</button></form>
+        <form className="term-form" onSubmit={addTerm}><input value={termDraft} disabled={unreadableDictionary} onChange={(event) => { setTermDraft(event.target.value); setTermError(""); }} placeholder="言葉を追加" aria-label="辞書に追加する言葉" aria-describedby="dictionary-limits" aria-invalid={Boolean(termError)} /><button type="submit" disabled={unreadableDictionary}><Plus size={16} strokeWidth={2} /> 追加</button></form>
         <p className="dictionary-limits" id="dictionary-limits">{terms.length} / {MAX_DICTIONARY_TERMS}件 · 1件{MAX_TERM_CODEPOINTS}文字まで</p>
         {(termError || existingDictionaryError) && <p className="dictionary-error" role="alert">{termError || existingDictionaryError}</p>}
+        {unreadableDictionary && <button className="outline-action" type="button" onClick={() => { setTerms([]); setUnreadableDictionary(false); }}>読めない辞書を削除</button>}
         {terms.length ? <ul className="term-list">{terms.map((term, index) => {
           const label = typeof term === "string" ? term : JSON.stringify(term);
           return <li key={index}><span>{label || "空の言葉"}</span><button type="button" onClick={() => { setTerms((current) => current.filter((_, itemIndex) => itemIndex !== index)); setTermError(""); }} aria-label={`${label || "無効な項目"}を削除`}><X size={14} strokeWidth={2} /></button></li>;
