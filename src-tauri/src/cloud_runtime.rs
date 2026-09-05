@@ -517,6 +517,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn codex_fixture() {
+        let Ok(mode) = std::env::var("DOON_VOICE_TEST_CODEX_FIXTURE") else { return };
+        let emit = |value: Value| {
+            println!("{value}");
+            std::io::stdout().flush().unwrap();
+        };
+        for line in std::io::stdin().lock().lines() {
+            let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
+            if value["method"] == "thread/start" {
+                emit(json!({"id": value["id"], "result": {"thread": {"id": "thread-test"}}}));
+            } else if value["method"] == "turn/start" {
+                emit(json!({"id": value["id"], "result": {"turn": {"id": "turn-test"}}}));
+                for (id, phase, text) in [("one", "commentary", "整えます。"), ("two", "final_answer", "明日は会議です。")] {
+                    emit(json!({"method": "item/agentMessage/delta", "params": {"threadId": "thread-test", "turnId": "turn-test", "itemId": id, "delta": text}}));
+                    emit(json!({"method": "item/completed", "params": {"threadId": "thread-test", "turnId": "turn-test", "item": {"id": id, "type": "agentMessage", "phase": phase, "text": text}}}));
+                }
+                emit(json!({"method": "turn/completed", "params": {"threadId": "another-thread", "turn": {"id": "another-turn", "status": "completed", "items": []}}}));
+                emit(json!({"method": "turn/completed", "params": {"threadId": "thread-test", "turn": {"id": "turn-test", "status": mode, "items": [], "error": if mode == "failed" {json!({"message": "fixture failed"})} else {Value::Null}}}}));
+            }
+        }
+    }
+
+    #[test]
+    fn codex_uses_only_final_answer_and_rejects_failed_turns() {
+        for mode in ["completed", "failed", "interrupted"] {
+            let fixture = format!("{}::codex_fixture", module_path!().split_once("::").unwrap().1);
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command.args(["--exact", &fixture, "--nocapture"]).env("DOON_VOICE_TEST_CODEX_FIXTURE", mode);
+            let mut client = CodexClient { process: JsonLineProcess::spawn(command).unwrap(), next_id: 1, cwd: std::env::temp_dir().to_string_lossy().into_owned(), model: "fixture".into() };
+            let result = client.rewrite("人工的なテスト文", Duration::from_secs(5));
+            if mode == "completed" { assert_eq!(result.unwrap(), "明日は会議です。"); }
+            else { assert!(result.is_err(), "{mode}: {result:?}"); }
+        }
+    }
+
+    #[test]
     fn failed_or_interrupted_codex_turn_is_not_success() {
         for status in ["failed", "interrupted", "inProgress"] {
             assert!(!codex_turn_completed(&json!({
