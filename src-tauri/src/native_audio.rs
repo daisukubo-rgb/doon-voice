@@ -209,3 +209,27 @@ pub fn encode_pcm_wav(samples: &[f32], sample_rate: u32) -> Vec<u8> {
     }
     wav
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn review_rcs008_disconnect_preserves_captured_audio() {
+        let result = finish_recording(
+            Arc::new(Mutex::new(vec![0.25, -0.25, 0.0])),
+            Arc::new(Mutex::new(Some("録音中にマイクが停止しました".into()))),
+            48_000,
+        );
+        assert!(result.is_ok(), "取得済みの音声を機器エラーで破棄しない");
+    }
+
+    #[test]
+    fn review_rcs014_pcm_limit_includes_wav_header() {
+        let maximum_wav_bytes = 240 * 1024 * 1024;
+        assert!(
+            44 + MAX_PCM_SAMPLES * 2 <= maximum_wav_bytes,
+            "録音上限にWAVヘッダー44バイトを含める"
+        );
+    }
+}
