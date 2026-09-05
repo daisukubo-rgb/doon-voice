@@ -1,0 +1,236 @@
+import assert from "node:assert/strict";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { createServer } from "vite";
+
+// All OS commands and clipboard writes are replaced before the real App loads.
+// PLAYWRIGHT_MODULE can point at an existing local Playwright installation.
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || "playwright");
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const artifacts = process.env.UI_ARTIFACTS || path.join(root, "output/playwright");
+const server = await createServer({ root, server: { host: "127.0.0.1", port: 0, strictPort: false } });
+await server.listen();
+const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
+const browser = await chromium.launch({ headless: true });
+let failures = 0;
+
+function mockDesktop({ dictionary = [], snapshot = {}, authenticated = {} } = {}) {
+  localStorage.clear();
+  localStorage.setItem("doon-voice-dictionary", JSON.stringify(dictionary));
+  localStorage.setItem("doon-voice-provider-connections", JSON.stringify({ codex: false, claude: false, gemini: false }));
+  const callbacks = new Map();
+  const listeners = new Map();
+  let nextId = 1;
+  const idle = { state: "idle", transcript: "", output: "", message: "", clipboard_saved: false, recovery_pending: false };
+  window.fixture = {
+    calls: [], errors: [], authenticated, clipboard: "", clipboardFails: false,
+    registeredShortcut: null, snapshot: { ...idle, ...snapshot },
+    publish(patch) {
+      this.snapshot = { ...this.snapshot, ...patch };
+      this.emit("background-voice-state", this.snapshot);
+    },
+    emit(event, payload) {
+      for (const listener of listeners.values()) {
+        if (listener.event === event) callbacks.get(listener.handler)?.({ payload });
+      }
+    },
+  };
+  window.addEventListener("unhandledrejection", (event) => window.fixture.errors.push(String(event.reason)));
+  // Preserve the real 60-attempt login path while reducing only the sleep.
+  const timeout = window.setTimeout.bind(window);
+  window.setTimeout = (callback, ms, ...args) => timeout(callback, ms === 1500 ? 1 : ms, ...args);
+  Object.defineProperty(navigator, "clipboard", { value: { async writeText(value) {
+    if (window.fixture.clipboardFails) throw new Error("clipboard unavailable");
+    window.fixture.clipboard = value;
+  } } });
+  window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} };
+  window.__TAURI_INTERNALS__ = {
+    transformCallback(callback) { const id = nextId++; callbacks.set(id, callback); return id; },
+    async invoke(command, args) {
+      const f = window.fixture;
+      f.calls.push({ command, args });
+      switch (command) {
+        case "provider_status": return { provider: args.provider, installed: true, authenticated: Boolean(f.authenticated[args.provider]), usability: "unknown" };
+        case "local_llm_status": return { installed: false, running: false, models: [] };
+        case "transcription_status": return { downloaded: true, name: "音声認識", size: "574 MB" };
+        case "direct_input_status": return true;
+        case "background_voice_status": return f.snapshot;
+        case "configure_background_voice": return;
+        case "set_voice_shortcut": f.registeredShortcut = args.shortcut; return;
+        case "clear_voice_shortcut": f.registeredShortcut = null; return;
+        case "start_official_login": return;
+        case "toggle_background_voice": f.publish({ state: "starting" }); return;
+        case "cancel_voice_processing": f.publish({ state: "idle", message: "処理を取り消しました" }); return;
+        case "retry_voice_processing": f.publish({ state: "processing" }); return;
+        case "ack_voice_result": f.publish({ clipboard_saved: true, recovery_pending: false }); return;
+        case "clear_voice_result": f.publish(idle); return;
+        case "plugin:event|listen": { const id = nextId++; listeners.set(id, args); return id; }
+        case "plugin:event|unlisten": listeners.delete(args.eventId); return;
+        default: throw new Error(`Unexpected desktop command: ${command}`);
+      }
+    },
+  };
+}
+
+async function pageFor(options = {}, query = "") {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  page.setDefaultTimeout(2500);
+  await page.addInitScript(mockDesktop, options);
+  await page.goto(origin + "/" + query);
+  await page.locator("main").waitFor();
+  return page;
+}
+
+async function check(name, body) {
+  try { await body(); console.log(`PASS ${name}`); }
+  catch (error) { failures += 1; console.error(`FAIL ${name}: ${error.message.split("\n")[0]}`); }
+}
+
+const recovery = { transcript: "明日は行きません。", output: "", recovery_pending: true, message: "文章整形に失敗しました" };
+
+try {
+  await check("RCS-006: error overlay never claims a successful clipboard write", async () => {
+    const page = await pageFor({}, "?overlay=error");
+    assert.doesNotMatch(await page.locator("main").innerText(), /クリップボードに保存しました/);
+    await page.close();
+  });
+
+  await check("RCS-006: unsaved output has no saved claim", async () => {
+    const page = await pageFor({ snapshot: { ...recovery, output: "確認用の結果", clipboard_saved: false } });
+    await page.getByText("確認用の結果", { exact: true }).waitFor();
+    assert.doesNotMatch(await page.locator("main").innerText(), /クリップボードに保存済み/);
+    await page.close();
+  });
+
+  await check("RCS-006: failed copy preserves original; successful copy acknowledges recovery", async () => {
+    const page = await pageFor({ snapshot: recovery });
+    await page.evaluate(() => { window.fixture.clipboardFails = true; });
+    await page.getByRole("button", { name: "原文をコピー", exact: true }).click();
+    assert.equal(await page.evaluate(() => window.fixture.snapshot.recovery_pending), true);
+    assert.equal(await page.evaluate(() => window.fixture.calls.some(({ command }) => command === "ack_voice_result" || command === "clear_voice_result")), false);
+    await page.evaluate(() => { window.fixture.clipboardFails = false; });
+    await page.getByRole("button", { name: "原文をコピー", exact: true }).click();
+    await page.waitForFunction(() => !window.fixture.snapshot.recovery_pending);
+    assert.equal(await page.evaluate(() => window.fixture.clipboard), recovery.transcript);
+    assert.equal(await page.getByText(recovery.transcript, { exact: true }).count(), 1);
+    await page.close();
+  });
+
+  await check("recovery blocks recording and supports retry / discard", async () => {
+    const page = await pageFor({ snapshot: recovery });
+    assert.equal(await page.getByRole("button", { name: "音声入力を開始" }).isDisabled(), true);
+    await page.getByRole("button", { name: "再試行", exact: true }).click();
+    await page.waitForFunction(() => window.fixture.calls.some(({ command }) => command === "retry_voice_processing"));
+    await page.evaluate(() => window.fixture.publish({ state: "idle" }));
+    await page.getByRole("button", { name: "破棄", exact: true }).click();
+    await page.waitForFunction(() => window.fixture.snapshot.transcript === "");
+    assert.equal(await page.getByRole("button", { name: "音声入力を開始" }).isEnabled(), true);
+    await page.close();
+  });
+
+  for (const destination of ["辞書", "ホーム", "blur", "Escape"]) {
+    await check(`RCS-009: shortcut capture cancels on ${destination}`, async () => {
+      const page = await pageFor();
+      await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+      await page.getByRole("button", { name: "開始・停止キーを変更" }).click();
+      await page.waitForFunction(() => window.fixture.registeredShortcut === null);
+      if (destination === "blur") await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+      else if (destination === "Escape") await page.keyboard.press("Escape");
+      else await page.getByRole("button", { name: destination, exact: true }).click();
+      await page.waitForFunction(() => window.fixture.registeredShortcut !== null);
+      if (destination === "辞書") {
+        await page.getByRole("textbox", { name: "辞書に追加する言葉" }).pressSequentially("abc");
+        assert.equal(await page.getByRole("textbox", { name: "辞書に追加する言葉" }).inputValue(), "abc");
+      }
+      assert.equal(await page.evaluate(() => window.fixture.registeredShortcut), "Ctrl+Alt+Space");
+      await page.close();
+    });
+  }
+
+  for (const resume of ["refresh", "focus"]) {
+    await check(`RCS-010: late login completes on ${resume}, only for the requested provider`, async () => {
+      const page = await pageFor();
+      await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+      const claude = page.locator("article").filter({ has: page.getByRole("heading", { name: "Claude", exact: true }) });
+      await claude.getByRole("button", { name: "ログインする" }).click();
+      await page.getByRole("status").filter({ hasText: "ログインを確認できませんでした" }).waitFor();
+      await page.evaluate(() => { window.fixture.authenticated = { codex: true, claude: true, gemini: true }; });
+      if (resume === "focus") await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+      else await page.getByRole("button", { name: "状態を更新" }).click();
+      await claude.getByRole("button", { name: "再ログイン" }).waitFor();
+      assert.doesNotMatch(await page.locator("main").innerText(), /ログインを確認できませんでした/);
+      assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem("doon-voice-provider-connections"))), { codex: false, claude: true, gemini: false });
+      await page.close();
+    });
+  }
+
+  await check("RCS-013: dictionary accepts 100 and rejects 101 with visible reason", async () => {
+    const page = await pageFor({ dictionary: Array.from({ length: 99 }, (_, i) => `語${i}`) });
+    await page.getByRole("button", { name: "辞書", exact: true }).click();
+    const input = page.getByRole("textbox", { name: "辞書に追加する言葉" });
+    await input.fill("100件目"); await input.press("Enter");
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem("doon-voice-dictionary")).length === 100);
+    await input.fill("101件目"); await input.press("Enter");
+    await page.getByRole("alert").filter({ hasText: "100" }).waitFor();
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("doon-voice-dictionary")).length), 100);
+    await page.close();
+  });
+
+  await check("RCS-013: 80 Unicode codepoints accepted, 81 rejected", async () => {
+    const page = await pageFor();
+    await page.getByRole("button", { name: "辞書", exact: true }).click();
+    const input = page.getByRole("textbox", { name: "辞書に追加する言葉" });
+    await input.fill("😀".repeat(80)); await input.press("Enter");
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem("doon-voice-dictionary")).length === 1);
+    await input.fill("言".repeat(81)); await input.press("Enter");
+    await page.getByRole("alert").filter({ hasText: "80" }).waitFor();
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("doon-voice-dictionary")).length), 1);
+    await page.close();
+  });
+
+  await check("RCS-013: existing oversized entries remain visible and explicitly invalid", async () => {
+    const page = await pageFor({ dictionary: ["長".repeat(81)] });
+    await page.getByRole("button", { name: "辞書", exact: true }).click();
+    await page.getByRole("alert").filter({ hasText: "80" }).waitFor();
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("doon-voice-dictionary"))[0].length), 81);
+    await page.close();
+  });
+
+  await check("AI-free raw mode is selectable and persisted", async () => {
+    const page = await pageFor();
+    await page.getByRole("button", { name: /AIなし/ }).click();
+    await page.waitForFunction(() => localStorage.getItem("doon-voice-output-target") === "raw");
+    await page.waitForFunction(() => window.fixture.calls.some(({ command, args }) => command === "configure_background_voice" && args.target === "raw"));
+    await page.close();
+  });
+
+  for (const state of ["starting", "processing"]) {
+    await check(`${state}: accurate state and cancellation`, async () => {
+      const page = await pageFor({ snapshot: { state } });
+      if (state === "starting") await page.getByText("マイクを準備しています", { exact: true }).first().waitFor();
+      await page.getByRole("button", { name: "処理を取り消す" }).click();
+      await page.waitForFunction(() => window.fixture.snapshot.state === "idle");
+      await page.close();
+    });
+  }
+
+  if (process.env.UI_SCREENSHOTS) {
+    await mkdir(artifacts, { recursive: true });
+    const page = await pageFor({ snapshot: { ...recovery, output: "確認用の文章です。" } });
+    for (const [label, width, height] of [["pc", 1440, 900], ["mobile", 390, 844]]) {
+      await page.setViewportSize({ width, height });
+      for (const [view, name] of [["home", "ホーム"], ["settings", "接続と設定"], ["dictionary", "辞書"]]) {
+        await page.getByRole("button", { name, exact: true }).click();
+        await page.screenshot({ path: path.join(artifacts, `${label}-${view}.png`), fullPage: true });
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${label}-${view}: horizontal overflow`);
+      }
+    }
+    await page.close();
+  }
+} finally {
+  await browser.close();
+  await server.close();
+}
+if (failures) process.exitCode = 1;
+console.log(`UI regression failures: ${failures}`);
