@@ -47,6 +47,7 @@ fn dictionary_rejects_overflow_without_silently_dropping_terms() {
 #[test]
 fn recovery_requires_acknowledgment_before_new_recording() {
     let mut runtime = BackgroundVoiceRuntime::new(VoiceRuntimeConfig::default());
+    runtime.configuration_ready = true;
     runtime.transcript = "残す原文".into();
     runtime.recovery_pending = true;
     assert!(runtime.ensure_can_record().is_err());
@@ -93,6 +94,10 @@ fn whisper_failure_retains_partial_text_but_never_looks_successful() {
 #[test]
 fn unconfirmed_settings_block_shortcut_recording_and_retry() {
     let mut runtime = BackgroundVoiceRuntime::new(VoiceRuntimeConfig::default());
+    assert!(
+        !runtime.configuration_ready,
+        "startup must wait for validated UI settings"
+    );
     runtime.configuration_ready = false;
     assert!(runtime.ensure_can_record().is_err());
     runtime.configuration_ready = true;
@@ -110,4 +115,15 @@ fn partial_recordings_require_manual_review_even_after_retry() {
     assert!(runtime.ensure_auto_delivery().is_err());
     runtime.delivery_warning = None;
     assert!(runtime.ensure_auto_delivery().is_ok());
+}
+
+#[test]
+fn failed_engine_shutdown_preserves_partial_text_and_blocks_more_recording() {
+    let result = failed_whisper_shutdown("残っている原文", "停止失敗").unwrap();
+    assert_eq!(result.text, "残っている原文");
+    assert!(result.restart_required);
+    let mut runtime = BackgroundVoiceRuntime::new(VoiceRuntimeConfig::default());
+    runtime.configuration_ready = true;
+    runtime.engine_restart_required = result.restart_required;
+    assert!(runtime.ensure_can_record().is_err());
 }
