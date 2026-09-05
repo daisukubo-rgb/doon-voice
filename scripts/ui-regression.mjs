@@ -14,10 +14,11 @@ await server.listen();
 const origin = `http://127.0.0.1:${server.httpServer.address().port}`;
 const browser = await chromium.launch({ headless: true });
 let failures = 0;
+const browserErrors = [];
 
-function mockDesktop({ dictionary = [], snapshot = {}, authenticated = {} } = {}) {
+function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authenticated = {} } = {}) {
   localStorage.clear();
-  localStorage.setItem("doon-voice-dictionary", JSON.stringify(dictionary));
+  localStorage.setItem("doon-voice-dictionary", dictionaryRaw ?? JSON.stringify(dictionary));
   localStorage.setItem("doon-voice-provider-connections", JSON.stringify({ codex: false, claude: false, gemini: false }));
   const callbacks = new Map();
   const listeners = new Map();
@@ -75,6 +76,7 @@ function mockDesktop({ dictionary = [], snapshot = {}, authenticated = {} } = {}
 
 async function pageFor(options = {}, query = "") {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  page.on("pageerror", (error) => browserErrors.push(error.message));
   page.setDefaultTimeout(2500);
   await page.addInitScript(mockDesktop, options);
   await page.goto(origin + "/" + query);
@@ -83,8 +85,10 @@ async function pageFor(options = {}, query = "") {
 }
 
 async function check(name, body) {
-  try { await body(); console.log(`PASS ${name}`); }
+  const errorsBefore = browserErrors.length;
+  try { await body(); assert.equal(browserErrors.length, errorsBefore, browserErrors.slice(errorsBefore).join("\n")); console.log(`PASS ${name}`); }
   catch (error) { failures += 1; console.error(`FAIL ${name}: ${error.message.split("\n")[0]}`); }
+  finally { await Promise.all(browser.contexts().map((context) => context.close())); }
 }
 
 const recovery = { transcript: "明日は行きません。", output: "", recovery_pending: true, message: "文章整形に失敗しました" };
@@ -122,6 +126,10 @@ try {
     assert.equal(await page.getByRole("button", { name: "音声入力を開始" }).isDisabled(), true);
     await page.getByRole("button", { name: "再試行", exact: true }).click();
     await page.waitForFunction(() => window.fixture.calls.some(({ command }) => command === "retry_voice_processing"));
+    assert.equal(await page.evaluate(() => {
+      const index = window.fixture.calls.findIndex(({ command }) => command === "retry_voice_processing");
+      return window.fixture.calls[index - 1]?.command;
+    }), "configure_background_voice");
     await page.evaluate(() => window.fixture.publish({ state: "idle" }));
     await page.getByRole("button", { name: "破棄", exact: true }).click();
     await page.waitForFunction(() => window.fixture.snapshot.transcript === "");
@@ -196,6 +204,41 @@ try {
     assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("doon-voice-dictionary"))[0].length), 81);
     await page.close();
   });
+
+  await check("RCS-013: existing 101 entries are preserved until explicit removal", async () => {
+    const page = await pageFor({ dictionary: Array.from({ length: 101 }, (_, i) => `保存語${i}`) });
+    await page.getByRole("button", { name: "辞書", exact: true }).click();
+    await page.getByRole("alert").filter({ hasText: "100" }).waitFor();
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("doon-voice-dictionary")).length), 101);
+    assert.equal(await page.evaluate(() => window.fixture.calls.some(({ command }) => command === "configure_background_voice")), false);
+    await page.getByRole("button", { name: "保存語100を削除", exact: true }).click();
+    await page.waitForFunction(() => window.fixture.calls.some(({ command, args }) => command === "configure_background_voice" && args.dictionary.length === 100));
+    assert.equal(await page.getByRole("alert").count(), 0);
+    await page.close();
+  });
+
+  await check("RCS-013: malformed legacy item can be removed without crashing", async () => {
+    const page = await pageFor({ dictionary: [null, { broken: "data" }] });
+    await page.getByRole("button", { name: "辞書", exact: true }).click();
+    await page.getByRole("alert").filter({ hasText: "無効" }).waitFor();
+    await page.getByRole("button", { name: "nullを削除", exact: true }).click();
+    assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("doon-voice-dictionary")).length), 1);
+    await page.close();
+  });
+
+  for (const dictionaryRaw of ['["保存途中の辞書"', '{"unexpected":"dictionary"}']) {
+    await check("RCS-013: unreadable saved dictionary is preserved until explicit reset", async () => {
+      const page = await pageFor({ dictionaryRaw });
+      await page.getByRole("button", { name: "辞書", exact: true }).click();
+      await page.getByRole("alert").filter({ hasText: "読み取れません" }).waitFor();
+      assert.equal(await page.evaluate(() => localStorage.getItem("doon-voice-dictionary")), dictionaryRaw);
+      assert.equal(await page.evaluate(() => window.fixture.calls.some(({ command }) => command === "configure_background_voice")), false);
+      await page.getByRole("button", { name: "読めない辞書を削除", exact: true }).click();
+      await page.waitForFunction(() => localStorage.getItem("doon-voice-dictionary") === "[]");
+      assert.equal(await page.getByRole("alert").count(), 0);
+      await page.close();
+    });
+  }
 
   await check("AI-free raw mode is selectable and persisted", async () => {
     const page = await pageFor();
