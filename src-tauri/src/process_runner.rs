@@ -31,9 +31,9 @@ pub fn run_bounded(
         .spawn()
         .map_err(|error| format!("外部コマンドを開始できませんでした: {error}"))?;
     let result = capture_child(&mut child, started, timeout, cancelled);
-    if result.is_err() {
+    if let Err(error) = &result {
         if let Err(cleanup_error) = terminate_and_reap(child) {
-            return Err(format!("{} {cleanup_error}", result.unwrap_err()));
+            return Err(format!("{error} {cleanup_error}"));
         }
     }
     result
