@@ -27,14 +27,20 @@ fn normal_business_dictation_is_not_discarded_for_repetition() {
 
 #[test]
 fn punctuation_only_edits_are_still_accepted() {
-    assert_eq!(preserve_transcription_meaning("明日は会議です", "明日は会議です。"), "明日は会議です。");
+    assert_eq!(
+        preserve_transcription_meaning("明日は会議です", "明日は会議です。"),
+        "明日は会議です。"
+    );
 }
 
 #[test]
 fn dictionary_rejects_overflow_without_silently_dropping_terms() {
     assert!(validate_dictionary(vec!["a".repeat(81)]).is_err());
     assert!(validate_dictionary(vec!["a".into(); 101]).is_err());
-    assert_eq!(validate_dictionary(vec![" DOON ".into()]).unwrap(), vec!["DOON"]);
+    assert_eq!(
+        validate_dictionary(vec![" DOON ".into()]).unwrap(),
+        vec!["DOON"]
+    );
     assert!(validate_dictionary(vec!["𠮷".repeat(80)]).is_ok());
 }
 
@@ -62,7 +68,11 @@ fn stale_or_busy_result_actions_cannot_acknowledge_a_new_result() {
     runtime.generation = 2;
     runtime.recovery_pending = true;
     assert!(validate_result_action(&runtime, 1).is_err());
-    for phase in [BackgroundVoicePhase::Starting, BackgroundVoicePhase::Recording, BackgroundVoicePhase::Processing] {
+    for phase in [
+        BackgroundVoicePhase::Starting,
+        BackgroundVoicePhase::Recording,
+        BackgroundVoicePhase::Processing,
+    ] {
         runtime.phase = phase;
         assert!(validate_result_action(&runtime, 2).is_err());
     }
@@ -73,7 +83,8 @@ fn stale_or_busy_result_actions_cannot_acknowledge_a_new_result() {
 
 #[test]
 fn whisper_failure_retains_partial_text_but_never_looks_successful() {
-    let result = finish_whisper_text("明日の会議は10時です", Some("処理が中断されました".into())).unwrap();
+    let result =
+        finish_whisper_text("明日の会議は10時です", Some("処理が中断されました".into())).unwrap();
     assert_eq!(result.text, "明日の会議は10時です");
     assert!(result.warning.is_some());
     assert!(finish_whisper_text("", Some("処理が中断されました".into())).is_err());
@@ -86,4 +97,17 @@ fn unconfirmed_settings_block_shortcut_recording_and_retry() {
     assert!(runtime.ensure_can_record().is_err());
     runtime.configuration_ready = true;
     assert!(runtime.ensure_can_record().is_ok());
+}
+
+#[test]
+fn partial_recordings_require_manual_review_even_after_retry() {
+    let mut runtime = BackgroundVoiceRuntime::new(VoiceRuntimeConfig::default());
+    runtime.delivery_warning = Some("マイクが切断されました".into());
+    runtime.transcript = "途中までの原文".into();
+    runtime.output = "途中までの原文。".into();
+    assert!(runtime.ensure_auto_delivery().is_err());
+    runtime.generation += 1;
+    assert!(runtime.ensure_auto_delivery().is_err());
+    runtime.delivery_warning = None;
+    assert!(runtime.ensure_auto_delivery().is_ok());
 }
