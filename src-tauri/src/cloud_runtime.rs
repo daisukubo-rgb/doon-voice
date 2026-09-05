@@ -6,7 +6,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc, Mutex,
+        mpsc, Arc, Mutex, MutexGuard, TryLockError,
     },
     thread,
     time::{Duration, Instant},
@@ -46,34 +46,50 @@ impl CloudRuntime {
         }
     }
 
-    pub(crate) fn warm(&self, spec: CloudSpec) -> Result<(), String> {
-        let mut slot = self
-            .slot(spec.kind)
-            .lock()
-            .map_err(|_| "クラウドAIの常駐接続を準備できませんでした。".to_string())?;
+    pub(crate) fn warm(&self, mut spec: CloudSpec) -> Result<(), String> {
+        let deadline = Instant::now() + spec.timeout;
+        let mut slot = self.acquire_slot(&spec, deadline)?;
+        spec.timeout = remaining_cloud_time(deadline)?;
         ensure_client(&mut slot, &spec).map(|_| ())
     }
 
-    pub(crate) fn rewrite(&self, spec: CloudSpec, prompt: &str) -> Result<String, String> {
-        if spec.cancelled.load(Ordering::Acquire) {
-            return Err("文章整形を中止しました。原文はDOON Voiceで確認できます。".into());
-        }
-        let mut slot = self
-            .slot(spec.kind)
-            .lock()
-            .map_err(|_| "クラウドAIの常駐接続を利用できませんでした。".to_string())?;
-        if spec.cancelled.load(Ordering::Acquire) {
-            return Err("文章整形を中止しました。原文はDOON Voiceで確認できます。".into());
-        }
-        let client = ensure_client(&mut slot, &spec)?;
-        client.set_cancellation(Arc::clone(&spec.cancelled));
-        let result = client.rewrite(prompt, spec.timeout);
+    pub(crate) fn rewrite(&self, mut spec: CloudSpec, prompt: &str) -> Result<String, String> {
+        let deadline = Instant::now() + spec.timeout;
+        let mut slot = self.acquire_slot(&spec, deadline)?;
+        let result = (|| {
+            spec.timeout = remaining_cloud_time(deadline)?;
+            let client = ensure_client(&mut slot, &spec)?;
+            client.set_cancellation(Arc::clone(&spec.cancelled));
+            client.rewrite(prompt, remaining_cloud_time(deadline)?)
+        })();
         // A stream-json process is one conversation. Only Codex supports a
         // fresh ephemeral thread while keeping the same process alive.
         if result.is_err() || !matches!(spec.kind, CloudKind::Codex) {
             *slot = None;
         }
         result
+    }
+
+    fn acquire_slot<'a>(
+        &'a self,
+        spec: &CloudSpec,
+        deadline: Instant,
+    ) -> Result<MutexGuard<'a, Option<CloudClient>>, String> {
+        loop {
+            if spec.cancelled.load(Ordering::Acquire) {
+                return Err("文章整形を中止しました。原文はDOON Voiceで確認できます。".into());
+            }
+            let remaining = remaining_cloud_time(deadline)?;
+            match self.slot(spec.kind).try_lock() {
+                Ok(slot) => return Ok(slot),
+                Err(TryLockError::WouldBlock) => {
+                    thread::sleep(remaining.min(Duration::from_millis(20)));
+                }
+                Err(TryLockError::Poisoned(_)) => {
+                    return Err("クラウドAIの接続状態を確認できませんでした。".into());
+                }
+            }
+        }
     }
 
     fn slot(&self, kind: CloudKind) -> &Mutex<Option<CloudClient>> {
@@ -90,6 +106,15 @@ impl CloudRuntime {
             .lock()
             .ok()
             .and_then(|slot| slot.as_ref().map(CloudClient::process_id))
+    }
+}
+
+fn remaining_cloud_time(deadline: Instant) -> Result<Duration, String> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        Err("CLIの応答が時間切れになりました。".into())
+    } else {
+        Ok(remaining)
     }
 }
 
@@ -980,7 +1005,8 @@ mod tests {
                 spec.timeout = Duration::from_millis(50);
                 done_sender.send(runtime_ref.warm(spec)).unwrap();
             });
-            let timed_out = done.recv_timeout(Duration::from_millis(250))
+            let timed_out = done
+                .recv_timeout(Duration::from_millis(250))
                 .is_ok_and(|result| result.is_err_and(|error| error.contains("時間")));
             drop(guard);
             assert!(timed_out, "常駐接続の待ち合わせにも実行期限を適用する");
