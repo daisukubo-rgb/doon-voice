@@ -517,6 +517,16 @@ mod tests {
     use super::*;
 
     #[test]
+    fn failed_or_interrupted_codex_turn_is_not_success() {
+        for status in ["failed", "interrupted", "inProgress"] {
+            assert!(!codex_turn_completed(&json!({
+                "method": "turn/completed",
+                "params": {"threadId": "t", "turn": {"id": "u", "status": status}}
+            })), "status={status}");
+        }
+    }
+
+    #[test]
     fn codexは一時スレッドで文章整形だけを要求する() {
         let request = codex_thread_start_request(7, "/tmp/doon-voice", "gpt-5.6-luna");
         assert_eq!(request["method"], "thread/start");

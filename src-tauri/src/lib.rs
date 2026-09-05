@@ -1,6 +1,12 @@
 mod cloud_runtime;
 mod native_audio;
 
+#[cfg(test)]
+mod audio_file;
+
+#[cfg(test)]
+mod review_regressions;
+
 #[cfg(target_os = "macos")]
 use core_foundation::{
     base::TCFType, boolean::CFBoolean, dictionary::CFDictionary, string::CFString,
