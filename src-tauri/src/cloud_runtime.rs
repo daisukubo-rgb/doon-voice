@@ -3,8 +3,8 @@ use std::{
     ffi::OsString,
     io::{BufRead, BufReader, Read, Write},
     path::PathBuf,
-    process::{Child, ChildStdin, Command, Stdio},
-    sync::{mpsc, Arc, Mutex},
+    process::{Child, Command, Stdio},
+    sync::{atomic::{AtomicBool, Ordering}, mpsc, Arc, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -26,6 +26,7 @@ pub(crate) struct CloudSpec {
     pub cwd: PathBuf,
     pub model: String,
     pub timeout: Duration,
+    pub cancelled: Arc<AtomicBool>,
 }
 
 #[derive(Default)]
@@ -55,8 +56,12 @@ impl CloudRuntime {
             .slot(spec.kind)
             .lock()
             .map_err(|_| "クラウドAIの常駐接続を利用できませんでした。".to_string())?;
-        let result = ensure_client(&mut slot, &spec)?.rewrite(prompt, spec.timeout);
-        if result.is_err() {
+        let client = ensure_client(&mut slot, &spec)?;
+        client.set_cancellation(Arc::clone(&spec.cancelled));
+        let result = client.rewrite(prompt, spec.timeout);
+        // A stream-json process is one conversation. Only Codex supports a
+        // fresh ephemeral thread while keeping the same process alive.
+        if result.is_err() || !matches!(spec.kind, CloudKind::Codex) {
             *slot = None;
         }
         result
@@ -101,6 +106,13 @@ enum CloudClient {
 }
 
 impl CloudClient {
+    fn set_cancellation(&mut self, cancelled: Arc<AtomicBool>) {
+        match self {
+            Self::Codex(client) => client.process.cancelled = cancelled,
+            Self::Claude(client) | Self::Gemini(client) => client.process.cancelled = cancelled,
+        }
+    }
+
     fn start(spec: &CloudSpec) -> Result<Self, String> {
         match spec.kind {
             CloudKind::Codex => CodexClient::start(spec).map(Self::Codex),
@@ -139,9 +151,10 @@ impl CloudClient {
 
 struct JsonLineProcess {
     child: Child,
-    stdin: ChildStdin,
+    stdin: mpsc::SyncSender<Vec<u8>>,
     messages: mpsc::Receiver<Value>,
     stderr: Arc<Mutex<String>>,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl JsonLineProcess {
@@ -152,7 +165,7 @@ impl JsonLineProcess {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|error| error.to_string())?;
-        let stdin = child
+        let mut stdin_writer = child
             .stdin
             .take()
             .ok_or_else(|| "CLIの入力を準備できませんでした。".to_string())?;
@@ -166,6 +179,16 @@ impl JsonLineProcess {
             .ok_or_else(|| "CLIのエラー出力を準備できませんでした。".to_string())?;
 
         let (sender, messages) = mpsc::channel();
+        let (stdin, inputs) = mpsc::sync_channel::<Vec<u8>>(8);
+        let errors = sender.clone();
+        thread::spawn(move || {
+            for input in inputs {
+                if stdin_writer.write_all(&input).and_then(|_| stdin_writer.flush()).is_err() {
+                    let _ = errors.send(json!({"error": {"message": "CLIへ文章を渡せませんでした。"}}));
+                    break;
+                }
+            }
+        });
         thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 if let Ok(message) = serde_json::from_str::<Value>(&line) {
@@ -193,29 +216,34 @@ impl JsonLineProcess {
             stdin,
             messages,
             stderr,
+            cancelled: Arc::new(AtomicBool::new(false)),
         })
     }
 
     fn send(&mut self, message: &Value) -> Result<(), String> {
-        serde_json::to_writer(&mut self.stdin, message)
+        let mut bytes = serde_json::to_vec(message)
             .map_err(|_| "CLIへ文章を渡せませんでした。".to_string())?;
+        bytes.push(b'\n');
         self.stdin
-            .write_all(b"\n")
-            .and_then(|_| self.stdin.flush())
+            .try_send(bytes)
             .map_err(|_| "CLIへ文章を渡せませんでした。".to_string())
     }
 
     fn receive(&self, deadline: Instant) -> Result<Value, String> {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err("CLIの応答が時間切れになりました。".into());
+        loop {
+            if self.cancelled.load(Ordering::Acquire) {
+                return Err("文章整形を中止しました。原文はDOON Voiceで確認できます。".into());
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err("CLIの応答が時間切れになりました。".into());
+            }
+            match self.messages.recv_timeout(remaining.min(Duration::from_millis(100))) {
+                Ok(message) => return Ok(message),
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return Err(self.failure_detail()),
+            }
         }
-        self.messages
-            .recv_timeout(remaining)
-            .map_err(|error| match error {
-                mpsc::RecvTimeoutError::Timeout => "CLIの応答が時間切れになりました。".into(),
-                mpsc::RecvTimeoutError::Disconnected => self.failure_detail(),
-            })
     }
 
     fn is_alive(&mut self) -> bool {
@@ -254,6 +282,7 @@ impl CodexClient {
             .current_dir(&spec.cwd)
             .env("PATH", &spec.path);
         let mut process = JsonLineProcess::spawn(command)?;
+        process.cancelled = Arc::clone(&spec.cancelled);
         process.send(&json!({
             "method": "initialize",
             "id": 0,
@@ -297,21 +326,60 @@ impl CodexClient {
             }
         }))?;
 
-        let mut output = String::new();
+        let mut turn_id = None;
+        let mut completed_items: Vec<Value> = Vec::new();
         loop {
             let message = self.process.receive(deadline)?;
             if let Some(error) = rpc_error(&message) {
                 return Err(error);
             }
-            if let Some(delta) = codex_delta(&message) {
-                output.push_str(delta);
-            } else if let Some(final_text) = codex_completed_message(&message) {
-                if output.is_empty() {
-                    output.push_str(final_text);
+            if message.get("id").and_then(Value::as_u64) == Some(turn_request_id) {
+                turn_id = message.pointer("/result/turn/id").and_then(Value::as_str).map(str::to_owned);
+                if turn_id.is_none() {
+                    return Err("Codexの応答IDを確認できませんでした。".into());
                 }
+                continue;
             }
-            if codex_turn_completed(&message) {
-                return nonempty(output, "Codexから文章を受け取れませんでした。");
+            if message.pointer("/params/threadId").and_then(Value::as_str) != Some(thread_id) {
+                continue;
+            }
+            match message.get("method").and_then(Value::as_str) {
+                Some("item/completed") => {
+                    // Completed item text is authoritative, not progress deltas.
+                    if completed_items.len() >= 128 {
+                        return Err("Codexからの応答が多すぎます。".into());
+                    }
+                    completed_items.push(message);
+                }
+                Some("turn/completed") => {
+                    let completed_turn = message.pointer("/params/turn/id").and_then(Value::as_str);
+                    if completed_turn.is_none() || completed_turn != turn_id.as_deref() {
+                        continue;
+                    }
+                    if !codex_turn_completed(&message) {
+                        return Err("Codexの文章整形が完了しませんでした。原文を確認してください。".into());
+                    }
+                    let items: Vec<&Value> = message.pointer("/params/turn/items")
+                        .and_then(Value::as_array)
+                        .filter(|items| !items.is_empty())
+                        .map(|items| items.iter().collect())
+                        .unwrap_or_else(|| completed_items.iter()
+                            .filter(|event| event.pointer("/params/turnId").and_then(Value::as_str) == completed_turn)
+                            .filter_map(|event| event.pointer("/params/item")).collect());
+                    let final_item = items.iter().rev().copied().find(|item|
+                        item.get("type").and_then(Value::as_str) == Some("agentMessage")
+                        && item.get("phase").and_then(Value::as_str) == Some("final_answer"));
+                    // Older models omit phase: use only the last completed
+                    // assistant item, never concatenate unrelated messages.
+                    let legacy_item = items.iter().rev().copied().find(|item|
+                        item.get("type").and_then(Value::as_str) == Some("agentMessage")
+                        && item.get("phase").is_none_or(Value::is_null));
+                    let output = final_item.or(legacy_item)
+                        .and_then(|item| item.get("text")).and_then(Value::as_str)
+                        .unwrap_or_default();
+                    return nonempty(output.to_string(), "Codexから文章を受け取れませんでした。");
+                }
+                _ => {}
             }
         }
     }
@@ -446,26 +514,10 @@ pub(crate) fn codex_thread_start_request(id: u64, cwd: &str, model: &str) -> Val
     })
 }
 
-pub(crate) fn codex_delta(message: &Value) -> Option<&str> {
-    (message.get("method").and_then(Value::as_str) == Some("item/agentMessage/delta"))
-        .then(|| message.pointer("/params/delta").and_then(Value::as_str))
-        .flatten()
-}
-
-fn codex_completed_message(message: &Value) -> Option<&str> {
-    (message.get("method").and_then(Value::as_str) == Some("item/completed"))
-        .then(|| {
-            message
-                .pointer("/params/item")
-                .filter(|item| item.get("type").and_then(Value::as_str) == Some("agentMessage"))
-                .and_then(|item| item.get("text"))
-                .and_then(Value::as_str)
-        })
-        .flatten()
-}
-
 pub(crate) fn codex_turn_completed(message: &Value) -> bool {
     message.get("method").and_then(Value::as_str) == Some("turn/completed")
+        && message.pointer("/params/turn/status").and_then(Value::as_str) == Some("completed")
+        && message.pointer("/params/turn/error").is_none_or(Value::is_null)
 }
 
 pub(crate) fn claude_input(prompt: &str) -> Value {
@@ -528,13 +580,28 @@ mod tests {
             if value["method"] == "thread/start" {
                 emit(json!({"id": value["id"], "result": {"thread": {"id": "thread-test"}}}));
             } else if value["method"] == "turn/start" {
-                emit(json!({"id": value["id"], "result": {"turn": {"id": "turn-test"}}}));
+                if mode != "completion-before-ack" {
+                    emit(json!({"id": value["id"], "result": {"turn": {"id": "turn-test"}}}));
+                }
+                if mode == "unrelated-rpc-error" {
+                    emit(json!({"id": 9999, "error": {"message": "unrelated request failed"}}));
+                }
+                if mode == "large-stderr" {
+                    std::io::stderr().write_all(&vec![b'x'; 512 * 1024]).unwrap();
+                }
                 for (id, phase, text) in [("one", "commentary", "整えます。"), ("two", "final_answer", "明日は会議です。")] {
                     emit(json!({"method": "item/agentMessage/delta", "params": {"threadId": "thread-test", "turnId": "turn-test", "itemId": id, "delta": text}}));
                     emit(json!({"method": "item/completed", "params": {"threadId": "thread-test", "turnId": "turn-test", "item": {"id": id, "type": "agentMessage", "phase": phase, "text": text}}}));
                 }
                 emit(json!({"method": "turn/completed", "params": {"threadId": "another-thread", "turn": {"id": "another-turn", "status": "completed", "items": []}}}));
-                emit(json!({"method": "turn/completed", "params": {"threadId": "thread-test", "turn": {"id": "turn-test", "status": mode, "items": [], "error": if mode == "failed" {json!({"message": "fixture failed"})} else {Value::Null}}}}));
+                emit(json!({"method": "item/completed", "params": {"threadId": "thread-test", "turnId": "another-turn", "item": {"type": "agentMessage", "phase": "final_answer", "text": "別の発話。"}}}));
+                emit(json!({"method": "turn/completed", "params": {"threadId": "thread-test", "turn": {"id": "another-turn", "status": "failed", "error": {"message": "別の発話の失敗"}, "items": []}}}));
+                let status = if ["completion-before-ack", "unrelated-rpc-error", "large-stderr", "empty-final"].contains(&mode.as_str()) { "completed" } else { &mode };
+                let items = if mode == "empty-final" { json!([{"type": "agentMessage", "phase": "final_answer", "text": " "}]) } else { json!([]) };
+                emit(json!({"method": "turn/completed", "params": {"threadId": "thread-test", "turn": {"id": "turn-test", "status": status, "items": items, "error": if mode == "failed" {json!({"message": "fixture failed"})} else {Value::Null}}}}));
+                if mode == "completion-before-ack" {
+                    emit(json!({"id": value["id"], "result": {"turn": {"id": "turn-test"}}}));
+                }
             }
         }
     }
@@ -550,6 +617,59 @@ mod tests {
             if mode == "completed" { assert_eq!(result.unwrap(), "明日は会議です。"); }
             else { assert!(result.is_err(), "{mode}: {result:?}"); }
         }
+    }
+
+    fn fake_codex(mode: &str) -> CodexClient {
+        let fixture = format!("{}::codex_fixture", module_path!().split_once("::").unwrap().1);
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command.args(["--exact", &fixture, "--nocapture"]).env("DOON_VOICE_TEST_CODEX_FIXTURE", mode);
+        CodexClient { process: JsonLineProcess::spawn(command).unwrap(), next_id: 1, cwd: std::env::temp_dir().to_string_lossy().into_owned(), model: "fixture".into() }
+    }
+
+    #[test]
+    fn codex_accepts_completion_received_before_turn_start_ack() {
+        let mut client = fake_codex("completion-before-ack");
+        assert_eq!(client.rewrite("人工的なテスト文", Duration::from_millis(500)).unwrap(), "明日は会議です。");
+    }
+
+    #[test]
+    fn codex_ignores_errors_and_items_for_unrelated_requests_and_turns() {
+        let mut client = fake_codex("unrelated-rpc-error");
+        assert_eq!(client.rewrite("人工的なテスト文", Duration::from_secs(2)).unwrap(), "明日は会議です。");
+    }
+
+    #[test]
+    fn large_stderr_does_not_break_a_valid_final_answer() {
+        let mut client = fake_codex("large-stderr");
+        assert_eq!(client.rewrite("人工的なテスト文", Duration::from_secs(2)).unwrap(), "明日は会議です。");
+    }
+
+    #[test]
+    fn empty_final_is_an_error_even_when_commentary_exists() {
+        let mut client = fake_codex("empty-final");
+        assert!(client.rewrite("人工的なテスト文", Duration::from_secs(2)).is_err());
+    }
+
+    #[test]
+    fn pre_cancelled_send_does_not_enqueue_a_prompt() {
+        let mut client = fake_codex("completed");
+        client.process.cancelled.store(true, Ordering::Release);
+        assert!(client.process.send(&json!({"method": "turn/start", "params": {"input": "人工的なテスト文"}})).is_err());
+    }
+
+    #[test]
+    fn pre_cancelled_rewrite_does_not_start_a_cli() {
+        let runtime = CloudRuntime::default();
+        let result = runtime.rewrite(CloudSpec {
+            kind: CloudKind::Codex,
+            executable: PathBuf::from("doon-deliberately-missing-cloud-test-cli"),
+            path: std::env::var_os("PATH").unwrap_or_default(),
+            cwd: std::env::temp_dir(),
+            model: "fixture".into(),
+            timeout: Duration::from_secs(1),
+            cancelled: Arc::new(AtomicBool::new(true)),
+        }, "人工的なテスト文");
+        assert!(result.unwrap_err().contains("中止"));
     }
 
     #[test]
@@ -577,18 +697,9 @@ mod tests {
     }
 
     #[test]
-    fn codexの差分応答を連結できる() {
-        let first = json!({
-            "method": "item/agentMessage/delta",
-            "params": {"delta": "明日の会議は"}
-        });
-        let second = json!({
-            "method": "item/agentMessage/delta",
-            "params": {"delta": "10時です。"}
-        });
-        assert_eq!(codex_delta(&first), Some("明日の会議は"));
-        assert_eq!(codex_delta(&second), Some("10時です。"));
-        assert!(codex_turn_completed(&json!({"method": "turn/completed"})));
+    fn codexの成功終了状態を確認する() {
+        assert!(!codex_turn_completed(&json!({"method": "turn/completed"})));
+        assert!(codex_turn_completed(&json!({"method": "turn/completed", "params": {"turn": {"status": "completed"}}})));
     }
 
     #[test]
@@ -645,6 +756,7 @@ mod tests {
                 cwd: cwd.clone(),
                 model: model.into(),
                 timeout: Duration::from_secs(timeout),
+                cancelled: Arc::new(AtomicBool::new(false)),
             };
             runtime.warm(make_spec()).expect("常駐接続を開始できる");
             let first = runtime.process_id(kind).expect("プロセスIDを取得できる");
@@ -676,6 +788,7 @@ mod tests {
                 cwd: cwd.clone(),
                 model: model.into(),
                 timeout: Duration::from_secs(90),
+                cancelled: Arc::new(AtomicBool::new(false)),
             };
             let first = runtime
                 .rewrite(make_spec(), prompt)
