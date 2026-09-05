@@ -21,7 +21,7 @@ fn normal_business_dictation_is_not_discarded_for_repetition() {
         "株式会社DOONです。株式会社DOONの長谷川です。",
         "ありがとうございました。",
     ] {
-        assert!(!is_probable_whisper_hallucination(text), "valid dictation: {text}");
+        assert_eq!(normalize_transcription(text).unwrap(), text);
     }
 }
 
@@ -54,4 +54,36 @@ fn recovery_requires_acknowledgment_before_new_recording() {
 fn raw_mode_does_not_require_any_ai_provider() {
     let target: OutputTarget = serde_json::from_str("\"raw\"").unwrap();
     assert!(matches!(target, OutputTarget::Raw));
+}
+
+#[test]
+fn stale_or_busy_result_actions_cannot_acknowledge_a_new_result() {
+    let mut runtime = BackgroundVoiceRuntime::new(VoiceRuntimeConfig::default());
+    runtime.generation = 2;
+    runtime.recovery_pending = true;
+    assert!(validate_result_action(&runtime, 1).is_err());
+    for phase in [BackgroundVoicePhase::Starting, BackgroundVoicePhase::Recording, BackgroundVoicePhase::Processing] {
+        runtime.phase = phase;
+        assert!(validate_result_action(&runtime, 2).is_err());
+    }
+    runtime.phase = BackgroundVoicePhase::Idle;
+    assert!(validate_result_action(&runtime, 2).is_ok());
+    assert!(runtime.recovery_pending);
+}
+
+#[test]
+fn whisper_failure_retains_partial_text_but_never_looks_successful() {
+    let result = finish_whisper_text("明日の会議は10時です", Some("処理が中断されました".into())).unwrap();
+    assert_eq!(result.text, "明日の会議は10時です");
+    assert!(result.warning.is_some());
+    assert!(finish_whisper_text("", Some("処理が中断されました".into())).is_err());
+}
+
+#[test]
+fn unconfirmed_settings_block_shortcut_recording_and_retry() {
+    let mut runtime = BackgroundVoiceRuntime::new(VoiceRuntimeConfig::default());
+    runtime.configuration_ready = false;
+    assert!(runtime.ensure_can_record().is_err());
+    runtime.configuration_ready = true;
+    assert!(runtime.ensure_can_record().is_ok());
 }
