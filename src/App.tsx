@@ -20,6 +20,7 @@ type TranscriptionStatus = { downloaded: boolean; name: string; size: string };
 type BrandGlyphName = "coach" | "dx" | "loop" | "move" | "spark" | "speed" | "system" | "work";
 type BackgroundVoiceSnapshot = {
   state: "idle" | "starting" | "recording" | "processing";
+  generation: number;
   transcript: string;
   output: string;
   message: string;
@@ -56,7 +57,7 @@ function appInvoke<T>(command: string, args?: Record<string, unknown>): Promise<
     transcription_status: { downloaded: true, name: "DOON Voice 高精度音声認識", size: "約574 MB" },
     direct_input_status: true,
     request_direct_input_permission: true,
-    background_voice_status: { state: "idle", transcript: "", output: "", message: "", clipboard_saved: false, recovery_pending: false },
+    background_voice_status: { state: "idle", generation: 0, transcript: "", output: "", message: "", clipboard_saved: false, recovery_pending: false },
   };
   return Promise.resolve(preview[command] as T);
 }
@@ -130,6 +131,10 @@ function MainApp() {
   const [shortcut, setShortcut] = useState(savedShortcut);
   const [capturingShortcut, setCapturingShortcut] = useState(false);
   const [outputTarget, setOutputTarget] = useState<OutputTarget>(initialOutputTarget);
+  const outputTargetRef = useRef(initialOutputTarget);
+  const configQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const [configSaving, setConfigSaving] = useState(0);
+  const [configError, setConfigError] = useState("");
   const [transcription, setTranscription] = useState<TranscriptionStatus | null>(null);
   const [transcript, setTranscript] = useState("");
   const [output, setOutput] = useState("");
@@ -138,12 +143,16 @@ function MainApp() {
   const [clipboardSaved, setClipboardSaved] = useState(false);
   const [recoveryPending, setRecoveryPending] = useState(false);
   const [resultActionPending, setResultActionPending] = useState(false);
+  const resultActionPendingRef = useRef(false);
+  const resultGenerationRef = useRef(0);
+  const voiceStateRef = useRef<BackgroundVoiceSnapshot["state"]>("idle");
   const [directInputAllowed, setDirectInputAllowed] = useState<boolean | null>(null);
   const [connectingProviders, setConnectingProviders] = useState<Record<ProviderId, boolean>>({ codex: false, claude: false, gemini: false });
   const startRef = useRef<number | null>(null);
   const registeredShortcutRef = useRef<string | null>(null);
   const capturedFromShortcutRef = useRef<string | null>(null);
   const shortcutCaptureActiveRef = useRef(false);
+  const shortcutOperationRef = useRef(0);
   const shortcutButtonRef = useRef<HTMLButtonElement | null>(null);
   const pullingLocalModelRef = useRef(false);
   const downloadingTranscriptionRef = useRef(false);
@@ -192,12 +201,35 @@ function MainApp() {
     if (!unreadableDictionary) window.localStorage.setItem("doon-voice-dictionary", JSON.stringify(terms));
   }, [terms, unreadableDictionary]);
   useEffect(() => {
-    if (!isTauriApp() || unreadableDictionary || dictionaryError(terms)) return;
-    void appInvoke("configure_background_voice", { target: outputTarget, dictionary: terms })
-      .catch((error) => setNotice(errorMessage(error, "音声入力の設定を保存できませんでした")));
-  }, [outputTarget, terms, unreadableDictionary]);
+    if (unreadableDictionary || dictionaryError(terms)) return;
+    void saveConfiguration(undefined, terms);
+  }, [terms, unreadableDictionary]);
+
+  function saveConfiguration(target: OutputTarget | undefined, dictionary: unknown[], afterSaved?: () => Promise<void>): Promise<boolean> {
+    setConfigSaving((current) => current + 1);
+    const job = configQueueRef.current.then(async () => {
+      const error = dictionaryError(dictionary);
+      if (error) throw new Error(error);
+      const nextTarget = target ?? outputTargetRef.current;
+      await appInvoke("configure_background_voice", { target: nextTarget, dictionary });
+      outputTargetRef.current = nextTarget;
+      setOutputTarget(nextTarget);
+      window.localStorage.setItem("doon-voice-output-target", nextTarget);
+      setConfigError("");
+      if (afterSaved) await afterSaved();
+    });
+    const settled = job.then(() => true, (error) => {
+      setConfigError(errorMessage(error, "音声入力の設定を保存できませんでした"));
+      return false;
+    }).finally(() => setConfigSaving((current) => current - 1));
+    configQueueRef.current = settled.then(() => undefined);
+    return settled;
+  }
 
   function applyBackgroundVoiceSnapshot(snapshot: BackgroundVoiceSnapshot) {
+    if (snapshot.generation < resultGenerationRef.current) return;
+    resultGenerationRef.current = snapshot.generation;
+    voiceStateRef.current = snapshot.state;
     const isRecording = snapshot.state === "recording";
     setRecording(isRecording);
     setProcessing(snapshot.state === "processing");
@@ -269,12 +301,14 @@ function MainApp() {
   }
 
   async function applyShortcut(next: string, notify = true) {
+    const operation = ++shortcutOperationRef.current;
     shortcutCaptureActiveRef.current = false;
     setCapturingShortcut(false);
     const previous = registeredShortcutRef.current;
     try {
       if (isTauriApp()) {
         await appInvoke("set_voice_shortcut", { shortcut: next });
+        if (operation !== shortcutOperationRef.current) return;
         registeredShortcutRef.current = next;
       }
       window.localStorage.setItem("doon-voice-shortcut", next);
@@ -283,6 +317,7 @@ function MainApp() {
       capturedFromShortcutRef.current = null;
       if (notify) setNotice(`開始・停止キーを ${shortcutLabel(next, navigator.userAgent.includes("Mac"))} に変更しました`);
     } catch {
+      if (operation !== shortcutOperationRef.current) return;
       const restore = previous ?? capturedFromShortcutRef.current;
       if (restore && isTauriApp()) {
         try {
@@ -305,17 +340,19 @@ function MainApp() {
 
   async function beginShortcutCapture() {
     if (shortcutCaptureActiveRef.current) return;
+    const operation = ++shortcutOperationRef.current;
     const previous = registeredShortcutRef.current ?? shortcut;
     capturedFromShortcutRef.current = previous;
     shortcutCaptureActiveRef.current = true;
     try {
-      if (registeredShortcutRef.current && isTauriApp()) {
+      if (isTauriApp()) {
         await appInvoke("clear_voice_shortcut");
+        if (operation !== shortcutOperationRef.current) return;
         registeredShortcutRef.current = null;
       }
       if (shortcutCaptureActiveRef.current) setCapturingShortcut(true);
-      else await applyShortcut(previous, false);
     } catch {
+      if (operation !== shortcutOperationRef.current) return;
       shortcutCaptureActiveRef.current = false;
       capturedFromShortcutRef.current = null;
       setNotice("開始・停止キーの変更を始められませんでした。もう一度試してください");
@@ -324,6 +361,7 @@ function MainApp() {
 
   function cancelShortcutCapture() {
     if (!shortcutCaptureActiveRef.current) return;
+    shortcutOperationRef.current += 1;
     shortcutCaptureActiveRef.current = false;
     const previous = capturedFromShortcutRef.current;
     setCapturingShortcut(false);
@@ -398,9 +436,10 @@ function MainApp() {
   }
 
   function chooseOutputTarget(target: OutputTarget) {
-    window.localStorage.setItem("doon-voice-output-target", target);
-    setOutputTarget(target);
-    setNotice(target === "raw" ? "AIなしの音声入力に変更しました" : `文章を整えるAIを ${outputTargetLabel(target)} に変更しました`);
+    if (unreadableDictionary) { setConfigError("保存された辞書を読み取れません。辞書画面で確認してください"); return; }
+    void saveConfiguration(target, terms).then((saved) => {
+      if (saved) setNotice(target === "raw" ? "AIなしの音声入力に変更しました" : `文章を整えるAIを ${outputTargetLabel(target)} に変更しました`);
+    });
   }
 
   async function installOllama() {
@@ -472,13 +511,17 @@ function MainApp() {
   }
 
   async function copyResult(text: string) {
-    if (!text || resultActionPending) return;
+    if (!text || resultActionPendingRef.current || voiceStateRef.current !== "idle") return;
+    const generation = resultGenerationRef.current;
+    resultActionPendingRef.current = true;
     setResultActionPending(true);
     try {
       await navigator.clipboard.writeText(text);
-      setClipboardSaved(true);
+      if (generation !== resultGenerationRef.current) return;
       try {
-        await appInvoke("ack_voice_result");
+        await appInvoke("ack_voice_result", { generation });
+        if (generation !== resultGenerationRef.current) return;
+        setClipboardSaved(true);
         setRecoveryPending(false);
         setNotice("クリップボードにコピーしました");
       } catch {
@@ -486,22 +529,29 @@ function MainApp() {
       }
     } catch {
       setNotice("コピーできませんでした。文章を選択してコピーしてください");
-    } finally { setResultActionPending(false); }
+    } finally { resultActionPendingRef.current = false; setResultActionPending(false); }
   }
 
   async function resultAction(command: "retry_voice_processing" | "clear_voice_result" | "cancel_voice_processing") {
-    if (resultActionPending) return;
+    if (resultActionPendingRef.current || voiceStateRef.current === "recording") return;
+    const generation = resultGenerationRef.current;
+    resultActionPendingRef.current = true;
     setResultActionPending(true);
     try {
       if (command === "retry_voice_processing") {
-        await appInvoke("configure_background_voice", { target: outputTarget, dictionary: terms });
+        const saved = await saveConfiguration(undefined, terms, async () => {
+          if (generation !== resultGenerationRef.current) return;
+          await appInvoke(command, { generation });
+        });
+        if (!saved || generation !== resultGenerationRef.current) return;
+      } else {
+        await appInvoke(command, { generation });
       }
-      await appInvoke(command);
       applyBackgroundVoiceSnapshot(await appInvoke<BackgroundVoiceSnapshot>("background_voice_status"));
       if (command === "clear_voice_result") setNotice("文章を破棄しました");
     } catch (error) {
       setNotice(errorMessage(error, "操作を完了できませんでした。内容はこの画面で確認できます"));
-    } finally { setResultActionPending(false); }
+    } finally { resultActionPendingRef.current = false; setResultActionPending(false); }
   }
 
   function addTerm(event: FormEvent) {
@@ -519,7 +569,12 @@ function MainApp() {
 
   const localModel = local?.models[0];
   const existingDictionaryError = unreadableDictionary ? "保存された辞書を読み取れません。元の保存データは保持しています" : dictionaryError(terms);
-  const busy = starting || processing;
+  const busy = recording || starting || processing;
+  const configurationNotice = configSaving > 0
+    ? <p className="configuration-notice" role="status">設定を保存しています</p>
+    : configError
+      ? <p className="configuration-notice" role="alert"><span>{configError}</span><button className="outline-action" type="button" onClick={() => { if (!unreadableDictionary) void saveConfiguration(undefined, terms); }} disabled={unreadableDictionary}>設定を再保存</button></p>
+      : null;
   const localReady = Boolean(local?.running && localModel?.installed);
   const isMac = navigator.userAgent.includes("Mac");
   useEffect(() => {
@@ -572,8 +627,8 @@ function MainApp() {
           <div className="hero-brand"><img src="/brand/doon-logo.png" alt="DOON" /><span>VOICE</span></div>
           <h1 id="home-title"><em>AIで</em>言語化をイージーに</h1>
           <p>{recording ? `音声入力中 · ${duration(elapsed)}` : starting ? "マイクを準備しています" : processing ? "音声を処理しています" : "どのアプリにも、そのまま入力。"}</p>
-          <button className="record-button" type="button" onClick={() => void toggleRecording()} disabled={busy || (!recording && (recoveryPending || Boolean(existingDictionaryError)))} aria-label={recording ? "音声入力を停止" : "音声入力を開始"}><span className="record-button-icon"><Mic size={27} strokeWidth={1.8} /></span><strong>{recording ? "停止" : "話す"}</strong><small>{shortcutLabel(shortcut, isMac)}</small></button>
-          {busy && <button className="outline-action cancel-processing" type="button" onClick={() => void resultAction("cancel_voice_processing")} disabled={resultActionPending} aria-label="処理を取り消す">取り消す</button>}
+          <button className="record-button" type="button" onClick={() => void toggleRecording()} disabled={starting || processing || (!recording && (recoveryPending || configSaving > 0 || Boolean(configError) || Boolean(existingDictionaryError)))} aria-label={recording ? "音声入力を停止" : "音声入力を開始"}><span className="record-button-icon"><Mic size={27} strokeWidth={1.8} /></span><strong>{recording ? "停止" : "話す"}</strong><small>{shortcutLabel(shortcut, isMac)}</small></button>
+          {(starting || processing) && <button className="outline-action cancel-processing" type="button" onClick={() => void resultAction("cancel_voice_processing")} disabled={resultActionPending} aria-label="処理を取り消す">取り消す</button>}
           {recoveryPending && !busy && <p className="recovery-state">前回の内容を確認してください</p>}
           {existingDictionaryError && <p className="recovery-state" role="alert">辞書に修正が必要です <button className="outline-action" type="button" onClick={() => navigate("dictionary")}>辞書を確認</button></p>}
         </section>
@@ -586,6 +641,7 @@ function MainApp() {
             <button className={outputTarget === "gemini" ? "is-selected" : ""} type="button" onClick={() => chooseOutputTarget("gemini")} aria-pressed={outputTarget === "gemini"}><BrandGlyph name="loop" /><span><strong>Gemini</strong><small className={geminiDisplay.className}>{geminiDisplay.label}</small></span>{outputTarget === "gemini" && <Check size={16} strokeWidth={2.1} />}</button>
             <button className={outputTarget === "local" ? "is-selected" : ""} type="button" onClick={() => chooseOutputTarget("local")} aria-pressed={outputTarget === "local"}><BrandGlyph name="dx" /><span><strong>このPCのAI</strong><small className={outputTarget === "local" ? "state-selected" : localReady ? "state-running" : "state-unavailable"}>{outputTarget === "local" ? "選択中" : localReady ? "稼働中" : "未準備"}</small></span>{outputTarget === "local" && <Check size={16} strokeWidth={2.1} />}</button>
           </div>
+          {configurationNotice}
         </section>
         {(transcript || output || processing) && <section className="result-section" aria-live="polite" aria-label="音声入力の結果">
           <div className="section-label"><span>RESULT</span><h2>音声入力の結果</h2></div>
@@ -595,7 +651,7 @@ function MainApp() {
           {(transcript || output) && <div className="result-actions">
             {transcript && <button className="outline-action" type="button" disabled={busy || resultActionPending} onClick={() => void copyResult(transcript)}>原文をコピー</button>}
             {output && <button className="outline-action" type="button" disabled={busy || resultActionPending} onClick={() => void copyResult(output)}>文章をコピー</button>}
-            {transcript && outputTarget !== "raw" && <button className="outline-action" type="button" disabled={busy || resultActionPending || Boolean(existingDictionaryError)} onClick={() => void resultAction("retry_voice_processing")}>再試行</button>}
+            {transcript && outputTarget !== "raw" && <button className="outline-action" type="button" disabled={busy || resultActionPending || configSaving > 0 || Boolean(configError) || Boolean(existingDictionaryError)} onClick={() => void resultAction("retry_voice_processing")}>再試行</button>}
             <button className="outline-action" type="button" disabled={busy || resultActionPending} onClick={() => void resultAction("clear_voice_result")}>破棄</button>
             <span>{clipboardSaved ? "クリップボードにコピー済み" : "クリップボードに未保存"}</span>
           </div>}
@@ -608,6 +664,7 @@ function MainApp() {
         <form className="term-form" onSubmit={addTerm}><input value={termDraft} disabled={unreadableDictionary} onChange={(event) => { setTermDraft(event.target.value); setTermError(""); }} placeholder="言葉を追加" aria-label="辞書に追加する言葉" aria-describedby="dictionary-limits" aria-invalid={Boolean(termError)} /><button type="submit" disabled={unreadableDictionary}><Plus size={16} strokeWidth={2} /> 追加</button></form>
         <p className="dictionary-limits" id="dictionary-limits">{terms.length} / {MAX_DICTIONARY_TERMS}件 · 1件{MAX_TERM_CODEPOINTS}文字まで</p>
         {(termError || existingDictionaryError) && <p className="dictionary-error" role="alert">{termError || existingDictionaryError}</p>}
+        {configurationNotice}
         {unreadableDictionary && <button className="outline-action" type="button" onClick={() => { setTerms([]); setUnreadableDictionary(false); }}>読めない辞書を削除</button>}
         {terms.length ? <ul className="term-list">{terms.map((term, index) => {
           const label = typeof term === "string" ? term : JSON.stringify(term);
@@ -626,6 +683,7 @@ function MainApp() {
             <button className={outputTarget === "gemini" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "gemini"} onClick={() => chooseOutputTarget("gemini")}><BrandGlyph name="loop" /><span><strong>Gemini</strong><small>Antigravity Flashで整える</small></span>{outputTarget === "gemini" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
             <button className={outputTarget === "local" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "local"} onClick={() => chooseOutputTarget("local")}><BrandGlyph name="dx" /><span><strong>このPCのAI</strong><small>Gemma 4 E2Bで高速整形</small></span>{outputTarget === "local" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
           </div>
+          {configurationNotice}
         </section>
         <div className="settings-list direct-input-settings"><article><span className="setting-icon"><BrandGlyph name="move" /></span><div><h2>カーソル位置へ入力</h2><p>{directInputAllowed ? "ほかのアプリへ直接入力できます。" : "macOSのアクセシビリティ許可が必要です。"}</p></div><span className={directInputAllowed ? "setting-state state-permitted" : "setting-state state-unavailable"}>{directInputAllowed ? <Check size={15} strokeWidth={2.3} /> : <CircleAlert size={15} strokeWidth={2} />}{directInputAllowed ? "許可済み" : "未許可"}</span>{isMac ? <button className="outline-action" type="button" onClick={() => void (directInputAllowed ? openDirectInputSettings() : requestDirectInputPermission())}>{directInputAllowed ? "設定を開く" : "許可する"} <ExternalLink size={15} /></button> : <span />}</article></div>
         <div className="settings-list transcription-settings"><article><span className="setting-icon"><BrandGlyph name="work" /></span><div><h2>音声認識</h2><p>{transcription?.downloaded ? "日本語音声認識をこのPCで行います。" : "話した言葉を文字にする日本語モデルです。"}</p></div><span className={transcription?.downloaded ? "setting-state state-installed" : "setting-state state-unavailable"}>{transcription?.downloaded ? <Check size={15} strokeWidth={2.3} /> : <Download size={15} strokeWidth={2} />}{transcription?.downloaded ? "モデル取得済み" : downloadingTranscription ? "取得中" : transcription?.size || "未取得"}</span>{transcription?.downloaded ? <span /> : <button className="outline-action" type="button" onClick={() => void downloadTranscriptionModel()} disabled={downloadingTranscription}>{downloadingTranscription ? "取得中" : "モデルを取得"} <Download size={15} /></button>}</article></div>

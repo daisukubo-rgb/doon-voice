@@ -122,6 +122,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--coral); out
 .term-list button { flex-shrink: 0; min-width: 36px; min-height: 36px; border: 0; padding: 0; color: var(--muted); background: transparent; font-size: 16px; }
 .dictionary-limits { color: var(--muted); font-size: 11px; }
 .dictionary-error { color: var(--coral); font-size: 12px; line-height: 1.7; }
+.configuration-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; color: var(--coral); font-size: 12px; line-height: 1.7; }
 
 .settings-list article { display: grid; grid-template-columns: 42px minmax(150px, 1fr) auto auto; align-items: center; gap: 16px; min-height: 86px; border-bottom: 1px solid var(--line); }
 .setting-icon { display: grid; width: 36px; height: 36px; place-items: center; color: var(--deep); background: var(--paper-tint); }

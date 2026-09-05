@@ -99,7 +99,7 @@ async function pageFor(options = {}, query = "") {
 async function check(name, body) {
   const errorsBefore = browserErrors.length;
   try { await body(); assert.equal(browserErrors.length, errorsBefore, browserErrors.slice(errorsBefore).join("\n")); console.log(`PASS ${name}`); }
-  catch (error) { failures += 1; console.error(`FAIL ${name}: ${error.message.split("\n")[0]}`); }
+  catch (error) { failures += 1; console.error(`FAIL ${name}: ${error.stack || error.message}`); }
   finally { await Promise.all(browser.contexts().map((context) => context.close())); }
 }
 
@@ -200,6 +200,7 @@ try {
       await page.evaluate(() => window.fixture.resolveConfig());
     }
     await page.waitForFunction(() => localStorage.getItem("doon-voice-output-target") === "gemini");
+    await page.getByRole("button", { name: /^Gemini/, pressed: true }).waitFor();
     assert.equal(await page.evaluate(() => window.fixture.activeTarget), "gemini");
     assert.equal(await page.getByRole("button", { name: /^Gemini/ }).getAttribute("aria-pressed"), "true");
     await page.close();
@@ -365,6 +366,17 @@ try {
         await page.screenshot({ path: path.join(artifacts, `${label}-${view}.png`), fullPage: true });
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${label}-${view}: horizontal overflow`);
       }
+      await page.getByRole("button", { name: "ホーム", exact: true }).click();
+      await page.evaluate(() => { window.fixture.rejectConfigs = true; });
+      await page.getByRole("button", { name: /AIなし/ }).click();
+      await page.getByText("設定を保存できませんでした", { exact: true }).waitFor();
+      await page.screenshot({ path: path.join(artifacts, `${label}-config-error.png`), fullPage: true });
+      await page.evaluate(() => { window.fixture.rejectConfigs = false; window.fixture.deferConfigs = true; });
+      await page.getByRole("button", { name: /AIなし/ }).click();
+      await page.getByText("設定を保存しています", { exact: true }).waitFor();
+      await page.screenshot({ path: path.join(artifacts, `${label}-config-saving.png`), fullPage: true });
+      await page.evaluate(() => { window.fixture.resolveConfig(); window.fixture.deferConfigs = false; });
+      await page.getByText("設定を保存しています", { exact: true }).waitFor({ state: "detached" });
     }
     await page.close();
   }
