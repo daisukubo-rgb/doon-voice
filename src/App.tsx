@@ -210,6 +210,11 @@ function MainApp() {
     const job = configQueueRef.current.then(async () => {
       const error = dictionaryError(dictionary);
       if (error) throw new Error(error);
+      // A shortcut can start recording while an earlier configuration awaits its ACK.
+      if (target !== undefined && voiceStateRef.current !== "idle") {
+        setNotice("音声入力が終わってからAIを変更してください");
+        return false;
+      }
       const nextTarget = target ?? outputTargetRef.current;
       await appInvoke("configure_background_voice", { target: nextTarget, dictionary });
       outputTargetRef.current = nextTarget;
@@ -217,8 +222,9 @@ function MainApp() {
       window.localStorage.setItem("doon-voice-output-target", nextTarget);
       setConfigError("");
       if (afterSaved) await afterSaved();
+      return true;
     });
-    const settled = job.then(() => true, (error) => {
+    const settled = job.catch((error) => {
       setConfigError(errorMessage(error, "音声入力の設定を保存できませんでした"));
       return false;
     }).finally(() => setConfigSaving((current) => current - 1));
@@ -436,6 +442,10 @@ function MainApp() {
   }
 
   function chooseOutputTarget(target: OutputTarget) {
+    if (voiceStateRef.current !== "idle") {
+      setNotice("音声入力が終わってからAIを変更してください");
+      return;
+    }
     if (unreadableDictionary) { setConfigError("保存された辞書を読み取れません。辞書画面で確認してください"); return; }
     void saveConfiguration(target, terms).then((saved) => {
       if (saved) setNotice(target === "raw" ? "AIなしの音声入力に変更しました" : `文章を整えるAIを ${outputTargetLabel(target)} に変更しました`);
@@ -635,11 +645,11 @@ function MainApp() {
         <section className="destination-section" aria-labelledby="destination-title">
           <div className="section-label"><span>FINISH WITH</span><h2 id="destination-title">文章の仕上げ</h2></div>
           <div className="destination-list">
-            <button className={outputTarget === "raw" ? "is-selected" : ""} type="button" onClick={() => chooseOutputTarget("raw")} aria-pressed={outputTarget === "raw"}><Mic size={27} strokeWidth={1.8} /><span><strong>AIなし</strong><small>{outputTarget === "raw" ? "選択中" : "音声認識のみ"}</small></span>{outputTarget === "raw" && <Check size={16} strokeWidth={2.1} />}</button>
-            <button className={outputTarget === "codex" ? "is-selected" : ""} type="button" onClick={() => chooseOutputTarget("codex")} aria-pressed={outputTarget === "codex"}><BrandGlyph name="spark" /><span><strong>ChatGPT</strong><small className={codexDisplay.className}>{codexDisplay.label}</small></span>{outputTarget === "codex" && <Check size={16} strokeWidth={2.1} />}</button>
-            <button className={outputTarget === "claude" ? "is-selected" : ""} type="button" onClick={() => chooseOutputTarget("claude")} aria-pressed={outputTarget === "claude"}><BrandGlyph name="coach" /><span><strong>Claude</strong><small className={claudeDisplay.className}>{claudeDisplay.label}</small></span>{outputTarget === "claude" && <Check size={16} strokeWidth={2.1} />}</button>
-            <button className={outputTarget === "gemini" ? "is-selected" : ""} type="button" onClick={() => chooseOutputTarget("gemini")} aria-pressed={outputTarget === "gemini"}><BrandGlyph name="loop" /><span><strong>Gemini</strong><small className={geminiDisplay.className}>{geminiDisplay.label}</small></span>{outputTarget === "gemini" && <Check size={16} strokeWidth={2.1} />}</button>
-            <button className={outputTarget === "local" ? "is-selected" : ""} type="button" onClick={() => chooseOutputTarget("local")} aria-pressed={outputTarget === "local"}><BrandGlyph name="dx" /><span><strong>このPCのAI</strong><small className={outputTarget === "local" ? "state-selected" : localReady ? "state-running" : "state-unavailable"}>{outputTarget === "local" ? "選択中" : localReady ? "稼働中" : "未準備"}</small></span>{outputTarget === "local" && <Check size={16} strokeWidth={2.1} />}</button>
+            <button className={outputTarget === "raw" ? "is-selected" : ""} type="button" disabled={busy} onClick={() => chooseOutputTarget("raw")} aria-pressed={outputTarget === "raw"}><Mic size={27} strokeWidth={1.8} /><span><strong>AIなし</strong><small>{outputTarget === "raw" ? "選択中" : "音声認識のみ"}</small></span>{outputTarget === "raw" && <Check size={16} strokeWidth={2.1} />}</button>
+            <button className={outputTarget === "codex" ? "is-selected" : ""} type="button" disabled={busy} onClick={() => chooseOutputTarget("codex")} aria-pressed={outputTarget === "codex"}><BrandGlyph name="spark" /><span><strong>ChatGPT</strong><small className={codexDisplay.className}>{codexDisplay.label}</small></span>{outputTarget === "codex" && <Check size={16} strokeWidth={2.1} />}</button>
+            <button className={outputTarget === "claude" ? "is-selected" : ""} type="button" disabled={busy} onClick={() => chooseOutputTarget("claude")} aria-pressed={outputTarget === "claude"}><BrandGlyph name="coach" /><span><strong>Claude</strong><small className={claudeDisplay.className}>{claudeDisplay.label}</small></span>{outputTarget === "claude" && <Check size={16} strokeWidth={2.1} />}</button>
+            <button className={outputTarget === "gemini" ? "is-selected" : ""} type="button" disabled={busy} onClick={() => chooseOutputTarget("gemini")} aria-pressed={outputTarget === "gemini"}><BrandGlyph name="loop" /><span><strong>Gemini</strong><small className={geminiDisplay.className}>{geminiDisplay.label}</small></span>{outputTarget === "gemini" && <Check size={16} strokeWidth={2.1} />}</button>
+            <button className={outputTarget === "local" ? "is-selected" : ""} type="button" disabled={busy} onClick={() => chooseOutputTarget("local")} aria-pressed={outputTarget === "local"}><BrandGlyph name="dx" /><span><strong>このPCのAI</strong><small className={outputTarget === "local" ? "state-selected" : localReady ? "state-running" : "state-unavailable"}>{outputTarget === "local" ? "選択中" : localReady ? "稼働中" : "未準備"}</small></span>{outputTarget === "local" && <Check size={16} strokeWidth={2.1} />}</button>
           </div>
           {configurationNotice}
         </section>
@@ -677,11 +687,11 @@ function MainApp() {
         <section className="output-settings" aria-labelledby="output-settings-title">
           <div className="output-settings-heading"><span>TEXT PROCESSOR</span><h2 id="output-settings-title">文章を整えるAI</h2></div>
           <div className="output-choice-list" role="radiogroup" aria-label="文章を整えるAI">
-            <button className={outputTarget === "raw" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "raw"} onClick={() => chooseOutputTarget("raw")}><Mic size={27} strokeWidth={1.8} /><span><strong>AIなし</strong><small>音声認識のみ</small></span>{outputTarget === "raw" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
-            <button className={outputTarget === "codex" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "codex"} onClick={() => chooseOutputTarget("codex")}><BrandGlyph name="spark" /><span><strong>ChatGPT</strong><small>Codexで整える</small></span>{outputTarget === "codex" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
-            <button className={outputTarget === "claude" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "claude"} onClick={() => chooseOutputTarget("claude")}><BrandGlyph name="coach" /><span><strong>Claude</strong><small>Claude Codeで整える</small></span>{outputTarget === "claude" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
-            <button className={outputTarget === "gemini" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "gemini"} onClick={() => chooseOutputTarget("gemini")}><BrandGlyph name="loop" /><span><strong>Gemini</strong><small>Antigravity Flashで整える</small></span>{outputTarget === "gemini" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
-            <button className={outputTarget === "local" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "local"} onClick={() => chooseOutputTarget("local")}><BrandGlyph name="dx" /><span><strong>このPCのAI</strong><small>Gemma 4 E2Bで高速整形</small></span>{outputTarget === "local" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
+            <button className={outputTarget === "raw" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "raw"} disabled={busy} onClick={() => chooseOutputTarget("raw")}><Mic size={27} strokeWidth={1.8} /><span><strong>AIなし</strong><small>音声認識のみ</small></span>{outputTarget === "raw" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
+            <button className={outputTarget === "codex" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "codex"} disabled={busy} onClick={() => chooseOutputTarget("codex")}><BrandGlyph name="spark" /><span><strong>ChatGPT</strong><small>Codexで整える</small></span>{outputTarget === "codex" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
+            <button className={outputTarget === "claude" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "claude"} disabled={busy} onClick={() => chooseOutputTarget("claude")}><BrandGlyph name="coach" /><span><strong>Claude</strong><small>Claude Codeで整える</small></span>{outputTarget === "claude" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
+            <button className={outputTarget === "gemini" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "gemini"} disabled={busy} onClick={() => chooseOutputTarget("gemini")}><BrandGlyph name="loop" /><span><strong>Gemini</strong><small>Antigravity Flashで整える</small></span>{outputTarget === "gemini" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
+            <button className={outputTarget === "local" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "local"} disabled={busy} onClick={() => chooseOutputTarget("local")}><BrandGlyph name="dx" /><span><strong>このPCのAI</strong><small>Gemma 4 E2Bで高速整形</small></span>{outputTarget === "local" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
           </div>
           {configurationNotice}
         </section>
