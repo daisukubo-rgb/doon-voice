@@ -231,6 +231,16 @@ try {
     });
   }
 
+  for (const state of ["starting", "processing"]) {
+    await check(`DV-002: mobile ${state} controls fit within the viewport`, async () => {
+      const page = await pageFor({ snapshot: { state } });
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.getByRole("button", { name: "処理を取り消す" }).waitFor();
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await page.close();
+    });
+  }
+
   await check("DV-002: a saved configuration ACK survives shortcut start, but the next queued change is cancelled", async () => {
     const page = await pageFor();
     await page.waitForFunction(() => localStorage.getItem("doon-voice-output-target") === "codex");
