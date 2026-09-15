@@ -29,6 +29,8 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
+    menu::{Menu, MenuItem},
+    tray::TrayIconBuilder,
     AppHandle, Emitter, Manager, PhysicalPosition, Position, State, WebviewUrl,
     WebviewWindowBuilder, WindowEvent,
 };
@@ -320,9 +322,44 @@ impl BackgroundVoiceRuntime {
         Ok(())
     }
 
+    fn configure(
+        &mut self,
+        target: OutputTarget,
+        dictionary: Vec<String>,
+        save: impl FnOnce(&VoiceRuntimeConfig) -> Result<(), String>,
+    ) -> Result<bool, String> {
+        if self.phase != BackgroundVoicePhase::Idle {
+            // An in-flight recording owns its settings until delivery finishes.
+            // A repeated UI synchronization must not invalidate that configuration.
+            if target == self.config.target && dictionary == self.config.dictionary {
+                return Ok(false);
+            }
+            return Err("音声入力が終わってからAIや辞書を変更してください。".into());
+        }
+        self.configuration_ready = false;
+        let dictionary = validate_dictionary(dictionary)?;
+        let mut config = self.config.clone();
+        config.target = target;
+        config.dictionary = dictionary;
+        save(&config)?;
+        self.config = config;
+        self.configuration_ready = true;
+        Ok(true)
+    }
+
     fn acknowledge_result(&mut self) {
         self.recovery_pending = false;
         self.clipboard_saved = true;
+    }
+
+    fn exit_block_reason(&self) -> Option<&'static str> {
+        if self.phase != BackgroundVoicePhase::Idle {
+            Some("音声入力を停止し、処理が終わってから終了してください。")
+        } else if self.recovery_pending {
+            Some("文章をコピーするか、破棄してから終了してください。")
+        } else {
+            None
+        }
     }
 
     fn ensure_auto_delivery(&self) -> Result<(), String> {
@@ -422,22 +459,18 @@ fn configure_background_voice(
     dictionary: Vec<String>,
     state: State<'_, BackgroundVoiceState>,
 ) -> Result<(), String> {
-    let config = {
+    let changed = {
         let mut runtime = state
             .0
             .lock()
             .map_err(|_| "音声入力の設定を更新できませんでした。")?;
-        runtime.configuration_ready = false;
-        let dictionary = validate_dictionary(dictionary)?;
-        let mut config = runtime.config.clone();
-        config.target = target;
-        config.dictionary = dictionary;
-        save_voice_runtime_config(&app, &config)?;
-        runtime.config = config.clone();
-        runtime.configuration_ready = true;
-        config
+        runtime.configure(target, dictionary, |config| {
+            save_voice_runtime_config(&app, config)
+        })?
     };
-    prewarm_output_target(&app, config.target);
+    if changed {
+        prewarm_output_target(&app, target);
+    }
     Ok(())
 }
 
@@ -694,7 +727,7 @@ impl Default for VoiceRuntimeConfig {
         Self {
             target: OutputTarget::Codex,
             dictionary: Vec::new(),
-            shortcut: "Control+P".into(),
+            shortcut: "Ctrl+Alt+Space".into(),
         }
     }
 }
@@ -1216,11 +1249,7 @@ fn whisper_env(app: &AppHandle) -> HashMap<String, String> {
     e
 }
 fn clean(s: &str) -> Result<String, String> {
-    let s = s
-        .rsplit_once("</think>")
-        .map(|(_, x)| x)
-        .unwrap_or(s)
-        .trim();
+    let s = s.trim();
     if s.is_empty() {
         return Err(EMPTY_AI_RESPONSE.into());
     }
@@ -1228,6 +1257,14 @@ fn clean(s: &str) -> Result<String, String> {
         return Err("文章が長すぎます。短く区切って話してください。".into());
     }
     Ok(s.into())
+}
+
+fn clean_ai_output(s: &str) -> Result<String, String> {
+    clean(
+        s.rsplit_once("</think>")
+            .map(|(_, output)| output)
+            .unwrap_or(s),
+    )
 }
 
 fn wav_contains_speech(audio: &[u8]) -> bool {
@@ -1287,25 +1324,14 @@ fn wav_contains_speech(audio: &[u8]) -> bool {
     sustained_speech || continuous_loud_speech || (peak >= 0.08 && rms >= 0.015)
 }
 
-fn strip_transcription_fillers(text: &str) -> String {
-    let fillers = ["えーと", "えっと", "えー", "あー", "うーん", "んー"];
-    let mut result = text.trim().to_string();
-    while let Some(filler) = fillers.iter().find(|filler| result.starts_with(**filler)) {
-        result = result[filler.len()..]
-            .trim_start_matches([' ', '　', '、', '。', '，', '．', ','])
-            .to_string();
-    }
-    result
-}
-
 fn normalize_transcription(text: &str) -> Result<String, String> {
     // Audio is checked for silence before inference. Repeated business terms
     // and ordinary words cannot prove that a transcript is hallucinated.
-    let text = strip_transcription_fillers(text);
+    let text = text.trim();
     if text.is_empty() {
         Err("話した内容を認識できませんでした。もう一度お試しください。".into())
     } else {
-        Ok(text)
+        Ok(text.to_string())
     }
 }
 fn transcription_prompt(dictionary: &[String]) -> String {
@@ -1691,7 +1717,7 @@ fn process_with_cloud(
     app.state::<CloudRuntime>()
         .rewrite(spec, prompt)
         .map_err(|error| provider_runtime_error(provider, error))
-        .and_then(|text| clean(&text))
+        .and_then(|text| clean_ai_output(&text))
 }
 
 fn check_cancelled(cancelled: &AtomicBool) -> Result<(), String> {
@@ -1780,7 +1806,7 @@ async fn process_voice_text_cancellable(
                     }
                     return Err("ローカルAIが文章を整えられませんでした。".into());
                 }
-                clean(
+                clean_ai_output(
                     &r.json::<OllamaGenerate>()
                         .await
                         .map_err(|_| "このPCのAIの応答を読めませんでした。".to_string())?
@@ -2342,6 +2368,59 @@ fn launch_claude_login() -> Result<(), String> {
 fn launch_claude_login() -> Result<(), String> {
     Err("このOSでは対応していません。".into())
 }
+fn show_main_window(app: &AppHandle) -> Result<(), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "DOON Voiceの画面が見つかりません。".to_string())?;
+    window
+        .unminimize()
+        .map_err(|_| "画面の最小化を解除できませんでした。".to_string())?;
+    window
+        .show()
+        .map_err(|_| "DOON Voiceの画面を開けませんでした。".to_string())?;
+    window
+        .set_focus()
+        .map_err(|_| "DOON Voiceの画面へ移動できませんでした。".to_string())
+}
+
+fn setup_desktop_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>> {
+    let open = MenuItem::with_id(
+        app,
+        "doon-voice-show",
+        "DOON Voiceを開く",
+        true,
+        None::<&str>,
+    )?;
+    let quit = MenuItem::with_id(
+        app,
+        "doon-voice-quit",
+        "DOON Voiceを終了",
+        true,
+        None::<&str>,
+    )?;
+    let menu = Menu::with_items(app, &[&open, &quit])?;
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .ok_or_else(|| std::io::Error::other("常駐アイコンを読み込めませんでした。"))?;
+    TrayIconBuilder::with_id("doon-voice-tray")
+        .icon(icon)
+        .tooltip("DOON Voice")
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "doon-voice-show" => {
+                if let Err(error) = show_main_window(app) {
+                    eprintln!("{error}");
+                }
+            }
+            "doon-voice-quit" => app.exit(0),
+            _ => {}
+        })
+        .build(app)?;
+    Ok(())
+}
+
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -2354,6 +2433,7 @@ pub fn run() {
         )))
         .setup(|app| {
             let handle = app.handle();
+            setup_desktop_tray(handle)?;
             let cleanup_app = handle.clone();
             std::thread::spawn(move || {
                 let result = voice_dir(&cleanup_app)
@@ -2430,14 +2510,38 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("DOON Voiceを起動できませんでした");
 
-    app.run(|_app, _event| {
-        #[cfg(target_os = "macos")]
-        if let tauri::RunEvent::Reopen { .. } = _event {
-            if let Some(window) = _app.get_webview_window("main") {
-                let _ = window.show();
-                let _ = window.set_focus();
+    app.run(|app, event| match event {
+        tauri::RunEvent::ExitRequested { api, .. } => {
+            let snapshot = {
+                let state = app.state::<BackgroundVoiceState>();
+                let result = match state.0.lock() {
+                    Ok(mut runtime) => runtime.exit_block_reason().map(|reason| {
+                        runtime.message = reason.into();
+                        runtime.snapshot()
+                    }),
+                    Err(_) => {
+                        api.prevent_exit();
+                        eprintln!("音声入力の状態を確認できないため終了を中止しました。");
+                        return;
+                    }
+                };
+                result
+            };
+            if let Some(snapshot) = snapshot {
+                api.prevent_exit();
+                publish_background_voice(app, &snapshot);
+                if let Err(error) = show_main_window(app) {
+                    eprintln!("{error}");
+                }
             }
         }
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => {
+            if let Err(error) = show_main_window(app) {
+                eprintln!("{error}");
+            }
+        }
+        _ => {}
     });
 }
 
@@ -2458,7 +2562,11 @@ mod tests {
 
     #[test]
     fn 本文だけを返す() {
-        assert_eq!(clean("<think>x</think>\n本文").unwrap(), "本文");
+        assert_eq!(clean_ai_output("<think>x</think>\n本文").unwrap(), "本文");
+        assert_eq!(
+            clean("<think>x</think>\n本文").unwrap(),
+            "<think>x</think>\n本文"
+        );
         assert!(clean(" ").is_err());
     }
 
@@ -2724,24 +2832,16 @@ mod tests {
     }
 
     #[test]
-    fn 音声のフィラー語を除去する() {
-        assert_eq!(
-            strip_transcription_fillers("えっと、明日の会議です"),
-            "明日の会議です"
-        );
-        assert_eq!(
-            strip_transcription_fillers("えーと明日の会議です"),
-            "明日の会議です"
-        );
-        assert_eq!(
-            strip_transcription_fillers("あー、確認します"),
-            "確認します"
-        );
-        assert!(strip_transcription_fillers("えっと、あー").is_empty());
-        assert_eq!(
-            strip_transcription_fillers("明日の会議です"),
-            "明日の会議です"
-        );
+    fn 音声のフィラーも原文では保持する() {
+        for text in [
+            "えっと、明日の会議です",
+            "えーと明日の会議です",
+            "あー、確認します",
+            "えっと、あー",
+            "明日の会議です",
+        ] {
+            assert_eq!(normalize_transcription(text).unwrap(), text);
+        }
     }
 
     #[test]

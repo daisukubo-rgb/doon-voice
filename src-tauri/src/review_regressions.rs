@@ -11,7 +11,11 @@ fn recognized_original_preserves_names_fillers_and_literal_tags() {
     ] {
         let recognized = finish_whisper_text(text, None).unwrap();
         assert_eq!(recognized.text, text, "original must stay recoverable");
-        assert_eq!(clean(&recognized.text).unwrap(), text, "raw output must match original");
+        assert_eq!(
+            clean(&recognized.text).unwrap(),
+            text,
+            "raw output must match original"
+        );
         let mut runtime = BackgroundVoiceRuntime::new(VoiceRuntimeConfig::default());
         runtime.transcript = recognized.text;
         runtime.recovery_pending = true;
@@ -23,16 +27,32 @@ fn recognized_original_preserves_names_fillers_and_literal_tags() {
 
 #[test]
 fn active_recording_rejects_changed_settings_without_losing_confirmed_configuration() {
-    for phase in [BackgroundVoicePhase::Starting, BackgroundVoicePhase::Recording, BackgroundVoicePhase::Processing] {
+    for phase in [
+        BackgroundVoicePhase::Starting,
+        BackgroundVoicePhase::Recording,
+        BackgroundVoicePhase::Processing,
+    ] {
         let mut runtime = BackgroundVoiceRuntime::new(VoiceRuntimeConfig::default());
         runtime.configuration_ready = true;
         runtime.phase = phase;
-        assert!(runtime.configure(OutputTarget::Raw, vec![], |_| panic!("must not save during a recording")).is_err());
-        assert!(runtime.configure(OutputTarget::Codex, vec!["新しい語".into()], |_| panic!("must not change active dictionary")).is_err());
+        assert!(runtime
+            .configure(OutputTarget::Raw, vec![], |_| panic!(
+                "must not save during a recording"
+            ))
+            .is_err());
+        assert!(runtime
+            .configure(OutputTarget::Codex, vec!["新しい語".into()], |_| panic!(
+                "must not change active dictionary"
+            ))
+            .is_err());
         assert_eq!(runtime.config.target, OutputTarget::Codex);
         assert!(runtime.config.dictionary.is_empty());
         assert!(runtime.configuration_ready);
-        assert!(!runtime.configure(OutputTarget::Codex, vec![], |_| panic!("identical settings need no write")).unwrap());
+        assert!(!runtime
+            .configure(OutputTarget::Codex, vec![], |_| panic!(
+                "identical settings need no write"
+            ))
+            .unwrap());
     }
 }
 
@@ -40,14 +60,18 @@ fn active_recording_rejects_changed_settings_without_losing_confirmed_configurat
 fn idle_settings_are_committed_only_after_successful_persistence() {
     let mut runtime = BackgroundVoiceRuntime::new(VoiceRuntimeConfig::default());
     runtime.configuration_ready = true;
-    assert!(runtime.configure(OutputTarget::Raw, vec![], |_| Err("disk full".into())).is_err());
+    assert!(runtime
+        .configure(OutputTarget::Raw, vec![], |_| Err("disk full".into()))
+        .is_err());
     assert_eq!(runtime.config.target, OutputTarget::Codex);
     assert!(!runtime.configuration_ready);
-    assert!(runtime.configure(OutputTarget::Raw, vec!["DOON".into()], |config| {
-        assert_eq!(config.target, OutputTarget::Raw);
-        assert_eq!(config.dictionary, vec!["DOON"]);
-        Ok(())
-    }).unwrap());
+    assert!(runtime
+        .configure(OutputTarget::Raw, vec!["DOON".into()], |config| {
+            assert_eq!(config.target, OutputTarget::Raw);
+            assert_eq!(config.dictionary, vec!["DOON"]);
+            Ok(())
+        })
+        .unwrap());
     assert_eq!(runtime.config.target, OutputTarget::Raw);
     assert!(runtime.configuration_ready);
 }
@@ -56,7 +80,11 @@ fn idle_settings_are_committed_only_after_successful_persistence() {
 fn exiting_keeps_active_recordings_and_unrecovered_text_available() {
     let mut runtime = BackgroundVoiceRuntime::new(VoiceRuntimeConfig::default());
     assert!(runtime.exit_block_reason().is_none());
-    for phase in [BackgroundVoicePhase::Starting, BackgroundVoicePhase::Recording, BackgroundVoicePhase::Processing] {
+    for phase in [
+        BackgroundVoicePhase::Starting,
+        BackgroundVoicePhase::Recording,
+        BackgroundVoicePhase::Processing,
+    ] {
         runtime.phase = phase;
         assert!(runtime.exit_block_reason().is_some());
     }

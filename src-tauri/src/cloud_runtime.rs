@@ -183,10 +183,16 @@ impl CloudClient {
     }
 }
 
+enum JsonLineEvent {
+    Message(Value),
+    InputFailed,
+    OutputClosed,
+}
+
 struct JsonLineProcess {
     child: Child,
     stdin: mpsc::SyncSender<Vec<u8>>,
-    messages: mpsc::Receiver<Value>,
+    messages: mpsc::Receiver<JsonLineEvent>,
     stderr: Arc<Mutex<String>>,
     cancelled: Arc<AtomicBool>,
 }
@@ -214,6 +220,7 @@ impl JsonLineProcess {
 
         let (sender, messages) = mpsc::channel();
         let (stdin, inputs) = mpsc::sync_channel::<Vec<u8>>(8);
+        let (stderr_finished, stderr_done) = mpsc::channel();
         let errors = sender.clone();
         thread::spawn(move || {
             for input in inputs {
@@ -222,8 +229,7 @@ impl JsonLineProcess {
                     .and_then(|_| stdin_writer.flush())
                     .is_err()
                 {
-                    let _ =
-                        errors.send(json!({"error": {"message": "CLIへ文章を渡せませんでした。"}}));
+                    let _ = errors.send(JsonLineEvent::InputFailed);
                     break;
                 }
             }
@@ -231,11 +237,17 @@ impl JsonLineProcess {
         thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 if let Ok(message) = serde_json::from_str::<Value>(&line) {
-                    if sender.send(message).is_err() {
-                        break;
+                    if sender.send(JsonLineEvent::Message(message)).is_err() {
+                        return;
                     }
                 }
             }
+            // Queue closure behind every final JSON, even if the child has
+            // already exited. stdin may still hold another sender open.
+            // Give stderr a bounded chance to finish; inherited pipes must
+            // not keep a failed CLI waiting until the full request deadline.
+            let _ = stderr_done.recv_timeout(Duration::from_millis(100));
+            let _ = sender.send(JsonLineEvent::OutputClosed);
         });
 
         let stderr = Arc::new(Mutex::new(String::new()));
@@ -267,6 +279,7 @@ impl JsonLineProcess {
                     }
                 }
             }
+            let _ = stderr_finished.send(());
         });
 
         Ok(Self {
@@ -303,7 +316,11 @@ impl JsonLineProcess {
                 .messages
                 .recv_timeout(remaining.min(Duration::from_millis(100)))
             {
-                Ok(message) => return Ok(message),
+                Ok(JsonLineEvent::Message(message)) => return Ok(message),
+                Ok(JsonLineEvent::InputFailed) => {
+                    return Err("CLIへ文章を渡せませんでした。".into());
+                }
+                Ok(JsonLineEvent::OutputClosed) => return Err(self.failure_detail()),
                 Err(mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(mpsc::RecvTimeoutError::Disconnected) => return Err(self.failure_detail()),
             }
@@ -563,9 +580,6 @@ impl StreamClient {
                     "クラウドAIから文章を受け取れませんでした。",
                 );
             }
-            if !self.process.is_alive() {
-                return Err(self.process.failure_detail());
-            }
         }
     }
 }
@@ -769,7 +783,9 @@ mod tests {
     #[test]
     fn json_line_silent_exit_is_reported_before_the_deadline() {
         let mut process = JsonLineProcess::spawn(exit_fixture_command("silent-exit")).unwrap();
-        process.send(&json!({"id": 0, "method": "initialize"})).unwrap();
+        process
+            .send(&json!({"id": 0, "method": "initialize"}))
+            .unwrap();
         let started = Instant::now();
         let error = wait_for_response(&process, 0, started + Duration::from_secs(2)).unwrap_err();
         assert_eq!(error, "CLIとの常駐接続が終了しました。");
@@ -780,9 +796,13 @@ mod tests {
     fn json_line_exit_waits_briefly_for_stderr_to_finish() {
         let mut process =
             JsonLineProcess::spawn(exit_fixture_command("delayed-stderr-exit")).unwrap();
-        process.send(&json!({"id": 0, "method": "initialize"})).unwrap();
+        process
+            .send(&json!({"id": 0, "method": "initialize"}))
+            .unwrap();
         let started = Instant::now();
-        let error = process.receive(started + Duration::from_secs(2)).unwrap_err();
+        let error = process
+            .receive(started + Duration::from_secs(2))
+            .unwrap_err();
         assert_eq!(error, "fixture delayed startup rejection");
         assert!(started.elapsed() < Duration::from_secs(1));
     }
@@ -816,7 +836,9 @@ mod tests {
     #[test]
     fn json_line_live_unresponsive_process_still_observes_the_deadline() {
         let mut process = JsonLineProcess::spawn(exit_fixture_command("waiting")).unwrap();
-        process.send(&json!({"id": 0, "method": "initialize"})).unwrap();
+        process
+            .send(&json!({"id": 0, "method": "initialize"}))
+            .unwrap();
         let started = Instant::now();
         let error = process
             .receive(started + Duration::from_millis(150))

@@ -191,6 +191,7 @@ html.is-overlay, html.is-overlay body, html.is-overlay #root { width: 100%; min-
   .settings-list article { grid-template-columns: 38px minmax(120px, 1fr); gap: 10px; padding: 13px 0; }
   .setting-state { grid-column: 2; justify-self: start; }
   .outline-action, .shortcut-row .shortcut-key { grid-column: 2; justify-self: start; }
+  .voice-stage > .cancel-processing { grid-column: 1; justify-self: center; }
 }
 
 @media (prefers-reduced-motion: reduce) {
