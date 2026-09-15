@@ -687,6 +687,146 @@ pub(crate) fn gemini_final_result(message: &Value) -> Result<Option<&str>, Strin
 mod tests {
     use super::*;
 
+    fn exit_fixture_command(mode: &str) -> Command {
+        let fixture = format!(
+            "{}::json_line_exit_fixture",
+            module_path!().split_once("::").unwrap().1
+        );
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", &fixture, "--nocapture"])
+            .env("DOON_VOICE_TEST_EXIT_MODE", mode);
+        command
+    }
+
+    #[test]
+    fn json_line_exit_fixture() {
+        let Ok(mode) = std::env::var("DOON_VOICE_TEST_EXIT_MODE") else {
+            return;
+        };
+        if mode == "delayed-stderr-writer" {
+            thread::sleep(Duration::from_millis(30));
+            std::io::stderr()
+                .write_all(b"fixture delayed startup rejection")
+                .unwrap();
+            std::process::exit(7);
+        }
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).unwrap();
+        let _: Value = serde_json::from_str(&line).unwrap();
+        match mode.as_str() {
+            "stderr-exit" => {
+                std::io::stderr()
+                    .write_all(b"fixture startup rejection")
+                    .unwrap();
+                std::process::exit(7);
+            }
+            "silent-exit" => std::process::exit(7),
+            "delayed-stderr-exit" => {
+                exit_fixture_command("delayed-stderr-writer")
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::inherit())
+                    .spawn()
+                    .unwrap();
+                std::process::exit(7);
+            }
+            "claude-final-exit" | "gemini-final-exit" => {
+                println!("{}", json!({"phase": "fixture-progress"}));
+                let result = if mode == "claude-final-exit" {
+                    json!({"type": "result", "is_error": false, "result": "最後の本文です。"})
+                } else {
+                    json!({"event": "result", "result": {"status": "SUCCESS", "response": "最後の本文です。"}})
+                };
+                // The final valid JSON need not have a trailing newline.
+                print!("{result}");
+                std::io::stdout().flush().unwrap();
+                std::process::exit(0);
+            }
+            "waiting" => thread::sleep(Duration::from_secs(5)),
+            _ => panic!("unknown exit fixture mode"),
+        }
+    }
+
+    #[test]
+    fn json_line_stderr_only_exit_returns_detail_without_waiting_for_deadline() {
+        let mut client = StreamClient {
+            process: JsonLineProcess::spawn(exit_fixture_command("stderr-exit")).unwrap(),
+        };
+        let started = Instant::now();
+        let error = client
+            .rewrite(
+                "人工的なテスト文",
+                Duration::from_secs(2),
+                claude_input,
+                claude_final_result,
+            )
+            .unwrap_err();
+        assert_eq!(error, "fixture startup rejection");
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn json_line_silent_exit_is_reported_before_the_deadline() {
+        let mut process = JsonLineProcess::spawn(exit_fixture_command("silent-exit")).unwrap();
+        process.send(&json!({"id": 0, "method": "initialize"})).unwrap();
+        let started = Instant::now();
+        let error = wait_for_response(&process, 0, started + Duration::from_secs(2)).unwrap_err();
+        assert_eq!(error, "CLIとの常駐接続が終了しました。");
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn json_line_exit_waits_briefly_for_stderr_to_finish() {
+        let mut process =
+            JsonLineProcess::spawn(exit_fixture_command("delayed-stderr-exit")).unwrap();
+        process.send(&json!({"id": 0, "method": "initialize"})).unwrap();
+        let started = Instant::now();
+        let error = process.receive(started + Duration::from_secs(2)).unwrap_err();
+        assert_eq!(error, "fixture delayed startup rejection");
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn json_line_final_response_before_exit_survives_queued_progress() {
+        for mode in ["claude-final-exit", "gemini-final-exit"] {
+            let mut client = StreamClient {
+                process: JsonLineProcess::spawn(exit_fixture_command(mode)).unwrap(),
+            };
+            let result = client.rewrite(
+                "人工的なテスト文",
+                Duration::from_secs(2),
+                claude_input,
+                |message| {
+                    if message["phase"] == "fixture-progress" {
+                        // Let the CLI finish before handling its queued final response.
+                        thread::sleep(Duration::from_millis(100));
+                    }
+                    if message.get("event").is_some() {
+                        gemini_final_result(message)
+                    } else {
+                        claude_final_result(message)
+                    }
+                },
+            );
+            assert_eq!(result.unwrap(), "最後の本文です。", "mode={mode}");
+        }
+    }
+
+    #[test]
+    fn json_line_live_unresponsive_process_still_observes_the_deadline() {
+        let mut process = JsonLineProcess::spawn(exit_fixture_command("waiting")).unwrap();
+        process.send(&json!({"id": 0, "method": "initialize"})).unwrap();
+        let started = Instant::now();
+        let error = process
+            .receive(started + Duration::from_millis(150))
+            .unwrap_err();
+        assert!(error.contains("時間切れ"));
+        assert!(started.elapsed() >= Duration::from_millis(150));
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(process.is_alive());
+    }
+
     #[test]
     fn codex_fixture() {
         let Ok(mode) = std::env::var("DOON_VOICE_TEST_CODEX_FIXTURE") else {

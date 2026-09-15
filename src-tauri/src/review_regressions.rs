@@ -1,6 +1,58 @@
 use super::*;
 
 #[test]
+fn recognized_original_preserves_names_fillers_and_literal_tags() {
+    for text in [
+        "あーちゃんに連絡してください。",
+        "あーだこうだ言わないでください。",
+        "えーと、明日の会議です。",
+        "終了タグは</think>で、その前の文章も保持します。",
+        "<think>引用したタグです</think>",
+    ] {
+        let recognized = finish_whisper_text(text, None).unwrap();
+        assert_eq!(recognized.text, text, "original must stay recoverable");
+        assert_eq!(clean(&recognized.text).unwrap(), text, "raw output must match original");
+        let mut runtime = BackgroundVoiceRuntime::new(VoiceRuntimeConfig::default());
+        runtime.transcript = recognized.text;
+        runtime.recovery_pending = true;
+        assert_eq!(runtime.snapshot().transcript, text);
+        runtime.acknowledge_result();
+        assert_eq!(runtime.snapshot().transcript, text);
+    }
+}
+
+#[test]
+fn active_recording_rejects_changed_settings_without_losing_confirmed_configuration() {
+    for phase in [BackgroundVoicePhase::Starting, BackgroundVoicePhase::Recording, BackgroundVoicePhase::Processing] {
+        let mut runtime = BackgroundVoiceRuntime::new(VoiceRuntimeConfig::default());
+        runtime.configuration_ready = true;
+        runtime.phase = phase;
+        assert!(runtime.configure(OutputTarget::Raw, vec![], |_| panic!("must not save during a recording")).is_err());
+        assert!(runtime.configure(OutputTarget::Codex, vec!["新しい語".into()], |_| panic!("must not change active dictionary")).is_err());
+        assert_eq!(runtime.config.target, OutputTarget::Codex);
+        assert!(runtime.config.dictionary.is_empty());
+        assert!(runtime.configuration_ready);
+        assert!(!runtime.configure(OutputTarget::Codex, vec![], |_| panic!("identical settings need no write")).unwrap());
+    }
+}
+
+#[test]
+fn idle_settings_are_committed_only_after_successful_persistence() {
+    let mut runtime = BackgroundVoiceRuntime::new(VoiceRuntimeConfig::default());
+    runtime.configuration_ready = true;
+    assert!(runtime.configure(OutputTarget::Raw, vec![], |_| Err("disk full".into())).is_err());
+    assert_eq!(runtime.config.target, OutputTarget::Codex);
+    assert!(!runtime.configuration_ready);
+    assert!(runtime.configure(OutputTarget::Raw, vec!["DOON".into()], |config| {
+        assert_eq!(config.target, OutputTarget::Raw);
+        assert_eq!(config.dictionary, vec!["DOON"]);
+        Ok(())
+    }).unwrap());
+    assert_eq!(runtime.config.target, OutputTarget::Raw);
+    assert!(runtime.configuration_ready);
+}
+
+#[test]
 fn meaning_guard_preserves_negation_signs_urls_and_complete_sentences() {
     for (input, output) in [
         ("明日の会議はキャンセルしないでください。", "明日の会議はキャンセルしてください。"),

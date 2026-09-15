@@ -28,8 +28,23 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
     calls: [], errors: [], authenticated, clipboard: "", clipboardFails: false,
     registeredShortcut: null, snapshot: { ...idle, ...snapshot },
     deferClipboard: false, pendingClipboard: null, deferConfigs: false, rejectConfigs: false,
-    pendingConfigs: [], activeTarget: "codex", deferNextClear: false, pendingClear: null,
-    resolveConfig(index = 0) { const job = this.pendingConfigs.splice(index, 1)[0]; this.activeTarget = job.args.target; job.resolve(); },
+    pendingConfigs: [], activeTarget: "codex", activeDictionary: dictionary,
+    deferConfigReplies: false, pendingConfigReplies: [], deferNextClear: false, pendingClear: null,
+    commitConfig(args) {
+      const dictionary = [...new Set(args.dictionary.map((term) => term.trim()))];
+      if (this.snapshot.state !== "idle") {
+        if (args.target === this.activeTarget && JSON.stringify(dictionary) === JSON.stringify(this.activeDictionary)) return;
+        throw new Error("音声入力中は設定を変更できません。処理が終わってから変更してください");
+      }
+      if (this.rejectConfigs) throw new Error("設定を保存できませんでした");
+      this.activeTarget = args.target;
+      this.activeDictionary = dictionary;
+    },
+    resolveConfig(index = 0) {
+      const job = this.pendingConfigs.splice(index, 1)[0];
+      try { this.commitConfig(job.args); job.resolve(); }
+      catch (error) { job.reject(error); }
+    },
     publish(patch) {
       this.snapshot = { ...this.snapshot, ...patch };
       this.emit("background-voice-state", this.snapshot);
@@ -63,9 +78,9 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
         case "direct_input_status": return true;
         case "background_voice_status": return f.snapshot;
         case "configure_background_voice":
-          if (f.rejectConfigs) throw new Error("設定を保存できませんでした");
-          if (f.deferConfigs) return new Promise((resolve) => f.pendingConfigs.push({ args, resolve }));
-          f.activeTarget = args.target;
+          if (f.deferConfigs) return new Promise((resolve, reject) => f.pendingConfigs.push({ args, resolve, reject }));
+          f.commitConfig(args);
+          if (f.deferConfigReplies) return new Promise((resolve) => f.pendingConfigReplies.push(resolve));
           return;
         case "set_voice_shortcut": f.registeredShortcut = args.shortcut; return;
         case "clear_voice_shortcut":
@@ -170,6 +185,87 @@ try {
     const page = await pageFor({ snapshot: { ...recovery, state: "recording", output: "前回の結果" } });
     for (const name of ["原文をコピー", "文章をコピー", "再試行", "破棄"]) assert.equal(await page.getByRole("button", { name, exact: true }).isDisabled(), true);
     assert.equal(await page.getByRole("button", { name: "音声入力を停止" }).isEnabled(), true);
+    await page.close();
+  });
+
+  for (const state of ["starting", "recording", "processing"]) {
+    for (const view of ["ホーム", "接続と設定"]) {
+      await check(`DV-002: ${state} locks all AI choices in ${view} and idle restores them`, async () => {
+        const page = await pageFor({ snapshot: { state } });
+        await page.getByRole("button", { name: view, exact: true }).click();
+        const choices = page.locator(view === "ホーム" ? ".destination-list > button" : ".output-choice-list > button");
+        assert.equal(await choices.count(), 5);
+        for (const choice of await choices.all()) assert.equal(await choice.isDisabled(), true);
+        const callsBefore = await page.evaluate(() => window.fixture.calls.length);
+        await choices.evaluateAll((buttons) => buttons.forEach((button) => button.click()));
+        assert.equal(await page.evaluate((start) => window.fixture.calls.slice(start).some(({ command }) => command === "configure_background_voice"), callsBefore), false);
+        assert.equal(await page.evaluate(() => window.fixture.activeTarget), "codex");
+
+        await page.evaluate(() => window.fixture.publish({ state: "idle" }));
+        for (const [index, target] of ["raw", "codex", "claude", "gemini", "local"].entries()) {
+          await choices.nth(index).click();
+          await page.waitForFunction((expected) => localStorage.getItem("doon-voice-output-target") === expected, target);
+          assert.equal(await page.evaluate(() => window.fixture.activeTarget), target);
+        }
+        await page.close();
+      });
+    }
+  }
+
+  for (const view of ["ホーム", "接続と設定"]) {
+    await check(`DV-002: ${view} rejects a click when a shortcut starts before React rerenders`, async () => {
+      const page = await pageFor();
+      await page.getByRole("button", { name: view, exact: true }).click();
+      await page.waitForFunction(() => localStorage.getItem("doon-voice-output-target") === "codex");
+      const callsBefore = await page.evaluate(() => window.fixture.calls.length);
+      await page.evaluate((selector) => {
+        const button = document.querySelector(selector);
+        window.fixture.publish({ state: "starting", generation: 2 });
+        button.click();
+      }, view === "ホーム" ? ".destination-list > button" : ".output-choice-list > button");
+      await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      assert.equal(await page.evaluate((start) => window.fixture.calls.slice(start).some(({ command }) => command === "configure_background_voice"), callsBefore), false);
+      assert.equal(await page.evaluate(() => window.fixture.activeTarget), "codex");
+      assert.equal(await page.evaluate(() => localStorage.getItem("doon-voice-output-target")), "codex");
+      await page.close();
+    });
+  }
+
+  await check("DV-002: a saved configuration ACK survives shortcut start, but the next queued change is cancelled", async () => {
+    const page = await pageFor();
+    await page.waitForFunction(() => localStorage.getItem("doon-voice-output-target") === "codex");
+    await page.evaluate(() => { window.fixture.deferConfigReplies = true; });
+    await page.getByRole("button", { name: /^Claude/ }).click();
+    await page.waitForFunction(() => window.fixture.pendingConfigReplies.length === 1);
+    await page.getByRole("button", { name: /^Gemini/ }).click();
+    await page.evaluate(() => {
+      window.fixture.publish({ state: "starting", generation: 2 });
+      window.fixture.deferConfigReplies = false;
+      window.fixture.pendingConfigReplies.shift()();
+    });
+    await page.getByText("設定を保存しています", { exact: true }).waitFor({ state: "detached" });
+    assert.equal(await page.evaluate(() => window.fixture.activeTarget), "claude");
+    assert.equal(await page.evaluate(() => localStorage.getItem("doon-voice-output-target")), "claude");
+    assert.equal(await page.getByRole("button", { name: /^Claude/ }).getAttribute("aria-pressed"), "true");
+    assert.equal(await page.evaluate(() => window.fixture.calls.some(({ command, args }) => command === "configure_background_voice" && args.target === "gemini")), false);
+    assert.equal(await page.getByRole("button", { name: "設定を再保存", exact: true }).count(), 0);
+    await page.evaluate(() => window.fixture.publish({ state: "idle" }));
+    await page.getByRole("button", { name: /^Gemini/ }).click();
+    await page.waitForFunction(() => localStorage.getItem("doon-voice-output-target") === "gemini");
+    await page.close();
+  });
+
+  await check("DV-002: a shortcut racing an in-flight configuration keeps the previous acknowledged selection", async () => {
+    const page = await pageFor();
+    await page.waitForFunction(() => localStorage.getItem("doon-voice-output-target") === "codex");
+    await page.evaluate(() => { window.fixture.deferConfigs = true; });
+    await page.getByRole("button", { name: /AIなし/ }).click();
+    await page.waitForFunction(() => window.fixture.pendingConfigs.length === 1);
+    await page.evaluate(() => { window.fixture.publish({ state: "processing", generation: 2 }); window.fixture.resolveConfig(); });
+    await page.getByText("設定を保存しています", { exact: true }).waitFor({ state: "detached" });
+    assert.equal(await page.evaluate(() => window.fixture.activeTarget), "codex");
+    assert.equal(await page.evaluate(() => localStorage.getItem("doon-voice-output-target")), "codex");
+    assert.equal(await page.getByRole("button", { name: /^ChatGPT/ }).getAttribute("aria-pressed"), "true");
     await page.close();
   });
 
