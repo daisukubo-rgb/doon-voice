@@ -41,6 +41,13 @@ try {
     // Ad-hoc signing needs no certificate, but its bundle seal must be valid.
     const application = resolve(resources, "..", "..");
     execFileSync("codesign", ["--verify", "--deep", "--strict", "--verbose=2", application], { stdio: "inherit" });
+    const entitlements = execFileSync("codesign", ["-d", "--entitlements", ":-", application], { encoding: "utf8", timeout: 10_000, stdio: "pipe" });
+    if (!entitlements.trim()) throw new Error("署名済みアプリにentitlementがありません。");
+    const declared = JSON.parse(execFileSync("plutil", ["-convert", "json", "-o", "-", "--", "-"], { input: entitlements, encoding: "utf8", timeout: 10_000 }));
+    if (declared["com.apple.security.device.audio-input"] !== true) {
+      throw new Error("署名済みアプリにマイク利用のentitlementがありません。");
+    }
+    console.log("PASS: 署名済みアプリのマイク利用entitlementを確認しました。");
     // A valid seal does not prove that Hardened Runtime can load the engine.
     // Exercise the signed, installed payload before declaring a DMG usable.
     execFileSync(join(application, "Contents", "MacOS", "whisper-cli"), ["--help"], { timeout: 10_000, stdio: "pipe" });

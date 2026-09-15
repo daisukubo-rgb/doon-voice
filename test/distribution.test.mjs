@@ -12,6 +12,15 @@ import { verifyLicenses } from "../scripts/check-licenses.mjs";
 const project = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const version = JSON.parse(readFileSync(join(project, "package.json"), "utf8")).version;
 
+test("macOS配布はHardened Runtimeでマイクを使うentitlementを宣言する", { skip: process.platform !== "darwin" }, () => {
+  const config = JSON.parse(readFileSync(join(project, "src-tauri", "tauri.conf.json"), "utf8"));
+  assert.equal(typeof config.bundle.macOS.entitlements, "string", "マイクentitlementの指定がありません");
+  assert.notEqual(config.bundle.macOS.hardenedRuntime, false);
+  const result = spawnSync("plutil", ["-convert", "json", "-o", "-", join(project, "src-tauri", config.bundle.macOS.entitlements)], { encoding: "utf8", timeout: 10_000 });
+  assert.equal(result.status, 0, result.error?.message || result.stderr);
+  assert.equal(JSON.parse(result.stdout)["com.apple.security.device.audio-input"], true);
+});
+
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "doon distribution & spaces "));
   t.after(() => rmSync(root, { recursive: true, force: true }));
