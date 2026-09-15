@@ -53,6 +53,22 @@ fn idle_settings_are_committed_only_after_successful_persistence() {
 }
 
 #[test]
+fn exiting_keeps_active_recordings_and_unrecovered_text_available() {
+    let mut runtime = BackgroundVoiceRuntime::new(VoiceRuntimeConfig::default());
+    assert!(runtime.exit_block_reason().is_none());
+    for phase in [BackgroundVoicePhase::Starting, BackgroundVoicePhase::Recording, BackgroundVoicePhase::Processing] {
+        runtime.phase = phase;
+        assert!(runtime.exit_block_reason().is_some());
+    }
+    runtime.phase = BackgroundVoicePhase::Idle;
+    runtime.transcript = "回収する原文".into();
+    runtime.recovery_pending = true;
+    assert!(runtime.exit_block_reason().is_some());
+    runtime.acknowledge_result();
+    assert!(runtime.exit_block_reason().is_none());
+}
+
+#[test]
 fn meaning_guard_preserves_negation_signs_urls_and_complete_sentences() {
     for (input, output) in [
         ("明日の会議はキャンセルしないでください。", "明日の会議はキャンセルしてください。"),
