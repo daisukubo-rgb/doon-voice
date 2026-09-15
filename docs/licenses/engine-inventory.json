@@ -1,14 +1,14 @@
 {
   "source": "https://github.com/ggml-org/whisper.cpp/releases/tag/v1.9.2",
-  "sourceNotes": "Windowsのwhisper/ggml/parakeet/SDL2は公式whisper-bin-x64.zipとSHA-256一致を確認。SDL2はPEバージョン2.28.5と上流release workflowが一致。MSVC DLLは同ZIPには含まれず出所確認が残る。macOSエンジンのバージョンは同梱名に基づき、再現ビルドによる来歴検証は未実施。",
+  "sourceNotes": "Windowsのwhisper/ggml/parakeet/SDL2は公式whisper-bin-x64.zipとSHA-256一致を確認。SDL2はPEバージョン2.28.5と上流release workflowが一致。MSVC DLLは同ZIPには含まれず出所確認が残る。macOS静的エンジンの固定ソース・ビルド条件・ハッシュはsrc-tauri/resources/engine/macos-build.jsonに記録。旧同梱dylibは静的エンジンでは使用しない。",
   "files": [
     {
       "path": "src-tauri/binaries/whisper-cli-aarch64-apple-darwin",
-      "sha256": "0958e44da7cdc7c901e4bd246f5c3c2b7ada83ccc51b332b88d19f41ca141dbd"
+      "sha256": "7ee1cac54f2a70675fa7c494a11aaa9bc34179c0431945e9d4eac68a525ed9a3"
     },
     {
       "path": "src-tauri/binaries/whisper-cli-x86_64-apple-darwin",
-      "sha256": "e9025b02feaa9c01c4a4a79d01f77f6693c5315d3a7472bac09b15e33a04605a"
+      "sha256": "6b58d04fabd86e0f968b870ce1c59a1988d761c0b24fe5533a273238086ea37e"
     },
     {
       "path": "src-tauri/binaries/whisper-cli-x86_64-pc-windows-msvc.exe",
@@ -46,6 +46,10 @@
     {
       "path": "src-tauri/resources/engine/macos-arm64/whisper/libwhisper.1.9.2.dylib",
       "sha256": "32e6ae0b63e8dac5b9b5bd1ba3b1c3208f110d86fadaf71476bbfa231129c9c7"
+    },
+    {
+      "path": "src-tauri/resources/engine/macos-build.json",
+      "sha256": "2967f91e83aab35ed4c8e8f4c0d244d3b8daeaa038984d2a14aeac2ae00c0d56"
     },
     {
       "path": "src-tauri/resources/engine/macos-x64/whisper/ggml-metal-embed.metal",

@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "version": "1.9.2",
+  "source": "https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v1.9.2.tar.gz",
+  "archiveSha256": "a6abd064fcca8b85e794d205abf328c522e9451db43a3eadc178b883b7d0e9cd",
+  "builtAt": "2026-09-15",
+  "buildTarget": "whisper-cli",
+  "compiler": "Apple clang version 17.0.0 (clang-1700.4.4.1)",
+  "cmake": "cmake version 4.4.2",
+  "targets": [
+    {
+      "target": "aarch64-apple-darwin",
+      "path": "src-tauri/binaries/whisper-cli-aarch64-apple-darwin",
+      "sha256": "7ee1cac54f2a70675fa7c494a11aaa9bc34179c0431945e9d4eac68a525ed9a3",
+      "options": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "12.0",
+        "BUILD_SHARED_LIBS": "OFF",
+        "GGML_BACKEND_DL": "OFF",
+        "GGML_STATIC": "OFF",
+        "GGML_NATIVE": "OFF",
+        "GGML_OPENMP": "OFF",
+        "GGML_METAL": "ON",
+        "GGML_METAL_EMBED_LIBRARY": "ON",
+        "GGML_BLAS": "ON",
+        "GGML_BLAS_VENDOR": "Apple",
+        "WHISPER_BUILD_TESTS": "OFF",
+        "WHISPER_BUILD_SERVER": "OFF",
+        "CMAKE_OSX_ARCHITECTURES": "arm64"
+      }
+    },
+    {
+      "target": "x86_64-apple-darwin",
+      "path": "src-tauri/binaries/whisper-cli-x86_64-apple-darwin",
+      "sha256": "6b58d04fabd86e0f968b870ce1c59a1988d761c0b24fe5533a273238086ea37e",
+      "options": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "12.0",
+        "BUILD_SHARED_LIBS": "OFF",
+        "GGML_BACKEND_DL": "OFF",
+        "GGML_STATIC": "OFF",
+        "GGML_NATIVE": "OFF",
+        "GGML_OPENMP": "OFF",
+        "GGML_METAL": "ON",
+        "GGML_METAL_EMBED_LIBRARY": "ON",
+        "GGML_BLAS": "ON",
+        "GGML_BLAS_VENDOR": "Apple",
+        "WHISPER_BUILD_TESTS": "OFF",
+        "WHISPER_BUILD_SERVER": "OFF",
+        "CMAKE_OSX_ARCHITECTURES": "x86_64",
+        "GGML_AVX": "OFF",
+        "GGML_AVX2": "OFF",
+        "GGML_FMA": "OFF",
+        "GGML_F16C": "OFF",
+        "GGML_BMI2": "OFF",
+        "GGML_AVX512": "OFF",
+        "GGML_AVX512_VBMI": "OFF",
+        "GGML_AVX512_VNNI": "OFF",
+        "GGML_AVX512_BF16": "OFF",
+        "GGML_AVX_VNNI": "OFF"
+      }
+    }
+  ],
+  "notes": "Whisper/GGML/Metal shaderを静的組込。動的依存はOS標準のみ。配布時にTauriがHardened Runtime付きで再署名。古いengine/以下のdylibはこの実行ファイルでは使用しない。"
+}

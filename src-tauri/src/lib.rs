@@ -1496,7 +1496,10 @@ async fn transcribe_recording(
     let mut wav = tauri::async_runtime::spawn_blocking(move || {
         check_cancelled(&file_cancelled)?;
         if !wav_contains_speech(&audio) {
-            return Err("音声が検出されませんでした。話してからもう一度お試しください。".into());
+            return Err(
+                "音声を確認できませんでした。入力マイクと音量を確認し、少し長めに話してください。"
+                    .into(),
+            );
         }
         check_cancelled(&file_cancelled)?;
         OwnedAudioFile::create(&base, &audio)

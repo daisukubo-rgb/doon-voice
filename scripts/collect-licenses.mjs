@@ -133,7 +133,7 @@ try {
 } finally {
   rmSync(temporary, { recursive: true, force: true });
 }
-const engineManifest = { source: "https://github.com/ggml-org/whisper.cpp/releases/tag/v1.9.2", sourceNotes: "Windowsのwhisper/ggml/parakeet/SDL2は公式whisper-bin-x64.zipとSHA-256一致を確認。SDL2はPEバージョン2.28.5と上流release workflowが一致。MSVC DLLは同ZIPには含まれず出所確認が残る。macOSエンジンのバージョンは同梱名に基づき、再現ビルドによる来歴検証は未実施。", files: binaryInventory };
+const engineManifest = { source: "https://github.com/ggml-org/whisper.cpp/releases/tag/v1.9.2", sourceNotes: "Windowsのwhisper/ggml/parakeet/SDL2は公式whisper-bin-x64.zipとSHA-256一致を確認。SDL2はPEバージョン2.28.5と上流release workflowが一致。MSVC DLLは同ZIPには含まれず出所確認が残る。macOS静的エンジンの固定ソース・ビルド条件・ハッシュはsrc-tauri/resources/engine/macos-build.jsonに記録。旧同梱dylibは静的エンジンでは使用しない。", files: binaryInventory };
 const engineManifestData = `${JSON.stringify(engineManifest, null, 2)}\n`;
 inventory.engineManifest = storeFile("engine-inventory.json", engineManifestData, "repository bundled engine files");
 for (const path of ["package-lock.json", "src-tauri/Cargo.lock"]) inventory.locks[path] = hash(readFileSync(join(root, path)));

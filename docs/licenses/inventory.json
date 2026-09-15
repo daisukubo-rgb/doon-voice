@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "locks": {
-    "package-lock.json": "f2c5038f3b644703b5508521b600b605e65479a39148f83e57ffaf6ccd98b8b0",
-    "src-tauri/Cargo.lock": "339a917470a9ad12a035310968cd6674aac39f96598385b9100164ca1c88f9be"
+    "package-lock.json": "0120bdff08a434429a71f4fc107cab79358d751de636c4d3541c1f1381b5ed92",
+    "src-tauri/Cargo.lock": "6d33eb9b9b31ee24962215e01bb6655599417b916f168f744bb72af49562c603"
   },
   "packages": [
     {
@@ -6507,7 +6507,7 @@
   ],
   "engineManifest": {
     "path": "engine-inventory.json",
-    "sha256": "6ee026ca87f3bb4e351e37bc0e33e994186912f2764bdcdd116ac4ccafc213f7",
+    "sha256": "4cbe005eb24f377089d1bacead769dc5a4ea8a2154381f7166b2e18aeb82baff",
     "source": "repository bundled engine files"
   }
 }
