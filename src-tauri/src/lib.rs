@@ -1271,57 +1271,42 @@ fn wav_contains_speech(audio: &[u8]) -> bool {
     if audio.len() <= 44 || &audio[..4] != b"RIFF" || &audio[8..12] != b"WAVE" {
         return false;
     }
-    // Keep only one RMS value per frame, not a second floating-point copy of
-    // the complete recording (which can be hundreds of megabytes).
-    let mut peak = 0.0_f32;
-    let mut squares = 0.0_f64;
-    let mut count = 0_usize;
-    let mut frame_levels = Vec::with_capacity((audio.len() - 44) / 640);
-    for frame in audio[44..].chunks(640) {
-        let mut frame_squares = 0.0_f64;
-        for pair in frame.chunks_exact(2) {
-            let sample = i16::from_le_bytes([pair[0], pair[1]]) as f32 / 32_768.0;
-            peak = peak.max(sample.abs());
-            frame_squares += f64::from(sample) * f64::from(sample);
-            count += 1;
-        }
-        squares += frame_squares;
-        if frame.len() == 640 {
-            frame_levels.push((frame_squares / 320.0).sqrt() as f32);
-        }
-    }
-    if count == 0 {
+    // Native recording produces a 44-byte-header, mono, signed 16-bit PCM WAV.
+    let format = u16::from_le_bytes([audio[20], audio[21]]);
+    let channels = u16::from_le_bytes([audio[22], audio[23]]);
+    let sample_rate = u32::from_le_bytes([audio[24], audio[25], audio[26], audio[27]]);
+    let bits_per_sample = u16::from_le_bytes([audio[34], audio[35]]);
+    if format != 1 || channels != 1 || bits_per_sample != 16 || sample_rate == 0 {
         return false;
     }
-    let rms = (squares / count as f64).sqrt() as f32;
-    if frame_levels.len() < 2 {
-        return false;
-    }
-    let mut sorted_levels = frame_levels.clone();
-    sorted_levels.sort_by(f32::total_cmp);
-    // Use the quieter fifth of frames as the noise floor. A median-based floor
-    // incorrectly treats a recording filled with normal speech as "noise" and
-    // rejects quiet microphones.
-    let baseline = sorted_levels[sorted_levels.len() / 5];
-    let speech_threshold = (baseline * 2.0 + 0.012).max(0.018);
-    let mut active_frames = 0;
-    let mut longest_active_run = 0;
-    let mut active_run = 0;
-    for level in &frame_levels {
-        if *level >= speech_threshold && *level >= 0.02 {
-            active_frames += 1;
-            active_run += 1;
-            longest_active_run = longest_active_run.max(active_run);
+
+    // This only excludes near-silence and isolated clicks; amplitude cannot
+    // establish whether a sound is speech. Leave recognition to Whisper.
+    // Ignore a few PCM quantization steps, not quiet but sustained input.
+    const QUANTIZATION_FLOOR: i32 = 4;
+    let frame_samples = (sample_rate as usize).div_ceil(50); // 20 ms at the actual rate.
+    let minimum_active_samples = (u64::from(sample_rate) * 60).div_ceil(1000) as usize;
+    let mut sustained_samples = 0_usize;
+    for frame in audio[44..].chunks(frame_samples * 2) {
+        let samples = frame.len() / 2;
+        let active_samples = frame
+            .chunks_exact(2)
+            .filter(|pair| {
+                i32::from(i16::from_le_bytes([pair[0], pair[1]])).abs() > QUANTIZATION_FLOOR
+            })
+            .count();
+        // Sparse impulses cannot bridge otherwise silent frames. Count actual
+        // active samples, so a short click crossing frame edges stays short.
+        if active_samples > 0 && active_samples * 4 >= samples {
+            sustained_samples += active_samples;
+            if sustained_samples >= minimum_active_samples {
+                return true;
+            }
         } else {
-            active_run = 0;
+            sustained_samples = 0;
         }
     }
-    let sustained_speech = active_frames >= 3 && longest_active_run >= 2;
-    // If the user speaks for the whole clip, every frame can be above the
-    // noise floor. Treat that continuous, moderately loud signal as speech;
-    // the baseline guard keeps a two-frame click from passing this fallback.
-    let continuous_loud_speech = baseline >= 0.025 && rms >= 0.02;
-    sustained_speech || continuous_loud_speech || (peak >= 0.08 && rms >= 0.015)
+    false
 }
 
 fn normalize_transcription(text: &str) -> Result<String, String> {
@@ -2871,7 +2856,8 @@ mod tests {
     #[test]
     fn silence_gate_rejects_quantization_noise_and_isolated_impulses() {
         for sample_rate in [8_000, 16_000, 44_100, 48_000, 96_000] {
-            let silence = native_audio::encode_pcm_wav(&vec![0.0; sample_rate as usize], sample_rate);
+            let silence =
+                native_audio::encode_pcm_wav(&vec![0.0; sample_rate as usize], sample_rate);
             assert!(!wav_contains_speech(&silence));
             let mut quantization = silence.clone();
             for (index, sample) in quantization[44..].chunks_exact_mut(2).enumerate() {

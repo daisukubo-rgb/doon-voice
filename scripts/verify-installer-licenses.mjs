@@ -39,7 +39,12 @@ try {
   if (!resources) throw new Error("展開したインストーラー内にlicenses/inventory.jsonがありません。");
   if (process.platform === "darwin") {
     // Ad-hoc signing needs no certificate, but its bundle seal must be valid.
-    execFileSync("codesign", ["--verify", "--deep", "--strict", "--verbose=2", resolve(resources, "..", "..")], { stdio: "inherit" });
+    const application = resolve(resources, "..", "..");
+    execFileSync("codesign", ["--verify", "--deep", "--strict", "--verbose=2", application], { stdio: "inherit" });
+    // A valid seal does not prove that Hardened Runtime can load the engine.
+    // Exercise the signed, installed payload before declaring a DMG usable.
+    execFileSync(join(application, "Contents", "MacOS", "whisper-cli"), ["--help"], { timeout: 10_000, stdio: "pipe" });
+    console.log("PASS: インストーラー内の署名済み音声認識エンジンが起動しました。");
   }
   const count = verifyLicenses(resources);
   console.log(`PASS: インストーラー内の${count}件のライセンス原文を確認しました。`);
