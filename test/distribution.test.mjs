@@ -24,6 +24,23 @@ function fixture(t) {
   return root;
 }
 
+test("macOS同梱エンジンは配布時のHardened Runtime署名後も起動する", { skip: process.platform !== "darwin" }, (t) => {
+  const root = mkdtempSync(join(tmpdir(), "doon signed engine "));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const architecture = process.arch === "arm64" ? "aarch64" : "x86_64";
+  const platform = process.arch === "arm64" ? "macos-arm64" : "macos-x64";
+  const executable = join(root, "Contents", "MacOS", "whisper-cli");
+  const libraries = join(root, "Contents", "Resources", "engine", platform, "whisper");
+  mkdirSync(join(root, "Contents", "MacOS"), { recursive: true });
+  copyFileSync(join(project, "src-tauri", "binaries", `whisper-cli-${architecture}-apple-darwin`), executable);
+  cpSync(join(project, "src-tauri", "resources", "engine", platform, "whisper"), libraries, { recursive: true });
+  const signed = spawnSync("codesign", ["--force", "--sign", "-", "--options", "runtime", executable], { encoding: "utf8", timeout: 10_000 });
+  assert.equal(signed.status, 0, signed.error?.message || signed.stderr);
+  const result = spawnSync(executable, ["--help"], { cwd: libraries, env: { ...process.env, DYLD_LIBRARY_PATH: libraries }, encoding: "utf8", timeout: 10_000 });
+  assert.equal(result.status, 0, result.error?.message || result.stderr || result.signal);
+  assert.match(result.stdout + result.stderr, /--model/);
+});
+
 test("実セットアップはnpmのJavaScriptエントリーをNodeで実行する", (t) => {
   const root = fixture(t);
   const npmCli = join(root, "npm-cli.js");
