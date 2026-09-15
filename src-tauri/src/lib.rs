@@ -2795,9 +2795,7 @@ mod tests {
 
     #[test]
     fn 無音録音は文字起こしへ送らない() {
-        let mut silence = vec![0_u8; 44 + 320 * 6 * 2];
-        silence[..4].copy_from_slice(b"RIFF");
-        silence[8..12].copy_from_slice(b"WAVE");
+        let silence = native_audio::encode_pcm_wav(&vec![0.0; 320 * 6], 16_000);
         assert!(!wav_contains_speech(&silence));
 
         let mut speech = silence.clone();
@@ -2829,6 +2827,79 @@ mod tests {
             sample.copy_from_slice(&1_966_i16.to_le_bytes());
         }
         assert!(!wav_contains_speech(&transient));
+    }
+
+    fn synthetic_signal(sample_rate: u32, amplitude: f32, milliseconds: usize) -> Vec<f32> {
+        (0..sample_rate as usize * milliseconds / 1000)
+            .map(|sample| {
+                amplitude
+                    * (std::f32::consts::TAU * 220.0 * sample as f32 / sample_rate as f32).sin()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn silence_gate_keeps_low_gain_signal_at_each_sample_rate() {
+        for sample_rate in [8_000, 16_000, 44_100, 48_000, 96_000] {
+            for amplitude in [0.0008, 0.004, 0.015, 0.033, 0.2] {
+                let audio = native_audio::encode_pcm_wav(
+                    &synthetic_signal(sample_rate, amplitude, 300),
+                    sample_rate,
+                );
+                assert!(
+                    wav_contains_speech(&audio),
+                    "sustained signal must reach Whisper: rate={sample_rate}, amplitude={amplitude}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn silence_gate_does_not_require_leading_silence() {
+        for sample_rate in [16_000, 48_000] {
+            for leading_ms in [0, 100, 300, 1000] {
+                let mut samples = vec![0.0; sample_rate as usize * leading_ms / 1000];
+                samples.extend(synthetic_signal(sample_rate, 0.033, 1000));
+                assert!(
+                    wav_contains_speech(&native_audio::encode_pcm_wav(&samples, sample_rate)),
+                    "leading silence must not determine acceptance: rate={sample_rate}, leading_ms={leading_ms}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn silence_gate_rejects_quantization_noise_and_isolated_impulses() {
+        for sample_rate in [8_000, 16_000, 44_100, 48_000, 96_000] {
+            let silence = native_audio::encode_pcm_wav(&vec![0.0; sample_rate as usize], sample_rate);
+            assert!(!wav_contains_speech(&silence));
+            let mut quantization = silence.clone();
+            for (index, sample) in quantization[44..].chunks_exact_mut(2).enumerate() {
+                let value = if index % 2 == 0 { 2_i16 } else { -2_i16 };
+                sample.copy_from_slice(&value.to_le_bytes());
+            }
+            assert!(!wav_contains_speech(&quantization));
+            let mut impulse = silence;
+            let position = 44 + (sample_rate as usize / 10) * 2;
+            impulse[position..position + 2].copy_from_slice(&30_000_i16.to_le_bytes());
+            assert!(!wav_contains_speech(&impulse));
+        }
+    }
+
+    #[test]
+    fn silence_gate_measures_short_clicks_in_time_at_each_sample_rate() {
+        for sample_rate in [8_000, 16_000, 44_100, 48_000, 96_000] {
+            for click_ms in [1, 10, 20, 40] {
+                // Offset the click so it can cross frame boundaries.
+                let mut samples = vec![0.0; sample_rate as usize * 13 / 1000];
+                samples.extend(synthetic_signal(sample_rate, 0.9, click_ms));
+                samples.resize(sample_rate as usize, 0.0);
+                assert!(
+                    !wav_contains_speech(&native_audio::encode_pcm_wav(&samples, sample_rate)),
+                    "an isolated short click must not pass: rate={sample_rate}, click_ms={click_ms}"
+                );
+            }
+        }
     }
 
     #[test]
