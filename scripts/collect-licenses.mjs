@@ -5,19 +5,19 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isLicenseDocument } from "./license-files.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const output = join(root, "docs", "licenses");
 const hash = (data) => createHash("sha256").update(data).digest("hex");
 const fetchSource = (url) => fetch(url, { signal: AbortSignal.timeout(120_000) });
 const json = (path) => JSON.parse(readFileSync(path, "utf8"));
-const licenseName = /^(licen[sc]e|notice|copyright|copying)(s|[._-].*)?$/i;
 const inventory = { schema: 1, locks: {}, packages: [], reviewNotes: [] };
 
 function licenseFiles(directory, prefix = "") {
   return readdirSync(join(directory, prefix), { withFileTypes: true }).flatMap((entry) => {
     const path = join(prefix, entry.name);
-    if (entry.isFile() && licenseName.test(entry.name)) return [path];
+    if (entry.isFile() && isLicenseDocument(entry.name)) return [path];
     if (entry.isDirectory() && !["node_modules", ".git", "target"].includes(entry.name)) return licenseFiles(directory, path);
     return [];
   }).sort();
@@ -64,7 +64,7 @@ async function upstreamFiles(pkg, directory) {
   const ancestors = new Set(["."]);
   let location = vcs.path_in_vcs || ".";
   while (location !== ".") { ancestors.add(location); location = dirname(location); }
-  const paths = tree.tree.filter((entry) => entry.type === "blob" && licenseName.test(entry.path.split("/").at(-1)) && ancestors.has(dirname(entry.path))).map((entry) => entry.path);
+  const paths = tree.tree.filter((entry) => entry.type === "blob" && isLicenseDocument(entry.path.split("/").at(-1)) && ancestors.has(dirname(entry.path))).map((entry) => entry.path);
   if (paths.length === 0) throw new Error(`${pkg.name}: no original license found at pinned source ${key}`);
   return await Promise.all(paths.map(async (path) => {
     const source = `https://raw.githubusercontent.com/${repo}/${revision}/${path}`;

@@ -8,9 +8,19 @@ import test from "node:test";
 import { installerArch, selectInstaller } from "../scripts/package-installer-zip.mjs";
 import { npmInvocation, runNpm } from "../scripts/npm-runner.mjs";
 import { verifyLicenses } from "../scripts/check-licenses.mjs";
+import { isLicenseDocument } from "../scripts/license-files.mjs";
 
 const project = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const version = JSON.parse(readFileSync(join(project, "package.json"), "utf8")).version;
+
+test("ライセンス原文の名前を維持し、copyrightアイコンやソースコードを収録しない", () => {
+  for (const name of ["LICENSE", "LICENCE", "COPYING", "COPYRIGHT.md", "NOTICE.txt", "LICENSE-MIT", "LICENSE-APACHE.txt", "LICENSE.BSD-3-Clause", "LICENSE_APACHE-2.0", "LICENSE.spdx", "LICENSE-other-bits"]) {
+    assert.equal(isLicenseDocument(name), true, name);
+  }
+  for (const name of ["copyright.js", "copyright.js.map", "copying.rs", "license.ts", "LICENSE.exe", "notice.py", "package.json"]) {
+    assert.equal(isLicenseDocument(name), false, name);
+  }
+});
 
 test("Windows音声エンジンは追加のWhisper・VC・OpenMP DLLを要求しない", { skip: process.platform !== "darwin" }, () => {
   const executable = join(project, "src-tauri", "binaries", "whisper-cli-x86_64-pc-windows-msvc.exe");
