@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export function testWindowsEngine(command, { model, audio } = {}) {
   if (process.platform !== "win32") throw new Error("Windowsで実エンジンを検証してください。");
+  const provenance = JSON.parse(readFileSync(new URL("../src-tauri/resources/engine/windows-build.json", import.meta.url), "utf8"));
+  assert.equal(createHash("sha256").update(readFileSync(command)).digest("hex"), provenance.sha256, "検査対象エンジンがWindowsビルド記録と一致しません。");
   const result = spawnSync(command, ["--help"], { encoding: "utf8", timeout: 15_000, windowsHide: true });
   assert.ifError(result.error);
   assert.equal(result.status, 0, `Windows音声エンジンを起動できません。DLL・VCランタイムを確認してください。\n${result.stdout}\n${result.stderr}`);
