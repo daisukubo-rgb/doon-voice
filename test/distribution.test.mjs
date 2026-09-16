@@ -119,7 +119,7 @@ test("旧版と別archが残っていても現version/archだけを梱包する"
   const zip = join(root, "dist", "DOON Voice-Test.zip");
   const listing = process.platform === "darwin"
     ? spawnSync("unzip", ["-Z1", zip], { encoding: "utf8" })
-    : spawnSync("powershell.exe", ["-NoProfile", "-Command", "Add-Type -AssemblyName System.IO.Compression.FileSystem; [IO.Compression.ZipFile]::OpenRead($env.TEST_ZIP).Entries.FullName"], { encoding: "utf8", env: { ...process.env, TEST_ZIP: zip } });
+    : spawnSync("powershell.exe", ["-NoProfile", "-Command", "Add-Type -AssemblyName System.IO.Compression.FileSystem; [IO.Compression.ZipFile]::OpenRead($env:TEST_ZIP).Entries.FullName"], { encoding: "utf8", env: { ...process.env, TEST_ZIP: zip } });
   assert.equal(listing.status, 0, listing.stderr);
   assert.ok(listing.stdout.includes(current), listing.stdout);
   assert.ok(!listing.stdout.includes(old), listing.stdout);
