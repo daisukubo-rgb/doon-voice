@@ -36,6 +36,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          cache-on-failure: true
       - run: npm ci
       - run: node scripts/setup.mjs
       - run: node scripts/check-licenses.mjs
