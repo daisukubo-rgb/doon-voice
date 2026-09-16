@@ -52,7 +52,9 @@ ChatGPT／Claude／Geminiの文章整形は、相手自身の対応CLIとログ�
 
 開発用のWindowsビルドはGitHub Actionsの `DOON Voice Windows Test Installer` から実行できます。品質検査・実モデル認識・MSI内部検査に成功した場合だけ、手順付きZIPを30日間のartifactとして保存します。一般公開Releaseは別の手順です。
 
-GitHubの [Releases](https://github.com/daisukubo-rgb/doon-voice/releases) からOSに合うファイルを取得します。
+### 一般公開版
+
+GitHubの [Releases](https://github.com/daisukubo-rgb/doon-voice/releases) からOSに合うファイルを取得します。Windowsテスト版0.5.19はまだReleaseに掲載していません。
 
 - macOS Apple Silicon: `DOON.Voice-macOS.zip` を展開し、中の `.dmg` を開きます。
 - macOS Intel: `DOON.Voice-macOS-Intel.zip` を展開し、中の `.dmg` を開きます。
@@ -64,7 +66,7 @@ GitHub Releasesには、各インストーラーを入れたZIPも添付しま�
 
 macOSでは「カーソル位置へ入力」の `許可する` を押し、システム設定のアクセシビリティで、現在 `Applications/DOON Voice.app` に置いたDOON Voiceをオンにしてください。マイクとアクセシビリティの許可はPCごとに必要です。同名のDOON Voiceが2つ表示される場合は、古い方を `−` で削除してから現在のアプリをオンにし、DOON Voiceを再起動してください。macOSの仕様上、この許可をアプリから自動で付与することはできません。
 
-ショートカット操作中は、ほかのアプリより手前に `聞いています`、`文章を整えています`、`入力しました` の状態を表示します。DOON Voiceを最小化していてもショートカットは有効です。
+ショートカット操作中は、ほかのアプリより手前に `聞いています`、`考えています`、`入力しました` の状態を表示します。DOON Voiceを最小化していてもショートカットは有効です。
 
 初期ショートカットは `Ctrl+Alt+Space` です。ウィンドウを閉じた後は、メニューバー（macOS）または通知領域（Windows）のDOON Voiceアイコンから `DOON Voiceを開く` を選べます。`DOON Voiceを終了` で終了します。録音・処理中や未回収の文章がある場合は画面が開くので、停止・コピー・破棄を済ませてから終了してください。
 
