@@ -172,6 +172,37 @@ mod tests {
     const NATIVE_SHIM: &str = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe\"   %*\r\n";
 
     #[test]
+    fn node_script_argument_uses_normal_absolute_drive_and_unc_paths() {
+        for (input, expected) in [
+            (r"\\?\C:\Users\日本語 & ! % () '\cli.js", r"C:\Users\日本語 & ! % () '\cli.js"),
+            (r"\\?\UNC\server\share\日本語 & ! %\cli.js", r"\\server\share\日本語 & ! %\cli.js"),
+        ] {
+            assert_eq!(node_script_path_units(&input.encode_utf16().collect::<Vec<_>>()), expected.encode_utf16().collect::<Vec<_>>());
+        }
+    }
+
+    #[test]
+    fn node_script_argument_preserves_long_paths_and_all_utf16_units() {
+        let long = format!(r"\\?\C:\{}cli.js", "long folder\\".repeat(40));
+        let mut input = long.encode_utf16().collect::<Vec<_>>();
+        input.push(0xd800); // Preserve even an unpaired Windows UTF-16 surrogate.
+        assert!(input.len() > 260);
+        assert_eq!(node_script_path_units(&input), input[4..]);
+        let unc = format!(r"\\?\UNC\server\share\{}cli.js", "long folder\\".repeat(40));
+        let input = unc.encode_utf16().collect::<Vec<_>>();
+        let expected = format!(r"\\server\share\{}cli.js", "long folder\\".repeat(40));
+        assert_eq!(node_script_path_units(&input), expected.encode_utf16().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn node_script_argument_keeps_other_namespaces_and_ordinary_paths_unchanged() {
+        for input in [r"C:\script.js", r"\\server\share\script.js", r"C:relative.js", r"\\?\C:relative.js", r"\\?\Volume{example}\script.js", r"\\.\pipe\example", r"\\?\UNC\"] {
+            let units = input.encode_utf16().collect::<Vec<_>>();
+            assert_eq!(node_script_path_units(&units), units);
+        }
+    }
+
+    #[test]
     fn npm_native_shim_resolves_directly_without_node_or_a_shell() {
         let fixture = Fixture::new();
         fixture.file("claude.cmd", NATIVE_SHIM);
@@ -212,7 +243,10 @@ mod tests {
         let command =
             windows_cli_command(Path::new("codex"), std::slice::from_ref(&fixture.0)).unwrap();
         assert_eq!(command.get_program(), node.as_os_str());
-        assert_eq!(command.get_args().collect::<Vec<_>>(), [entry.as_os_str()]);
+        let args = command.get_args().collect::<Vec<_>>();
+        assert_eq!(args.len(), 1);
+        assert_eq!(fs::canonicalize(args[0]).unwrap(), entry);
+        assert!(!args[0].to_string_lossy().starts_with(r"\\?\"));
     }
 
     #[test]
@@ -238,7 +272,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(command.get_program(), node.as_os_str());
-        assert_eq!(command.get_args().collect::<Vec<_>>(), [entry.as_os_str()]);
+        let args = command.get_args().collect::<Vec<_>>();
+        assert_eq!(args.len(), 1);
+        assert_eq!(fs::canonicalize(args[0]).unwrap(), entry);
+        assert!(!args[0].to_string_lossy().starts_with(r"\\?\"));
     }
 
     #[test]
@@ -284,20 +321,20 @@ mod tests {
     }
 
     #[cfg(windows)]
-    #[test]
-    fn windows_npm_mock_preserves_arguments_and_stdin_without_shell_expansion() {
+    fn verify_windows_npm_mock(prefix: &str) {
         use std::io::Write;
         use std::process::Stdio;
         let fixture = Fixture::new();
-        fixture.npm();
-        fixture.file("node_modules/@openai/codex/bin/codex.js", r#"
+        let install_dir = fixture.0.join(prefix);
+        fixture.file(&format!("{prefix}/codex.cmd"), NODE_SHIM);
+        fixture.file(&format!("{prefix}/node_modules/@openai/codex/bin/codex.js"), r#"
 let input = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => input += chunk);
 process.stdin.on('end', () => process.stdout.write(JSON.stringify({args: process.argv.slice(2), input})));
 "#);
         let inherited = std::env::var_os("PATH").unwrap();
-        let mut paths = vec![fixture.0.clone()];
+        let mut paths = vec![install_dir];
         paths.extend(std::env::split_paths(&inherited));
         let path = std::env::join_paths(paths).unwrap();
         let input = "日本語 & echo injected | whoami %PATH% !VAR! \"quote\"\nnext line";
@@ -325,5 +362,17 @@ process.stdin.on('end', () => process.stdout.write(JSON.stringify({args: process
         let value: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(value["args"], serde_json::json!(["login", "status", input]));
         assert_eq!(value["input"], input);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_npm_mock_preserves_arguments_and_stdin_without_shell_expansion() {
+        verify_windows_npm_mock("npm");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_npm_mock_runs_a_script_beyond_the_legacy_path_length_limit() {
+        verify_windows_npm_mock(&format!("{0}/{0}/{0}", "long-path-segment".repeat(8)));
     }
 }
