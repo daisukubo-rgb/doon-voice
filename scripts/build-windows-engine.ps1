@@ -4,12 +4,16 @@
 Build the pinned Windows x64 Whisper engine without redistributable DLLs.
 .EXAMPLE
 pwsh -File scripts/build-windows-engine.ps1
+.EXAMPLE
+pwsh -File scripts/build-windows-engine.ps1 -Variant avx2
 #>
 [CmdletBinding()]
 param(
     [string]$WorkDirectory = '',
     [ValidateRange(1, 64)]
-    [int]$Jobs = 4
+    [int]$Jobs = 4,
+    [ValidateSet('compatible', 'avx2')]
+    [string]$Variant = 'compatible'
 )
 
 Set-StrictMode -Version Latest
@@ -19,6 +23,7 @@ $ProgressPreference = 'SilentlyContinue'
 $PSNativeCommandUseErrorActionPreference = $false
 
 if (-not $IsWindows) { throw 'This build requires Windows and Visual Studio 2022 C++ tools.' }
+$Variant = $Variant.ToLowerInvariant()
 
 function Invoke-CheckedNative {
     param([string]$FilePath, [string[]]$ArgumentList)
@@ -91,7 +96,7 @@ $options = [ordered]@{
     GGML_AVX512_VNNI = 'OFF'
     GGML_AVX512_BF16 = 'OFF'
     GGML_BMI2 = 'OFF'
-    # MSVC derives FMA/F16C from AVX2, which is disabled above.
+    # MSVC derives FMA/F16C from AVX2; the avx2 variant enables them below.
     GGML_OPENMP = 'OFF'
     GGML_BLAS = 'OFF'
     GGML_METAL = 'OFF'
@@ -105,6 +110,18 @@ $options = [ordered]@{
     WHISPER_SDL2 = 'OFF'
     WHISPER_COMMON_FFMPEG = 'OFF'
 }
+$binaryRelativePath = 'src-tauri/binaries/whisper-cli-x86_64-pc-windows-msvc.exe'
+$manifestRelativePath = 'src-tauri/resources/engine/windows-build.json'
+$cpuRequirements = @('sse4.2')
+if ($Variant -eq 'avx2') {
+    $options.GGML_AVX = 'ON'
+    $options.GGML_AVX2 = 'ON'
+    # GGML's BMI2 kernels remain disabled in both variants.
+    $cpuRequirements = @('sse4.2', 'avx', 'avx2', 'fma', 'f16c')
+    $binaryRelativePath = 'src-tauri/resources/engine/windows-x64/whisper/whisper-avx2.exe'
+    $manifestRelativePath = 'src-tauri/resources/engine/windows-avx2-build.json'
+}
+Write-Host "Variant: $Variant; CPU requirements: $($cpuRequirements -join ', ')"
 $configureArguments = @('-S', $source, '-B', $build, '-G', 'Visual Studio 17 2022', '-A', 'x64')
 foreach ($entry in $options.GetEnumerator()) { $configureArguments += "-D$($entry.Key)=$($entry.Value)" }
 Invoke-CheckedNative $cmake $configureArguments | Tee-Object -FilePath (Join-Path $WorkDirectory 'configure.log')
@@ -143,7 +160,6 @@ $compilerVersion = [regex]::Match($compilerRecord, 'set\(CMAKE_CXX_COMPILER_VERS
 $compilerId = [regex]::Match($compilerRecord, 'set\(CMAKE_CXX_COMPILER_ID "([^"]+)"\)').Groups[1].Value
 if ($compilerId -ne 'MSVC' -or -not $compilerVersion) { throw 'The build was not produced by the expected MSVC compiler.' }
 $engineSha256 = (Get-FileHash -LiteralPath $engine -Algorithm SHA256).Hash.ToLowerInvariant()
-$binaryRelativePath = 'src-tauri/binaries/whisper-cli-x86_64-pc-windows-msvc.exe'
 $manifest = [ordered]@{
     schema = 1
     version = $version
@@ -151,6 +167,8 @@ $manifest = [ordered]@{
     archiveSha256 = $archiveSha256
     builtAt = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
     target = 'x86_64-pc-windows-msvc'
+    variant = $Variant
+    cpuRequirements = $cpuRequirements
     buildTarget = 'whisper-cli'
     generator = 'Visual Studio 17 2022'
     compiler = "$compilerId $compilerVersion"
@@ -163,7 +181,7 @@ $manifest = [ordered]@{
 
 # Preserve the existing engine until download, compilation and checks succeed.
 $destination = Join-Path $repositoryRoot $binaryRelativePath
-$manifestDestination = Join-Path $repositoryRoot 'src-tauri/resources/engine/windows-build.json'
+$manifestDestination = Join-Path $repositoryRoot $manifestRelativePath
 New-Item -ItemType Directory -Path (Split-Path $destination -Parent) -Force | Out-Null
 New-Item -ItemType Directory -Path (Split-Path $manifestDestination -Parent) -Force | Out-Null
 $suffix = '.pending-' + [guid]::NewGuid().ToString('N')

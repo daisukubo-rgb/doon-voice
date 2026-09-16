@@ -15,15 +15,20 @@ jobs:
   engine:
     runs-on: windows-2022
     timeout-minutes: 20
+    strategy:
+      matrix:
+        variant: [compatible, avx2]
     steps:
       - uses: actions/checkout@v4
       - name: Build pinned standalone Windows engine
         shell: pwsh
-        run: ./scripts/build-windows-engine.ps1
+        run: ./scripts/build-windows-engine.ps1 -Variant ${{ matrix.variant }}
       - uses: actions/upload-artifact@v4
         with:
-          name: windows-static-engine
+          name: windows-static-engine-${{ matrix.variant }}
           if-no-files-found: error
           path: |
             src-tauri/binaries/whisper-cli-x86_64-pc-windows-msvc.exe
             src-tauri/resources/engine/windows-build.json
+            src-tauri/resources/engine/windows-avx2-build.json
+            src-tauri/resources/engine/windows-x64/whisper/whisper-avx2.exe
