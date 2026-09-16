@@ -35,8 +35,8 @@ $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $version = '1.9.2'
 $archiveUrl = "https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v$version.tar.gz"
 $archiveSha256 = 'a6abd064fcca8b85e794d205abf328c522e9451db43a3eadc178b883b7d0e9cd'
-$cmake = (Get-Command cmake -CommandType Application -ErrorAction Stop).Source
-$tar = (Get-Command tar.exe -CommandType Application -ErrorAction Stop).Source
+$cmake = (Get-Command cmake -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+$tar = (Get-Command tar.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
 if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) { throw 'Visual Studio Installer/vswhere.exe is required.' }
 $visualStudio = (Invoke-CheckedNative $vswhere @(
