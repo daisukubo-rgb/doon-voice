@@ -1,0 +1,29 @@
+name: DOON Voice Windows Engine
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["feat/windows-test-*"]
+    paths:
+      - "scripts/build-windows-engine.ps1"
+      - ".github/workflows/windows-engine.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  engine:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build pinned standalone Windows engine
+        shell: pwsh
+        run: ./scripts/build-windows-engine.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-static-engine
+          if-no-files-found: error
+          path: |
+            src-tauri/binaries/whisper-cli-x86_64-pc-windows-msvc.exe
+            src-tauri/resources/engine/windows-build.json
