@@ -1,7 +1,7 @@
 use std::{ffi::OsStr, path::Path, process::Command};
 
 /// npm's Windows .cmd entry points are not native executables. Resolve their
-/// Node entry without running a shell, so all arguments/stdin remain data.
+/// Node or native entry without a shell, so all arguments/stdin remain data.
 pub(crate) fn cli_command(executable: &Path, path: &OsStr) -> Result<Command, String> {
     #[cfg(windows)]
     let mut command =
@@ -60,41 +60,48 @@ fn windows_cli_command(executable: &Path, dirs: &[std::path::PathBuf]) -> Result
             return Ok(Command::new(native));
         }
         if let Some(shim) = shim.filter(|shim| shim.is_file()) {
-            return npm_node_command(&shim, dirs);
+            return npm_command(&shim, dirs);
         }
     }
     Err(format!("CLIが見つかりません: {}", executable.display()))
 }
 
 #[cfg(any(windows, test))]
-fn npm_node_command(shim: &Path, dirs: &[std::path::PathBuf]) -> Result<Command, String> {
+fn npm_command(shim: &Path, dirs: &[std::path::PathBuf]) -> Result<Command, String> {
     let unsupported = || format!("このCLIの起動形式には対応していません: {}", shim.display());
     let script = std::fs::read_to_string(shim).map_err(|error| error.to_string())?;
-    if !script
+    let uses_node = script
         .lines()
-        .any(|line| line.trim().eq_ignore_ascii_case("SET \"_prog=node\""))
-    {
+        .any(|line| line.trim().eq_ignore_ascii_case("SET \"_prog=node\""));
+    // Accept one standard npm invocation: node + entry, or a native .exe.
+    // Additional shell operators, flags and substitutions are never evaluated.
+    let mut targets = script.lines().filter_map(|line| {
+        let tail = if uses_node {
+            line.split_once("\"%_prog%\"")?.1
+        } else {
+            line
+        };
+        let tail = tail.trim_start().strip_prefix("\"%dp0%\\")?;
+        let (target, rest) = tail.split_once('"')?;
+        (rest.trim() == "%*"
+            && !target.is_empty()
+            && !target.starts_with(['/', '\\'])
+            && !target.contains([':', '%', '\r', '\n'])
+            && (uses_node || target.to_ascii_lowercase().ends_with(".exe")))
+        .then_some(target)
+    });
+    let target = targets.next().ok_or_else(unsupported)?;
+    if targets.next().is_some() {
         return Err(unsupported());
     }
-    // Only the standard npm node invocation is supported. Additional shell
-    // operators, Node flags and environment substitutions are never evaluated.
-    let target = script
-        .lines()
-        .find_map(|line| {
-            let (_, tail) = line.split_once("\"%_prog%\"")?;
-            let tail = tail.trim_start().strip_prefix("\"%dp0%\\")?;
-            let (target, rest) = tail.split_once('"')?;
-            (rest.trim() == "%*"
-                && !target.is_empty()
-                && !target.starts_with(['/', '\\'])
-                && !target.contains([':', '%', '\r', '\n']))
-            .then_some(target)
-        })
-        .ok_or_else(unsupported)?;
     let parent = shim.parent().ok_or_else(unsupported)?;
     let entry = parent.join(target.replace('\\', "/"));
     if !entry.is_file() {
         return Err(format!("CLIの本体が見つかりません: {}", entry.display()));
+    }
+    let entry = std::fs::canonicalize(entry).map_err(|error| error.to_string())?;
+    if !uses_node {
+        return Ok(Command::new(entry));
     }
     let node = std::iter::once(parent.to_path_buf())
         .chain(dirs.iter().cloned())
@@ -104,7 +111,7 @@ fn npm_node_command(shim: &Path, dirs: &[std::path::PathBuf]) -> Result<Command,
             "Node.jsが見つかりません。Node.jsをインストールして再起動してください。".to_string()
         })?;
     let mut command = Command::new(std::fs::canonicalize(node).map_err(|error| error.to_string())?);
-    command.arg(std::fs::canonicalize(entry).map_err(|error| error.to_string())?);
+    command.arg(entry);
     Ok(command)
 }
 
@@ -172,7 +179,9 @@ mod tests {
             assert_eq!(command.get_args().count(), 0);
         }
         fs::remove_file(executable).unwrap();
-        assert!(windows_cli_command(Path::new("claude"), std::slice::from_ref(&fixture.0)).is_err());
+        assert!(
+            windows_cli_command(Path::new("claude"), std::slice::from_ref(&fixture.0)).is_err()
+        );
     }
 
     #[test]
