@@ -24,6 +24,7 @@ pub fn run_bounded(
         return Err("外部コマンドの実行時間が上限に達しました。".into());
     }
     let started = Instant::now();
+    crate::cli_command::hide_console(&mut command);
     let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -276,7 +277,9 @@ mod tests {
             #[cfg(windows)]
             "console" => {
                 #[link(name = "kernel32")]
-                unsafe extern "system" { fn GetConsoleWindow() -> *mut std::ffi::c_void; }
+                unsafe extern "system" {
+                    fn GetConsoleWindow() -> *mut std::ffi::c_void;
+                }
                 // SAFETY: GetConsoleWindow has no arguments and does not transfer ownership.
                 println!("has-console={}", !unsafe { GetConsoleWindow() }.is_null());
             }
@@ -340,14 +343,23 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn windows_explicit_login_opens_a_console() {
-        let fixture_name = concat!(module_path!(), "::fake_cli_fixture").split_once("::").unwrap().1;
+        let fixture_name = concat!(module_path!(), "::fake_cli_fixture")
+            .split_once("::")
+            .unwrap()
+            .1;
         let mut command = crate::cli_command::login_command(
             &std::env::current_exe().unwrap(),
             &std::env::var_os("PATH").unwrap_or_default(),
             &["--exact", fixture_name, "--nocapture"],
-        ).unwrap();
-        let output = command.env("DOON_PROCESS_TEST_MODE", "console")
-            .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).output().unwrap();
+        )
+        .unwrap();
+        let output = command
+            .env("DOON_PROCESS_TEST_MODE", "console")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap();
         assert!(output.status.success());
         assert!(String::from_utf8_lossy(&output.stdout).contains("has-console=true"));
     }

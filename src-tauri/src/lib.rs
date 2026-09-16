@@ -1,6 +1,5 @@
-mod cloud_runtime;
-#[cfg(test)]
 mod cli_command;
+mod cloud_runtime;
 mod native_audio;
 mod process_runner;
 
@@ -44,6 +43,7 @@ use tauri_plugin_shell::{
 use tokio::io::AsyncWriteExt;
 
 use audio_file::{cleanup_stale_recordings, OwnedAudioFile};
+use cli_command::{cli_command, hide_console};
 use cloud_runtime::{CloudKind, CloudRuntime, CloudSpec};
 use native_audio::{NativeAudioRecorder, MAX_WAV_BYTES};
 use process_runner::run_bounded;
@@ -125,6 +125,12 @@ fn cli_path_environment() -> OsString {
 
     #[cfg(target_os = "windows")]
     {
+        if let Some(roaming) = std::env::var_os("APPDATA") {
+            paths.push(PathBuf::from(roaming).join("npm"));
+        }
+        if let Some(home) = std::env::var_os("USERPROFILE") {
+            paths.push(PathBuf::from(home).join(".local").join("bin"));
+        }
         if let Some(local) = std::env::var_os("LOCALAPPDATA") {
             paths.push(PathBuf::from(local).join("Programs").join("Ollama"));
         }
@@ -919,23 +925,30 @@ fn download_client() -> Result<reqwest::Client, String> {
         .map_err(|_| "ダウンロードを準備できませんでした。".into())
 }
 fn command_available(name: &str) -> bool {
-    if command_path(name).is_file() {
-        return true;
+    #[cfg(windows)]
+    {
+        cli_command(&command_path(name), &cli_path_environment()).is_ok()
     }
-    let suffix = if cfg!(target_os = "windows") {
-        ".exe"
-    } else {
-        ""
-    };
-    std::env::var_os("PATH")
-        .map(|paths| {
-            std::env::split_paths(&paths).any(|dir| {
-                let direct = dir.join(name);
-                let platform = dir.join(format!("{name}{suffix}"));
-                direct.is_file() || platform.is_file()
+    #[cfg(not(windows))]
+    {
+        if command_path(name).is_file() {
+            return true;
+        }
+        let suffix = if cfg!(target_os = "windows") {
+            ".exe"
+        } else {
+            ""
+        };
+        std::env::var_os("PATH")
+            .map(|paths| {
+                std::env::split_paths(&paths).any(|dir| {
+                    let direct = dir.join(name);
+                    let platform = dir.join(format!("{name}{suffix}"));
+                    direct.is_file() || platform.is_file()
+                })
             })
-        })
-        .unwrap_or(false)
+            .unwrap_or(false)
+    }
 }
 fn ollama_installed() -> bool {
     command_available("ollama")
@@ -964,7 +977,10 @@ fn login_status_is_authenticated(provider: &Provider, success: bool, output: &st
 }
 
 fn provider_authenticated(provider: &Provider) -> bool {
-    let mut command = Command::new(command_path(provider.cmd()));
+    let Ok(mut command) = cli_command(&command_path(provider.cmd()), &cli_path_environment())
+    else {
+        return false;
+    };
     command
         .args(login_status_args(provider))
         .env("PATH", cli_path_environment());
@@ -1132,7 +1148,9 @@ async fn pull_local_model() -> Result<(), String> {
         &LOCAL_MODEL_PULL_RUNNING,
         "Gemma 4 E2Bを取得中です。完了までお待ちください。",
     )?;
-    let mut child = Command::new(command_path("ollama"))
+    let mut command = cli_command(&command_path("ollama"), &cli_path_environment())?;
+    hide_console(&mut command);
+    let mut child = command
         .args(["pull", LOCAL_MODEL])
         .env("PATH", cli_path_environment())
         .stdout(Stdio::null())
@@ -2294,8 +2312,7 @@ fn launch_codex_login() -> Result<(), String> {
 }
 #[cfg(target_os = "windows")]
 fn launch_codex_login() -> Result<(), String> {
-    Command::new("cmd")
-        .args(["/C", "start", "", "cmd", "/K", "codex login"])
+    cli_command::login_command(&command_path("codex"), &cli_path_environment(), &["login"])?
         .spawn()
         .map(|_| ())
         .map_err(|_| "Codexを開始できませんでした。".into())
@@ -2336,8 +2353,7 @@ fn launch_gemini_login() -> Result<(), String> {
 }
 #[cfg(target_os = "windows")]
 fn launch_gemini_login() -> Result<(), String> {
-    Command::new("cmd")
-        .args(["/C", "start", "", "cmd", "/K", "agy"])
+    cli_command::login_command(&command_path("agy"), &cli_path_environment(), &[])?
         .spawn()
         .map(|_| ())
         .map_err(|_| "Antigravityを開始できませんでした。".into())
@@ -2348,8 +2364,7 @@ fn launch_gemini_login() -> Result<(), String> {
 }
 #[cfg(target_os = "windows")]
 fn launch_claude_login() -> Result<(), String> {
-    Command::new("cmd")
-        .args(["/C", "start", "", "cmd", "/K", "claude"])
+    cli_command::login_command(&command_path("claude"), &cli_path_environment(), &[])?
         .spawn()
         .map(|_| ())
         .map_err(|_| "Claude Codeを開始できませんでした。".into())

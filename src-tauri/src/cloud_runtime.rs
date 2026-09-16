@@ -199,6 +199,7 @@ struct JsonLineProcess {
 
 impl JsonLineProcess {
     fn spawn(mut command: Command) -> Result<Self, String> {
+        crate::cli_command::hide_console(&mut command);
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -357,7 +358,7 @@ struct CodexClient {
 
 impl CodexClient {
     fn start(spec: &CloudSpec) -> Result<Self, String> {
-        let mut command = Command::new(&spec.executable);
+        let mut command = crate::cli_command::cli_command(&spec.executable, &spec.path)?;
         command
             .args(["app-server", "--stdio"])
             .current_dir(&spec.cwd)
@@ -521,7 +522,7 @@ type ResultParser = for<'a> fn(&'a Value) -> Result<Option<&'a str>, String>;
 
 impl StreamClient {
     fn start(spec: &CloudSpec) -> Result<Self, String> {
-        let mut command = Command::new(&spec.executable);
+        let mut command = crate::cli_command::cli_command(&spec.executable, &spec.path)?;
         match spec.kind {
             CloudKind::Claude => {
                 command.args([
@@ -732,9 +733,14 @@ mod tests {
             #[cfg(windows)]
             "console" => {
                 #[link(name = "kernel32")]
-                unsafe extern "system" { fn GetConsoleWindow() -> *mut std::ffi::c_void; }
+                unsafe extern "system" {
+                    fn GetConsoleWindow() -> *mut std::ffi::c_void;
+                }
                 // SAFETY: GetConsoleWindow has no arguments and does not transfer ownership.
-                println!("{}", json!({"has_console": !unsafe { GetConsoleWindow() }.is_null()}));
+                println!(
+                    "{}",
+                    json!({"has_console": !unsafe { GetConsoleWindow() }.is_null()})
+                );
             }
             "stderr-exit" => {
                 std::io::stderr()
@@ -795,7 +801,9 @@ mod tests {
         command.creation_flags(0x0000_0010); // CREATE_NEW_CONSOLE
         let mut process = JsonLineProcess::spawn(command).unwrap();
         process.send(&json!({"id": 0})).unwrap();
-        let response = process.receive(Instant::now() + Duration::from_secs(5)).unwrap();
+        let response = process
+            .receive(Instant::now() + Duration::from_secs(5))
+            .unwrap();
         assert_eq!(response["has_console"], false);
     }
 
