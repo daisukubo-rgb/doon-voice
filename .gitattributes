@@ -8,6 +8,8 @@
 *.yml text eol=lf
 package-lock.json text eol=lf
 src-tauri/Cargo.lock text eol=lf
-src-tauri/resources/engine/*.json text eol=lf
+# Preserve every hashed engine asset, including upstream Metal source bytes.
+src-tauri/resources/engine/** -text
+src-tauri/binaries/** -text
 # Preserve upstream license bytes and their recorded SHA-256 on every OS.
 docs/licenses/** -text
