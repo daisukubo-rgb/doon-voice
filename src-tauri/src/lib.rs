@@ -1313,7 +1313,9 @@ fn wav_contains_speech(audio: &[u8]) -> bool {
     for frame in audio[44..].chunks(frame_samples * 2) {
         let samples = frame.len() / 2;
         let active_samples = frame
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .filter(|pair| {
                 i32::from(i16::from_le_bytes([pair[0], pair[1]])).abs() > QUANTIZATION_FLOOR
             })
@@ -2903,7 +2905,12 @@ mod tests {
                 native_audio::encode_pcm_wav(&vec![0.0; sample_rate as usize], sample_rate);
             assert!(!wav_contains_speech(&silence));
             let mut quantization = silence.clone();
-            for (index, sample) in quantization[44..].chunks_exact_mut(2).enumerate() {
+            for (index, sample) in quantization[44..]
+                .as_chunks_mut::<2>()
+                .0
+                .iter_mut()
+                .enumerate()
+            {
                 let value = if index % 2 == 0 { 2_i16 } else { -2_i16 };
                 sample.copy_from_slice(&value.to_le_bytes());
             }
