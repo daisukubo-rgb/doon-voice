@@ -111,8 +111,49 @@ fn npm_command(shim: &Path, dirs: &[std::path::PathBuf]) -> Result<Command, Stri
             "Node.jsが見つかりません。Node.jsをインストールして再起動してください。".to_string()
         })?;
     let mut command = Command::new(std::fs::canonicalize(node).map_err(|error| error.to_string())?);
-    command.arg(entry);
+    command.arg(node_script_argument(&entry));
     Ok(command)
+}
+
+#[cfg(any(windows, test))]
+fn node_script_argument(entry: &Path) -> std::ffi::OsString {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::{OsStrExt, OsStringExt};
+        let units = entry.as_os_str().encode_wide().collect::<Vec<_>>();
+        std::ffi::OsString::from_wide(&node_script_path_units(&units))
+    }
+    #[cfg(not(windows))]
+    entry.as_os_str().to_owned()
+}
+
+#[cfg(any(windows, test))]
+fn node_script_path_units(path: &[u16]) -> Vec<u16> {
+    // Node 22's main-module resolver mishandles verbatim paths. Convert only
+    // canonical drive/UNC prefixes for the script argument. Node/libuv handles
+    // long absolute paths; keep every UTF-16 unit and leave native .exe paths alone.
+    const BACKSLASH: u16 = b'\\' as u16;
+    let Some(rest) = path.strip_prefix(&[BACKSLASH, BACKSLASH, b'?' as u16, BACKSLASH]) else {
+        return path.to_vec();
+    };
+    if rest.len() >= 3
+        && matches!(rest[0], 65..=90 | 97..=122)
+        && rest[1] == b':' as u16
+        && rest[2] == BACKSLASH
+    {
+        return rest.to_vec();
+    }
+    if let Some(unc) = rest.strip_prefix(&[b'U' as u16, b'N' as u16, b'C' as u16, BACKSLASH]) {
+        let mut parts = unc.split(|unit| *unit == BACKSLASH);
+        if parts.next().is_some_and(|server| !server.is_empty())
+            && parts.next().is_some_and(|share| !share.is_empty())
+        {
+            let mut normal = vec![BACKSLASH, BACKSLASH];
+            normal.extend_from_slice(unc);
+            return normal;
+        }
+    }
+    path.to_vec()
 }
 
 #[cfg(test)]
@@ -174,10 +215,19 @@ mod tests {
     #[test]
     fn node_script_argument_uses_normal_absolute_drive_and_unc_paths() {
         for (input, expected) in [
-            (r"\\?\C:\Users\日本語 & ! % () '\cli.js", r"C:\Users\日本語 & ! % () '\cli.js"),
-            (r"\\?\UNC\server\share\日本語 & ! %\cli.js", r"\\server\share\日本語 & ! %\cli.js"),
+            (
+                r"\\?\C:\Users\日本語 & ! % () '\cli.js",
+                r"C:\Users\日本語 & ! % () '\cli.js",
+            ),
+            (
+                r"\\?\UNC\server\share\日本語 & ! %\cli.js",
+                r"\\server\share\日本語 & ! %\cli.js",
+            ),
         ] {
-            assert_eq!(node_script_path_units(&input.encode_utf16().collect::<Vec<_>>()), expected.encode_utf16().collect::<Vec<_>>());
+            assert_eq!(
+                node_script_path_units(&input.encode_utf16().collect::<Vec<_>>()),
+                expected.encode_utf16().collect::<Vec<_>>()
+            );
         }
     }
 
@@ -191,12 +241,23 @@ mod tests {
         let unc = format!(r"\\?\UNC\server\share\{}cli.js", "long folder\\".repeat(40));
         let input = unc.encode_utf16().collect::<Vec<_>>();
         let expected = format!(r"\\server\share\{}cli.js", "long folder\\".repeat(40));
-        assert_eq!(node_script_path_units(&input), expected.encode_utf16().collect::<Vec<_>>());
+        assert_eq!(
+            node_script_path_units(&input),
+            expected.encode_utf16().collect::<Vec<_>>()
+        );
     }
 
     #[test]
     fn node_script_argument_keeps_other_namespaces_and_ordinary_paths_unchanged() {
-        for input in [r"C:\script.js", r"\\server\share\script.js", r"C:relative.js", r"\\?\C:relative.js", r"\\?\Volume{example}\script.js", r"\\.\pipe\example", r"\\?\UNC\"] {
+        for input in [
+            r"C:\script.js",
+            r"\\server\share\script.js",
+            r"C:relative.js",
+            r"\\?\C:relative.js",
+            r"\\?\Volume{example}\script.js",
+            r"\\.\pipe\example",
+            r"\\?\UNC\",
+        ] {
             let units = input.encode_utf16().collect::<Vec<_>>();
             assert_eq!(node_script_path_units(&units), units);
         }
