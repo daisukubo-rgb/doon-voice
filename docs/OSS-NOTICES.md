@@ -8,7 +8,7 @@ DOON Voiceが使用するOSSの表示です。npmとRustの固定バージョン
 
 - npm: `licenses/npm/`。LucideのISC本文・権利者表示、React、フォントなど、導入済みパッケージの実LICENSEを収録します。
 - Rust: `licenses/cargo/`。CPAL v0.16.0のApache-2.0全文、TauriなどのLICENSE/NOTICE/COPYRIGHTを収録します。crateにない場合は同じソースコミットの上流資料を確認します。
-- エンジン: `licenses/engine/` と `licenses/engine-inventory.json`。固定ソース・ビルド構成・ハッシュを`engine/macos-build.json`と`engine/windows-build.json`に記録します。
+- エンジン: `licenses/engine/` と `licenses/engine-inventory.json`。固定ソース・ビルド構成・ハッシュを`engine/macos-build.json`、`engine/windows-build.json`、`engine/windows-avx2-build.json`に記録します。
 
 依存更新後は `node scripts/collect-licenses.mjs` を実行します。`node scripts/check-licenses.mjs` はロックファイルと資料のハッシュを照合します。ReleaseではDMG/MSIを展開し、実際に同梱された資料も検査します。
 

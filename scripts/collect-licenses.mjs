@@ -112,7 +112,7 @@ function engineFiles(directory) {
   return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => entry.isDirectory() ? engineFiles(join(directory, entry.name)) : entry.isFile() ? [join(directory, entry.name)] : []);
 }
 const binaryInventory = engineFiles(join(root, "src-tauri", "resources", "engine")).concat(engineFiles(join(root, "src-tauri", "binaries"))).map((path) => ({ path: relative(root, path).replaceAll("\\", "/"), sha256: hash(readFileSync(path)) })).sort((a, b) => a.path.localeCompare(b.path));
-for (const manifest of ["macos-build.json", "windows-build.json"]) {
+for (const manifest of ["macos-build.json", "windows-build.json", "windows-avx2-build.json"]) {
   const build = json(join(root, "src-tauri", "resources", "engine", manifest));
   if (build.archiveSha256 !== "a6abd064fcca8b85e794d205abf328c522e9451db43a3eadc178b883b7d0e9cd" || build.version !== "1.9.2") {
     throw new Error(`${manifest}: review the pinned engine source before updating notices`);

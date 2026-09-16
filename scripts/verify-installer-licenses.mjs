@@ -6,7 +6,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { installerArch, selectInstaller } from "./package-installer-zip.mjs";
 import { verifyLicenses } from "./check-licenses.mjs";
-import { testWindowsEngine } from "./test-windows-engine.mjs";
+import { testWindowsEnginePair } from "./test-windows-engine.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const config = JSON.parse(readFileSync(join(root, "src-tauri", "tauri.conf.json"), "utf8"));
@@ -54,7 +54,7 @@ try {
     execFileSync(join(application, "Contents", "MacOS", "whisper-cli"), ["--help"], { timeout: 10_000, stdio: "pipe" });
     console.log("PASS: インストーラー内の署名済み音声認識エンジンが起動しました。");
   } else if (process.platform === "win32") {
-    testWindowsEngine(join(resources, "whisper-cli.exe"), { model: process.env.DOON_TEST_MODEL, audio: process.env.DOON_TEST_AUDIO });
+    testWindowsEnginePair(join(resources, "whisper-cli.exe"), join(resources, "engine", "windows-x64", "whisper", "whisper-avx2.exe"), { model: process.env.DOON_TEST_MODEL, audio: process.env.DOON_TEST_AUDIO });
     if (process.env.DOON_TEST_NATIVE_APP === "1") {
       execFileSync("pwsh.exe", ["-NoProfile", "-NonInteractive", "-File", join(root, "scripts", "test-windows-app.ps1"), "-Directory", resources], { timeout: 60_000, stdio: "inherit" });
     }

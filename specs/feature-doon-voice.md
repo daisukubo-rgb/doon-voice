@@ -55,7 +55,7 @@ macOS版whisper-cliはWhisper／GGML／Metalシェーダーを本体へ組み込
 
 macOSの親アプリは`com.apple.security.device.audio-input`を署名時に宣言する。最終DMGから署名宣言を抽出して真偽値を検査する。ad-hoc署名で更新した場合、既存のOS許可との識別情報が変わり、マイクやアクセシビリティの再許可が必要になることがある。
 
-Windowsの音声エンジンは公式whisper.cpp v1.9.2の固定ソースをMSVC /MTでビルドし、Whisper／GGML／VCランタイムを本体へ組み込む。OpenMPと端末固有のAVX系命令を無効にし、x64/SSE4.2を対象とする。従来のWhisper／SDL2／MSVC DLLは同梱しない。単独EXEとMSI内のEXEの両方で、本番と同じlarge-v3-turbo-q5_0モデルによる固定音声の認識を試験する。
+Windowsの音声エンジンは公式whisper.cpp v1.9.2の固定ソースをMSVC /MTでビルドし、Whisper／GGML／VCランタイムを本体へ組み込む。OpenMPを無効にした互換版とAVX2版を同梱する。CPUのSSE4.2／AVX／AVX2／FMA／F16Cがすべて利用可能ならAVX2版、それ以外は互換版を使う。高速版を選べるCPUで必要ファイルが欠けていた場合は明示的にエラーにする。従来のWhisper／SDL2／MSVC DLLは同梱しない。単独EXEとMSI内の選択EXEの両方で、本番と同じlarge-v3-turbo-q5_0モデルによる固定音声の認識を試験する。互換版は検証環境で5分の上限を超えており、古いCPUでの認識速度は保証しない。
 
 WindowsのAI連携はPATH上の実EXEまたは標準npm起動ファイルから実体を解決し、Nodeスクリプト／native EXEを直接起動する。認証確認・JSON通信はコマンドシェルへ本文を渡さない。追加のシェル演算を含む独自起動ファイルは明示的に拒否する。通常の子プロセスはコンソールを表示せず、利用者が明示したログイン操作だけ新しいコンソールを開く。
 

@@ -89,8 +89,18 @@
       "sha256": "4b054c054a693c7d68177ed8428c746815b28cefd3aee34d87b07f497956c792"
     },
     {
+      "path": "src-tauri/resources/engine/windows-avx2-build.json",
+      "sha256": "3d70ef38d6a7b69051beb493190e18ceeabf2f8e255ccdfd3d07e75f83021d3c"
+    },
+    {
       "path": "src-tauri/resources/engine/windows-build.json",
       "sha256": "65494ecdc49b84a1c1d8a08ff2c2f9c8b6a5ce3553fdd3483a608325bb4634b4"
+    },
+    {
+      "path": "src-tauri/resources/engine/windows-x64/whisper/whisper-avx2.exe",
+      "sha256": "d1159b3bb1f5a98e18ae38f866aba9f8045c82d03aac6044e67decaa792977e3",
+      "source": "https://github.com/ggml-org/whisper.cpp/archive/refs/tags/v1.9.2.tar.gz#sha256=a6abd064fcca8b85e794d205abf328c522e9451db43a3eadc178b883b7d0e9cd",
+      "buildManifest": "src-tauri/resources/engine/windows-avx2-build.json"
     }
   ]
 }

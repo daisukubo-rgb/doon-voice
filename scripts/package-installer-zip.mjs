@@ -18,6 +18,7 @@ const quickStart = `DOON Voice — インストールと使い方
 【インストール】
 macOS: DMGを開き、DOON VoiceをApplicationsへ移動してください。
 Windows: MSIをダブルクリックしてインストールしてください。
+Windows版は10/11の64ビット（x64）向けです。CPUに合わせて高速エンジンを自動選択します。古いCPUでは認識に時間がかかり、5分の制限で終了する場合があります。
 
 【初回設定】
 1. DOON Voiceを起動します。

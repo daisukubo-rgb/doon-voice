@@ -7,9 +7,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export function testWindowsEngine(command, { model, audio } = {}) {
+export function testWindowsEngine(command, { model, audio, variant = "compatible" } = {}) {
   if (process.platform !== "win32") throw new Error("Windowsで実エンジンを検証してください。");
-  const provenance = JSON.parse(readFileSync(new URL("../src-tauri/resources/engine/windows-build.json", import.meta.url), "utf8"));
+  assert.ok(["compatible", "avx2"].includes(variant), "未対応のエンジン種別です");
+  const manifest = variant === "avx2" ? "windows-avx2-build.json" : "windows-build.json";
+  const provenance = JSON.parse(readFileSync(new URL(`../src-tauri/resources/engine/${manifest}`, import.meta.url), "utf8"));
   assert.equal(createHash("sha256").update(readFileSync(command)).digest("hex"), provenance.sha256, "検査対象エンジンがWindowsビルド記録と一致しません。");
   const result = spawnSync(command, ["--help"], { encoding: "utf8", timeout: 15_000, windowsHide: true });
   assert.ifError(result.error);
@@ -25,9 +27,21 @@ export function testWindowsEngine(command, { model, audio } = {}) {
     if (recognized.error) throw new Error(`Windows音声認識試験に失敗しました (${Math.round(performance.now() - started)}ms): ${recognized.stderr}`, { cause: recognized.error });
     assert.equal(recognized.status, 0, recognized.stderr || recognized.signal);
     assert.match(recognized.stdout, /ask not what your country can do for you/i);
-    console.log(`PASS: Windows音声エンジンで固定音声の実文字起こしを確認しました (${Math.round(performance.now() - started)}ms)。`);
+    console.log(`PASS: Windows音声エンジン(${variant})で固定音声の実文字起こしを確認しました (${Math.round(performance.now() - started)}ms)。`);
     console.log(recognized.stderr.split(/\r?\n/).filter((line) => /timings:/.test(line)).join("\n"));
   }
+}
+
+export function testWindowsEnginePair(compatible, optimized, options = {}) {
+  // PowerShell 7's .NET checks include the OS AVX state. F16C is CPUID leaf 1 ECX bit 29.
+  const probe = spawnSync("pwsh.exe", ["-NoProfile", "-NonInteractive", "-Command", "[System.Runtime.Intrinsics.X86.Sse42]::IsSupported -and [System.Runtime.Intrinsics.X86.Avx2]::IsSupported -and [System.Runtime.Intrinsics.X86.Fma]::IsSupported -and (([System.Runtime.Intrinsics.X86.X86Base]::CpuId(1, 0).Item3 -band 536870912) -ne 0)"], { encoding: "utf8", timeout: 15_000, windowsHide: true });
+  assert.ifError(probe.error);
+  assert.equal(probe.status, 0, probe.stderr);
+  assert.match(probe.stdout.trim(), /^(True|False)$/);
+  const useOptimized = probe.stdout.trim() === "True";
+  testWindowsEngine(compatible, useOptimized ? {} : options);
+  if (useOptimized) testWindowsEngine(optimized, { ...options, variant: "avx2" });
+  else console.log("INFO: このCPUでは互換エンジンを検査しました。AVX2版は実行していません。");
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
@@ -35,9 +49,11 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
   const staging = mkdtempSync(join(tmpdir(), "doon-whisper-windows-check-"));
   try {
     // Only the executable is copied: preinstalled build tools must not mask missing sibling DLLs.
-    const command = join(staging, "whisper-cli.exe");
-    copyFileSync(join(root, "src-tauri", "binaries", "whisper-cli-x86_64-pc-windows-msvc.exe"), command);
-    testWindowsEngine(command, { model: process.env.DOON_TEST_MODEL, audio: process.env.DOON_TEST_AUDIO });
+    const compatible = join(staging, "whisper-cli.exe");
+    const optimized = join(staging, "whisper-avx2.exe");
+    copyFileSync(join(root, "src-tauri", "binaries", "whisper-cli-x86_64-pc-windows-msvc.exe"), compatible);
+    copyFileSync(join(root, "src-tauri", "resources", "engine", "windows-x64", "whisper", "whisper-avx2.exe"), optimized);
+    testWindowsEnginePair(compatible, optimized, { model: process.env.DOON_TEST_MODEL, audio: process.env.DOON_TEST_AUDIO });
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }

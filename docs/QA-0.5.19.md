@@ -4,7 +4,7 @@
 
 ## 変更
 
-- 公式whisper.cpp v1.9.2を固定ソースからWindows x64向けにビルド。MSVCランタイムを静的に組み込み、OpenMP・AVX系を無効化した。単独エンジンの参照DLLはOS標準のADVAPI32.dllとKERNEL32.dllのみ。
+- 公式whisper.cpp v1.9.2を固定ソースからWindows x64向けにビルド。MSVCランタイムを静的に組み込み、OpenMPを無効化した。互換版とAVX2版を同梱し、CPUのSSE4.2／AVX／AVX2／FMA／F16Cを検出して選択する。両エンジンの参照DLLはOS標準のADVAPI32.dllとKERNEL32.dllのみ。
 - 旧Whisper／GGML／SDL2／MSVC DLL 23ファイルを削除。来歴、ビルド設定、バイナリSHA-256を`src-tauri/resources/engine/windows-build.json`に保存。
 - Windowsのnpm版AI CLIを実体のNodeスクリプトまたはEXEへ解決。標準npm形式だけを扱い、本文は引き続きJSONの標準入力で渡す。通常処理のコンソール表示を抑え、明示したログインだけ専用コンソールを開く。
 - ライセンス収集でlucideのcopyrightアイコンやRustのcopyingソースを誤収集していた条件を修正。ライセンス原文の名前を維持し、一覧の全ファイルを配布へ同梱する。
@@ -19,6 +19,13 @@
 | モデル | `394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2` |
 | 音声 | `59dfb9a4acb36fe2a2affc14bacbee2920ff435cb13cc314a08c13f66ba7860e` |
 | Windowsエンジン | `b22658171484743ddfe3e0d32458995e64cb15e9b7fdb45610877897d381a141` |
+| Windows AVX2エンジン | `d1159b3bb1f5a98e18ae38f866aba9f8045c82d03aac6044e67decaa792977e3` |
+
+## 性能による設計変更
+
+互換版の単独起動は成功したが、4 CPUのWindows runnerで上記11秒音声の認識が120秒を超えた。製品と同じデコード設定（`-mc 0 -nth 0.9 -nf -sns`）と300秒上限でもタイムアウトした。診断出力ではCPU SIMD機能が有効になっていなかった。
+
+固定AVX2版への全面置換では対応しないCPUが実行不能になるため、追加の単独EXEを同梱してCPU機能で選ぶ方式とした。互換版の起動・依存検査と、対応CPUでのAVX2版の実認識を分けて検査する。互換版の実モデル認識は今回成功しておらず、古いCPUでは5分上限にかかり得る。
 
 ## 検証中
 
