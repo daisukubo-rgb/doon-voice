@@ -122,20 +122,23 @@ mod tests {
         ffi::OsStr,
         fs,
         path::{Path, PathBuf},
+        sync::atomic::{AtomicU64, Ordering},
         time::{SystemTime, UNIX_EPOCH},
     };
 
     struct Fixture(PathBuf);
+    static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
 
     impl Fixture {
         fn new() -> Self {
             let path = std::env::temp_dir().join(format!(
-                "doon-cli-{}-{} 日本語 & ! % () ' space",
+                "doon-cli-{}-{}-{} 日本語 & ! % () ' space",
                 std::process::id(),
                 SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .unwrap()
-                    .as_nanos()
+                    .as_nanos(),
+                NEXT_FIXTURE_ID.fetch_add(1, Ordering::Relaxed)
             ));
             fs::create_dir_all(&path).unwrap();
             Self(path)

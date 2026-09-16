@@ -1,16 +1,47 @@
+use std::path::PathBuf;
+
+/// The feature order matches the packaged engine manifest:
+/// SSE4.2, AVX, AVX2, FMA, F16C. Missing resources must not silently select a
+/// much slower engine on supported CPUs.
+pub(crate) fn select_windows_engine(
+    features: [bool; 5],
+    resource_dir: impl FnOnce() -> Result<PathBuf, String>,
+) -> Result<Option<PathBuf>, String> {
+    if !features.into_iter().all(|supported| supported) {
+        return Ok(None);
+    }
+    let engine = resource_dir()?.join("engine/windows-x64/whisper/whisper-avx2.exe");
+    if !engine.is_file() {
+        return Err(
+            "高速音声認識エンジンが見つかりません。DOON Voiceを再インストールしてください。".into(),
+        );
+    }
+    Ok(Some(engine))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, path::PathBuf, time::{SystemTime, UNIX_EPOCH}};
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     struct Fixture(PathBuf);
+    static NEXT_FIXTURE_ID: AtomicU64 = AtomicU64::new(0);
 
     impl Fixture {
         fn new() -> Self {
             let root = std::env::temp_dir().join(format!(
-                "doon-whisper-selector-{}-{}",
+                "doon-whisper-selector-{}-{}-{}",
                 std::process::id(),
-                SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos(),
+                NEXT_FIXTURE_ID.fetch_add(1, Ordering::Relaxed)
             ));
             fs::create_dir_all(&root).unwrap();
             Self(root)
@@ -22,7 +53,9 @@ mod tests {
     }
 
     impl Drop for Fixture {
-        fn drop(&mut self) { fs::remove_dir_all(&self.0).unwrap(); }
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.0).unwrap();
+        }
     }
 
     #[test]
@@ -40,9 +73,16 @@ mod tests {
     #[test]
     fn any_missing_cpu_feature_keeps_the_baseline_without_reading_resources() {
         for mask in 0..31 {
-            let features = [mask & 1 != 0, mask & 2 != 0, mask & 4 != 0, mask & 8 != 0, mask & 16 != 0];
+            let features = [
+                mask & 1 != 0,
+                mask & 2 != 0,
+                mask & 4 != 0,
+                mask & 8 != 0,
+                mask & 16 != 0,
+            ];
             assert_eq!(
-                select_windows_engine(features, || panic!("baseline must not read resources")).unwrap(),
+                select_windows_engine(features, || panic!("baseline must not read resources"))
+                    .unwrap(),
                 None,
                 "features={features:?}"
             );

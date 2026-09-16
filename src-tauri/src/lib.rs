@@ -3,7 +3,7 @@ mod cloud_runtime;
 mod native_audio;
 mod process_runner;
 
-#[cfg(test)]
+#[cfg(any(all(target_os = "windows", target_arch = "x86_64"), test))]
 mod whisper_engine;
 
 mod audio_file;
@@ -40,7 +40,7 @@ use tauri::{
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 use tauri_plugin_shell::{
-    process::{CommandChild, CommandEvent},
+    process::{Command as ShellCommand, CommandChild, CommandEvent},
     ShellExt,
 };
 use tokio::io::AsyncWriteExt;
@@ -1393,6 +1393,29 @@ impl Drop for WhisperChild {
     }
 }
 
+fn whisper_command(app: &AppHandle) -> Result<ShellCommand, String> {
+    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
+    {
+        let features = [
+            std::is_x86_feature_detected!("sse4.2"),
+            std::is_x86_feature_detected!("avx"),
+            std::is_x86_feature_detected!("avx2"),
+            std::is_x86_feature_detected!("fma"),
+            std::is_x86_feature_detected!("f16c"),
+        ];
+        if let Some(engine) = whisper_engine::select_windows_engine(features, || {
+            app.path()
+                .resource_dir()
+                .map_err(|_| "音声認識エンジンの保存先を取得できませんでした。".to_string())
+        })? {
+            return Ok(app.shell().command(engine));
+        }
+    }
+    app.shell()
+        .sidecar("whisper-cli")
+        .map_err(|_| "音声認識を起動できませんでした。".to_string())
+}
+
 async fn whisper(
     app: &AppHandle,
     wav: &Path,
@@ -1403,10 +1426,7 @@ async fn whisper(
     if !m.is_file() {
         return Err("音声認識モデルを取得してから話してください。".into());
     }
-    let mut c = app
-        .shell()
-        .sidecar("whisper-cli")
-        .map_err(|_| "音声認識を起動できませんでした。".to_string())?
+    let mut c = whisper_command(app)?
         .args([
             "-m",
             &m.to_string_lossy(),
