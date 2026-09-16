@@ -273,6 +273,13 @@ mod tests {
             return;
         };
         match mode.as_str() {
+            #[cfg(windows)]
+            "console" => {
+                #[link(name = "kernel32")]
+                unsafe extern "system" { fn GetConsoleWindow() -> *mut std::ffi::c_void; }
+                // SAFETY: GetConsoleWindow has no arguments and does not transfer ownership.
+                println!("has-console={}", !unsafe { GetConsoleWindow() }.is_null());
+            }
             "success" => {
                 std::io::stdout().write_all(b"normal-output").unwrap();
                 std::io::stderr().write_all(b"normal-error").unwrap();
@@ -316,6 +323,33 @@ mod tests {
         assert!(result.status.success());
         assert!(String::from_utf8_lossy(&result.stdout).contains("normal-output"));
         assert!(String::from_utf8_lossy(&result.stderr).contains("normal-error"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_bounded_command_has_no_console() {
+        use std::os::windows::process::CommandExt;
+        let mut command = fixture("console");
+        // Ensure the pre-fix behavior creates a console even on a headless runner.
+        command.creation_flags(0x0000_0010); // CREATE_NEW_CONSOLE
+        let output = run_bounded(command, Duration::from_secs(5), &AtomicBool::new(false)).unwrap();
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("has-console=false"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_explicit_login_opens_a_console() {
+        let fixture_name = concat!(module_path!(), "::fake_cli_fixture").split_once("::").unwrap().1;
+        let mut command = crate::cli_command::login_command(
+            &std::env::current_exe().unwrap(),
+            &std::env::var_os("PATH").unwrap_or_default(),
+            &["--exact", fixture_name, "--nocapture"],
+        ).unwrap();
+        let output = command.env("DOON_PROCESS_TEST_MODE", "console")
+            .stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).output().unwrap();
+        assert!(output.status.success());
+        assert!(String::from_utf8_lossy(&output.stdout).contains("has-console=true"));
     }
 
     #[test]

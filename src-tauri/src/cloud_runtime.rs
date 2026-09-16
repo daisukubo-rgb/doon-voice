@@ -729,6 +729,13 @@ mod tests {
         std::io::stdin().read_line(&mut line).unwrap();
         let _: Value = serde_json::from_str(&line).unwrap();
         match mode.as_str() {
+            #[cfg(windows)]
+            "console" => {
+                #[link(name = "kernel32")]
+                unsafe extern "system" { fn GetConsoleWindow() -> *mut std::ffi::c_void; }
+                // SAFETY: GetConsoleWindow has no arguments and does not transfer ownership.
+                println!("{}", json!({"has_console": !unsafe { GetConsoleWindow() }.is_null()}));
+            }
             "stderr-exit" => {
                 std::io::stderr()
                     .write_all(b"fixture startup rejection")
@@ -778,6 +785,18 @@ mod tests {
             .unwrap_err();
         assert_eq!(error, "fixture startup rejection");
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_json_line_process_has_no_console() {
+        use std::os::windows::process::CommandExt;
+        let mut command = exit_fixture_command("console");
+        command.creation_flags(0x0000_0010); // CREATE_NEW_CONSOLE
+        let mut process = JsonLineProcess::spawn(command).unwrap();
+        process.send(&json!({"id": 0})).unwrap();
+        let response = process.receive(Instant::now() + Duration::from_secs(5)).unwrap();
+        assert_eq!(response["has_console"], false);
     }
 
     #[test]

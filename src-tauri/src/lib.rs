@@ -1,4 +1,6 @@
 mod cloud_runtime;
+#[cfg(test)]
+mod cli_command;
 mod native_audio;
 mod process_runner;
 
