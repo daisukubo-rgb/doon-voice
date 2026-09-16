@@ -8,8 +8,12 @@ if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
     throw "The MSI does not contain the desktop executable: $executable"
 }
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
-$visualStudio = (& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1)
-if ($LASTEXITCODE -ne 0 -or -not $visualStudio) { throw 'Visual Studio dependency inspection is unavailable.' }
+# Consume native output before selecting a line. Select-Object -First can stop
+# the native pipeline early, before PowerShell assigns LASTEXITCODE.
+$visualStudioPaths = @(& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath)
+if ($LASTEXITCODE -ne 0) { throw 'Visual Studio dependency inspection is unavailable.' }
+$visualStudio = $visualStudioPaths | Select-Object -First 1
+if (-not $visualStudio) { throw 'Visual Studio dependency inspection is unavailable.' }
 $toolset = Get-ChildItem -LiteralPath (Join-Path $visualStudio 'VC/Tools/MSVC') -Directory | Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
 $dumpbin = Join-Path $toolset.FullName 'bin/Hostx64/x64/dumpbin.exe'
 $imports = (& $dumpbin /DEPENDENTS $executable | Out-String)
