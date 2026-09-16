@@ -3,6 +3,9 @@ mod cloud_runtime;
 mod native_audio;
 mod process_runner;
 
+#[cfg(test)]
+mod whisper_engine;
+
 mod audio_file;
 
 #[cfg(test)]
