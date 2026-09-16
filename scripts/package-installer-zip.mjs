@@ -90,7 +90,7 @@ function packageInstaller() {
     if (process.platform === "darwin") {
       execFileSync("ditto", ["-c", "-k", "--norsrc", packageDir, temporaryZip], { stdio: "inherit" });
     } else {
-      execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Compress-Archive -LiteralPath $env.DOON_ZIP_SOURCE -DestinationPath $env.DOON_ZIP_OUTPUT -Force"], {
+      execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", "Compress-Archive -LiteralPath $env:DOON_ZIP_SOURCE -DestinationPath $env:DOON_ZIP_OUTPUT -Force"], {
         stdio: "inherit", env: { ...process.env, DOON_ZIP_SOURCE: packageDir, DOON_ZIP_OUTPUT: temporaryZip },
       });
     }
