@@ -158,6 +158,40 @@ mod tests {
 
     const NODE_SHIM: &str = "@ECHO off\r\nSET \"_prog=%dp0%\\node.exe\"\r\nSET \"_prog=node\"\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js\" %*\r\n";
 
+    // Standard npm cmd-shim output for Claude Code's no-shebang native binary.
+    const NATIVE_SHIM: &str = "@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe\"   %*\r\n";
+
+    #[test]
+    fn npm_native_shim_resolves_directly_without_node_or_a_shell() {
+        let fixture = Fixture::new();
+        fixture.file("claude.cmd", NATIVE_SHIM);
+        let executable = fixture.file("node_modules/@anthropic-ai/claude-code/bin/claude.exe", "");
+        for path in [Path::new("claude"), fixture.0.join("claude.cmd").as_path()] {
+            let command = windows_cli_command(path, std::slice::from_ref(&fixture.0)).unwrap();
+            assert_eq!(command.get_program(), executable.as_os_str());
+            assert_eq!(command.get_args().count(), 0);
+        }
+        fs::remove_file(executable).unwrap();
+        assert!(windows_cli_command(Path::new("claude"), std::slice::from_ref(&fixture.0)).is_err());
+    }
+
+    #[test]
+    fn native_shim_rejects_extra_syntax_and_ambiguous_targets() {
+        let fixture = Fixture::new();
+        fixture.file("node_modules/@anthropic-ai/claude-code/bin/claude.exe", "");
+        fixture.file("node_modules/@anthropic-ai/claude-code/bin/claude.js", "");
+        for script in [
+            NATIVE_SHIM.replace("%*", "%* & echo injected"),
+            NATIVE_SHIM.replace("%*", "--other %*"),
+            NATIVE_SHIM.replace("%*", "%* > output.txt"),
+            NATIVE_SHIM.replace("claude.exe", "claude.js"),
+            format!("{NATIVE_SHIM}\"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe\" %*\r\n"),
+        ] {
+            fixture.file("claude.cmd", &script);
+            assert!(windows_cli_command(Path::new("claude"), std::slice::from_ref(&fixture.0)).is_err());
+        }
+    }
+
     #[test]
     fn npm_node_shim_resolves_to_node_and_entry_without_a_shell() {
         let fixture = Fixture::new();
