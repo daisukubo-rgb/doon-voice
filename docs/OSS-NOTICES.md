@@ -1,6 +1,6 @@
 # DOON Voice OSS表示
 
-DOON Voiceが使用するOSSの表示です。npmとRustの固定バージョンに対応する原文資料を `licenses/` に収録し、本ファイルとともにアプリと配布ZIPへ同梱します。本文が公開されていない依存の宣言と、Windowsの追加DLLに関する確認事項は下記に分けて記載しています。
+DOON Voiceが使用するOSSの表示です。npmとRustの固定バージョンに対応する原文資料を `licenses/` に収録し、本ファイルとともにアプリと配布ZIPへ同梱します。本文が公開されていない依存の宣言は下記に記載しています。
 
 `licenses/inventory.json` に依存名・バージョン・ライセンス宣言・資料の入手元・SHA-256を記録しています。RustはApple Silicon、Intel Mac、Windows x64の依存を列挙しており、ビルド時だけ使用する依存も含みます。列挙と原文同梱の検査は、全依存の法的適合性を保証するものではありません。
 
@@ -8,7 +8,7 @@ DOON Voiceが使用するOSSの表示です。npmとRustの固定バージョン
 
 - npm: `licenses/npm/`。LucideのISC本文・権利者表示、React、フォントなど、導入済みパッケージの実LICENSEを収録します。
 - Rust: `licenses/cargo/`。CPAL v0.16.0のApache-2.0全文、TauriなどのLICENSE/NOTICE/COPYRIGHTを収録します。crateにない場合は同じソースコミットの上流資料を確認します。
-- エンジンとWindows DLL: `licenses/engine/` と `licenses/engine-inventory.json`。入手元を確認できた資料と、バイナリの一覧を記録します。
+- エンジン: `licenses/engine/` と `licenses/engine-inventory.json`。固定ソース・ビルド構成・ハッシュを`engine/macos-build.json`と`engine/windows-build.json`に記録します。
 
 依存更新後は `node scripts/collect-licenses.mjs` を実行します。`node scripts/check-licenses.mjs` はロックファイルと資料のハッシュを照合します。ReleaseではDMG/MSIを展開し、実際に同梱された資料も検査します。
 
@@ -16,9 +16,9 @@ DOON Voiceが使用するOSSの表示です。npmとRustの固定バージョン
 
 sigchld v0.2.4は、公開crateと記録されたソースコミットにLICENSE本文・著作権表示がありません。`licenses/cargo/sigchld-0.2.4/LICENSE-DECLARATION.toml` に上流のMIT宣言をそのまま収録しています。[該当ソース](https://github.com/oconnor663/sigchld.rs/tree/07b95e2fe38b18b376b0f635f2766bf2e641b80b) の表示については権利者確認が必要です。
 
-Windows用のMicrosoft Visual C++ランタイムDLLはOSSではありません。既存DLLの由来・バージョンに対応する再配布条件の確認が必要です。Microsoftは、再配布をVisual Studioの利用資格とライセンス条件に従うものとしています。[公式の再配布説明](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files) を参照してください。DOON Voiceが全DLLの再配布許諾を確認済みであるという記載ではありません。
+0.5.19で、Windows音声エンジンを公式whisper.cpp v1.9.2の固定ソースから再ビルドしました。Whisper/GGMLとMSVCランタイムを静的に組み込み、OpenMPを使いません。旧版のWhisper・SDL2・MSVC DLLは同梱を廃止しました。MSVCランタイムはOSSではなく、Microsoftのライセンス条件が適用されます。[公式の再配布説明](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files)と確認用の条項資料を引き続き収録します。
 
-Windows音声エンジンにはVCOMP140.DLLの依存があります。現行同梱物だけでクリーン端末の依存が満たされることは未確認です。CIでは音声エンジンの実起動を必須化していますが、CI端末に既存のランタイムがある場合も通るため、新規Windows環境の確認を代替しません。未確認のDLLは今回追加していません。
+新しいWindows音声エンジンの直接参照DLLはWindows標準のKERNEL32とADVAPI32です。追加DLLを置かない場所での起動と実認識、MSI内部の起動も配布試験の対象です。Windows runnerでの試験は、全利用者のPC環境での動作保証ではありません。
 
 | コンポーネント | 主なライセンス |
 | --- | --- |

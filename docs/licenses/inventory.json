@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "locks": {
-    "package-lock.json": "0120bdff08a434429a71f4fc107cab79358d751de636c4d3541c1f1381b5ed92",
-    "src-tauri/Cargo.lock": "6d33eb9b9b31ee24962215e01bb6655599417b916f168f744bb72af49562c603"
+    "package-lock.json": "62cf9026f1f8be022844820579d0489e0a2c8a04b787b118c08e5cb95fec4ee3",
+    "src-tauri/Cargo.lock": "412ab3554d36e1c2903a12cc13aacd2650bc8c1ec43c534057f11107e9ea1e02"
   },
   "packages": [
     {
@@ -6456,7 +6456,7 @@
     },
     {
       "ecosystem": "engine",
-      "name": "whisper.cpp / ggml / parakeet",
+      "name": "whisper.cpp / ggml",
       "version": "1.9.2",
       "license": "MIT",
       "files": [
@@ -6464,19 +6464,6 @@
           "path": "engine/whisper.cpp-1.9.2/LICENSE",
           "sha256": "94f29bbed6a22c35b992c5c6ebf0e7c92f13b836b90f36f461c9cf2f0f1d010d",
           "source": "https://raw.githubusercontent.com/ggml-org/whisper.cpp/v1.9.2/LICENSE"
-        }
-      ]
-    },
-    {
-      "ecosystem": "engine",
-      "name": "SDL2",
-      "version": "2.28.5",
-      "license": "Zlib",
-      "files": [
-        {
-          "path": "engine/SDL2-2.28.5/LICENSE.txt",
-          "sha256": "9928507f684c1965d07f2b6ef4b4723d5efc2f6b4ab731f743a413c51c319927",
-          "source": "https://raw.githubusercontent.com/libsdl-org/SDL/release-2.28.5/LICENSE.txt"
         }
       ]
     },
@@ -6502,12 +6489,12 @@
     },
     {
       "name": "Microsoft Visual C++ Runtime",
-      "issue": "同梱済みDLLの由来と適用条件は未確認。公式2015-2022条項原本は確認用資料として収録し、全DLLへの適用や再配布許諾の確認済み表示とはしない。"
+      "issue": "音声エンジンは固定ソースからMSVC /MTでビルド。過去の出所未確認DLLは同梱を廃止。コンパイラ・ビルド設定はwindows-build.jsonに記録し、Microsoft条項は確認用資料として維持する。"
     }
   ],
   "engineManifest": {
     "path": "engine-inventory.json",
-    "sha256": "4cbe005eb24f377089d1bacead769dc5a4ea8a2154381f7166b2e18aeb82baff",
+    "sha256": "2a928fc13a231187810dd95c3a59db04d299322eec5e0cec142aca0e8db66abe",
     "source": "repository bundled engine files"
   }
 }

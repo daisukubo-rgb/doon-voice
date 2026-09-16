@@ -37,6 +37,21 @@ WindowsではRustの導入後に、Visual Studio Installerで「Desktop developm
 
 ## 完成版インストーラーを使う
 
+### Windowsテスト版 0.5.19
+
+配布用の `DOON Voice-Windows.zip` をすべて展開し、中の `.msi` を実行してください。対象はWindows 10/11の64ビット（x64）です。アプリの利用にNode.jsやRustの開発環境は不要です。
+
+1. DOON Voiceを起動し、「接続と設定」で音声認識モデル（約574MB）を取得します。
+2. Windowsの設定でマイクへのアクセスと「デスクトップアプリにマイクへのアクセスを許可する」をオンにします。
+3. 「AIなし」を選び、メモ帳などの入力欄で`Ctrl+Alt+Space`を押して録音し、もう一度押して止めます。
+4. 認識した言葉、待ち時間、入力先への貼り付けを確認してください。終了は通知領域のDOON Voiceアイコンから選べます。
+
+ChatGPT／Claude／Geminiの文章整形は、相手自身の対応CLIとログインが必要です。`AIなし`での録音・文字起こしにはこれらのログインは不要です。クラウドAIを選ぶと本文と辞書が対応サービスへ送られます。
+
+コード署名証明書は付けていないテスト版です。Windowsや組織の設定で警告・起動制限が出た場合は、画面の文言を配布元へ知らせてください。Windows ARMネイティブ版と32ビット版は含みません。
+
+開発用のWindowsビルドはGitHub Actionsの `DOON Voice Windows Test Installer` から実行できます。品質検査・実モデル認識・MSI内部検査に成功した場合だけ、手順付きZIPを30日間のartifactとして保存します。一般公開Releaseは別の手順です。
+
 GitHubの [Releases](https://github.com/daisukubo-rgb/doon-voice/releases) からOSに合うファイルを取得します。
 
 - macOS Apple Silicon: `DOON.Voice-macOS.zip` を展開し、中の `.dmg` を開きます。

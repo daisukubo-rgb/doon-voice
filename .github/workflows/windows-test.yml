@@ -1,0 +1,65 @@
+name: DOON Voice Windows Test Installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["feat/windows-test-*"]
+    paths-ignore:
+      - "scripts/build-windows-engine.ps1"
+      - ".github/workflows/windows-engine.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 40
+    env:
+      TAURI_TARGET: x86_64-pc-windows-msvc
+      DOON_VOICE_PACKAGE_SUFFIX: Windows
+      DOON_TEST_NATIVE_APP: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: npm ci
+      - run: node scripts/setup.mjs
+      - run: node scripts/check-licenses.mjs
+      - name: Download checksum-verified speech test fixtures
+        shell: pwsh
+        run: ./scripts/download-windows-test-fixtures.ps1
+      - run: node scripts/test-windows-engine.mjs
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install chromium
+      - run: npm run test:ui
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --all-targets
+      - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: Build Windows MSI
+        run: npm run dist -- --target x86_64-pc-windows-msvc --bundles msi
+      - name: Verify payload and recognize speech from inside MSI
+        run: node scripts/verify-installer-licenses.mjs
+      - run: npm run package:zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DOON-Voice-Windows-test
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            dist/DOON Voice-Windows.zip
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi/*.msi
