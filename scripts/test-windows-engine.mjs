@@ -18,11 +18,15 @@ export function testWindowsEngine(command, { model, audio } = {}) {
   console.log("PASS: 同梱Windows音声エンジンの実起動を確認しました。");
   if (model || audio) {
     assert.ok(model && audio, "認識試験はモデルと音声の両方が必要です");
-    const recognized = spawnSync(command, ["-m", model, "-f", audio, "-l", "en", "-nt", "-np", "-ng"], { encoding: "utf8", timeout: 120_000, windowsHide: true });
-    assert.ifError(recognized.error);
+    // Match the application's decoding options and its five-minute deadline.
+    // Keep diagnostic output for this public test fixture so slow runners are diagnosable.
+    const started = performance.now();
+    const recognized = spawnSync(command, ["-m", model, "-f", audio, "-l", "en", "-nt", "-ng", "-mc", "0", "-nth", "0.9", "-nf", "-sns"], { encoding: "utf8", timeout: 300_000, windowsHide: true });
+    if (recognized.error) throw new Error(`Windows音声認識試験に失敗しました (${Math.round(performance.now() - started)}ms): ${recognized.stderr}`, { cause: recognized.error });
     assert.equal(recognized.status, 0, recognized.stderr || recognized.signal);
     assert.match(recognized.stdout, /ask not what your country can do for you/i);
-    console.log("PASS: Windows音声エンジンで固定音声の実文字起こしを確認しました。");
+    console.log(`PASS: Windows音声エンジンで固定音声の実文字起こしを確認しました (${Math.round(performance.now() - started)}ms)。`);
+    console.log(recognized.stderr.split(/\r?\n/).filter((line) => /timings:/.test(line)).join("\n"));
   }
 }
 
