@@ -12,6 +12,17 @@ import { verifyLicenses } from "../scripts/check-licenses.mjs";
 const project = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const version = JSON.parse(readFileSync(join(project, "package.json"), "utf8")).version;
 
+test("Windows音声エンジンは追加のWhisper・VC・OpenMP DLLを要求しない", { skip: process.platform !== "darwin" }, () => {
+  const executable = join(project, "src-tauri", "binaries", "whisper-cli-x86_64-pc-windows-msvc.exe");
+  const result = spawnSync("xcrun", ["llvm-objdump", "-p", executable], { encoding: "utf8", timeout: 10_000 });
+  assert.equal(result.status, 0, result.error?.message || result.stderr);
+  assert.match(result.stdout, /coff-x86-64/);
+  const imports = [...result.stdout.matchAll(/DLL Name:\s*(\S+)/g)].map((match) => match[1]);
+  assert.ok(imports.length > 0, "PEの依存情報が見つかりません");
+  const external = imports.filter((name) => /^(whisper|ggml.*|parakeet|SDL2|msvc[pr].*|vcruntime.*|vcomp.*|libomp)\.dll$/i.test(name));
+  assert.deepEqual(external, [], `別途DLLが必要です: ${external.join(", ")}`);
+});
+
 test("macOS配布はHardened Runtimeでマイクを使うentitlementを宣言する", { skip: process.platform !== "darwin" }, () => {
   const config = JSON.parse(readFileSync(join(project, "src-tauri", "tauri.conf.json"), "utf8"));
   assert.equal(typeof config.bundle.macOS.entitlements, "string", "マイクentitlementの指定がありません");
