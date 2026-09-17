@@ -8,7 +8,7 @@
 - 旧Whisper／GGML／SDL2／MSVC DLL 23ファイルを削除。来歴、ビルド設定、バイナリSHA-256を`src-tauri/resources/engine/windows-build.json`と`windows-avx2-build.json`に保存。
 - Windowsのnpm版AI CLIを実体のNodeスクリプトまたはEXEへ解決。標準npm形式だけを扱い、本文は引き続きJSONの標準入力で渡す。通常処理のコンソール表示を抑え、明示したログインだけ専用コンソールを開く。
 - ライセンス収集でlucideのcopyrightアイコンやRustのcopyingソースを誤収集していた条件を修正。ライセンス原文の名前を維持し、一覧の全ファイルを配布へ同梱する。
-- Windows上で品質検査・MSI生成・MSI展開後のエンジンとアプリ起動検査を行い、手順付きZIPを作る専用CIを追加。
+- Windows上で品質検査・MSI生成・展開後のエンジンとアプリ起動検査に加え、実インストール・起動・アンインストールを行い、手順付きZIPを作る専用CIを追加。
 
 ## 試験データ
 
@@ -29,6 +29,10 @@
 
 ## 最終検証
 
+### 2026-09-17 実インストール検査
+
+[Windows配布CI 35186294808](https://github.com/daisukubo-rgb/doon-voice/actions/runs/35186294808)が成功した。`4deff2df3f3b1dca9361ec6562990c0b4c0bc492`で、Windows Server 2022 x64 runner上のMSIを`C:\Program Files\DOON Voice`へ通常インストールし、実EXEのウィンドウ表示を確認した。その後、MSIでアンインストールし、アプリ本体の残存がないことを確認した。
+
 [Windows配布CI 35055622325](https://github.com/daisukubo-rgb/doon-voice/actions/runs/35055622325)は2026-09-16 13:38 JSTに成功した。ビルド対象は`feat/windows-test-20260916`の`5fdfe2d37d00070880c53cc3cd249ff939ef9e93`。
 
 | 検査 | 結果 |
@@ -38,7 +42,7 @@
 | UI回帰 | Playwright 38項目成功 |
 | 型・画面ビルド・Rust整形・Clippy | 全成功、Clippyは警告をエラーとして検査 |
 | 単独Windowsエンジン | 両EXEのSHA・起動成功。AVX2版は11秒音声を37.917秒で認識 |
-| MSI生成・展開 | `DOON Voice_0.5.19_x64_en-US.msi`生成、管理者用展開による内容検査成功 |
+| MSI生成・展開 | `DOON Voice_0.5.19_x64_en-US.msi`生成、管理者用展開による内容検査成功。2026-09-17に通常インストール・起動・アンインストールも成功 |
 | MSI内エンジン | 両EXEのSHA・起動成功。AVX2版は同じ音声を38.547秒で認識 |
 | MSI内アプリ | 追加VCランタイムの直接依存なし。実EXEが起動し、タイトルDOON Voiceのウィンドウ表示と生存確認に成功 |
 | ライセンス | ソースとMSI内部の380件の原文・ハッシュ一致 |
