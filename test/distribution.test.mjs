@@ -211,6 +211,7 @@ test("配布内の音声エンジンも来歴一覧と照合し、別binaryへ�
 test("CIはテストとランチャーの変更を検査しReleaseは対象タグの全検査後に公開する", () => {
   const ci = readFileSync(join(project, ".github", "workflows", "ci.yml"), "utf8");
   const release = readFileSync(join(project, ".github", "workflows", "release.yml"), "utf8");
+  const windowsTest = readFileSync(join(project, ".github", "workflows", "windows-test.yml"), "utf8");
   for (const path of ["test/**", "DOON Voiceを起動.command", "DOON Voiceを起動.bat"]) assert.equal(ci.split(`"${path}"`).length - 1, 2);
   assert.ok(!ci.includes("--no-run"));
   assert.match(ci, /node scripts\/setup\.mjs/);
@@ -221,4 +222,5 @@ test("CIはテストとランチャーの変更を検査しReleaseは対象タ�
   assert.match(release, /- run: npm test/);
   assert.match(release, /node scripts\/verify-installer-licenses\.mjs/);
   assert.match(release, /node scripts\/test-windows-engine\.mjs/);
+  assert.match(windowsTest, /scripts\/test-windows-installed-app\.ps1/);
 });

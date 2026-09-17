@@ -55,6 +55,12 @@ jobs:
         run: npm run dist -- --target x86_64-pc-windows-msvc --bundles msi
       - name: Verify payload and recognize speech from inside MSI
         run: node scripts/verify-installer-licenses.mjs
+      - name: Install MSI and launch installed app
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -LiteralPath 'src-tauri/target/x86_64-pc-windows-msvc/release/bundle/msi' -Filter '*.msi' -File | Select-Object -First 1
+          if (-not $installer) { throw '実インストールするMSIが見つかりません。' }
+          ./scripts/test-windows-installed-app.ps1 -Installer $installer.FullName
       - run: npm run package:zip
       - uses: actions/upload-artifact@v4
         with:
