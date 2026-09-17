@@ -11,8 +11,15 @@ $installDirectory = Join-Path $env:ProgramFiles 'DOON Voice'
 $installed = $false
 
 function Invoke-Msi([string[]]$Arguments, [string]$Operation) {
-    & msiexec.exe @Arguments
-    $exitCode = $LASTEXITCODE
+    $argumentLine = ($Arguments | ForEach-Object {
+        if ($_ -match '[\s"]') {
+            '"' + $_.Replace('"', '\\"') + '"'
+        } else {
+            $_
+        }
+    }) -join ' '
+    $process = Start-Process -FilePath "$env:SystemRoot\System32\msiexec.exe" -ArgumentList $argumentLine -Wait -PassThru
+    $exitCode = $process.ExitCode
     if ($exitCode -notin @(0, 3010)) {
         throw "$Operation に失敗しました (msiexec exit code: $exitCode)"
     }
