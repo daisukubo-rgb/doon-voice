@@ -202,13 +202,68 @@ impl Drop for NativeAudioRecorder {
     }
 }
 
+fn preferred_or_fallback_config<T, E>(
+    preferred: Result<T, E>,
+    fallback: impl IntoIterator<Item = T>,
+) -> Result<T, E> {
+    preferred.or_else(|error| fallback.into_iter().next().ok_or(error))
+}
+
 fn initialize_stream(recording: &Arc<Mutex<RecordingBuffer>>) -> Result<Stream, String> {
     let host = cpal::default_host();
-    let device = host
-        .default_input_device()
-        .ok_or_else(|| "使用できるマイクが見つかりません。".to_string())?;
-    let supported = device
-        .default_input_config()
+    let default_device = host.default_input_device();
+    let fallback_devices = host
+        .input_devices()
+        .map_err(|error| format!("マイク一覧を読み取れませんでした: {error}"))?;
+    let mut attempted_names = Vec::new();
+    let mut last_error = None;
+
+    if let Some(device) = default_device {
+        attempted_names.push(device.name().unwrap_or_else(|_| "選択中のマイク".into()));
+        match initialize_stream_for_device(&device, recording) {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last_error = Some(error),
+        }
+    }
+
+    for device in fallback_devices {
+        let name = device.name().unwrap_or_else(|_| "別のマイク".into());
+        if attempted_names.iter().any(|attempted| attempted == &name) {
+            continue;
+        }
+        attempted_names.push(name);
+        match initialize_stream_for_device(&device, recording) {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last_error = Some(error),
+        }
+    }
+
+    let device_hint = if attempted_names.is_empty() {
+        "使用できるマイクが見つかりません。".to_string()
+    } else {
+        "選択中のマイクの設定を読み取れませんでした。マイクを一度つなぎ直すか、macOSの「システム設定」→「サウンド」→「入力」で「MacBookのマイク」など別の入力を選び、もう一度試してください。".to_string()
+    };
+    let _ = last_error;
+    Err(device_hint)
+}
+
+fn initialize_stream_for_device(
+    device: &Device,
+    recording: &Arc<Mutex<RecordingBuffer>>,
+) -> Result<Stream, String> {
+    let fallback_configs = device
+        .supported_input_configs()
+        .map(|configs| {
+            configs
+                .map(|config| {
+                    config
+                        .try_with_sample_rate(cpal::SampleRate(48_000))
+                        .unwrap_or_else(|| config.with_max_sample_rate())
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let supported = preferred_or_fallback_config(device.default_input_config(), fallback_configs)
         .map_err(|error| format!("マイクの設定を読み取れませんでした: {error}"))?;
     let sample_rate = supported.sample_rate().0;
     let sample_format = supported.sample_format();
@@ -219,12 +274,12 @@ fn initialize_stream(recording: &Arc<Mutex<RecordingBuffer>>) -> Result<Stream, 
         .configure(sample_rate);
 
     let stream = match sample_format {
-        SampleFormat::F32 => build_stream::<f32>(&device, &config, recording),
-        SampleFormat::F64 => build_stream::<f64>(&device, &config, recording),
-        SampleFormat::I16 => build_stream::<i16>(&device, &config, recording),
-        SampleFormat::I32 => build_stream::<i32>(&device, &config, recording),
-        SampleFormat::U16 => build_stream::<u16>(&device, &config, recording),
-        SampleFormat::U32 => build_stream::<u32>(&device, &config, recording),
+        SampleFormat::F32 => build_stream::<f32>(device, &config, recording),
+        SampleFormat::F64 => build_stream::<f64>(device, &config, recording),
+        SampleFormat::I16 => build_stream::<i16>(device, &config, recording),
+        SampleFormat::I32 => build_stream::<i32>(device, &config, recording),
+        SampleFormat::U16 => build_stream::<u16>(device, &config, recording),
+        SampleFormat::U32 => build_stream::<u32>(device, &config, recording),
         _ => Err(format!(
             "このマイクの音声形式には対応していません: {sample_format}"
         )),
@@ -471,7 +526,7 @@ mod input_config_fallback_tests {
 
     #[test]
     fn preserves_the_default_config_when_it_is_available() {
-        let config = preferred_or_fallback_config::<u32, _>(Ok(44_100), [48_000]);
+        let config = preferred_or_fallback_config(Ok::<u32, &str>(44_100), [48_000]);
         assert_eq!(config, Ok(44_100));
     }
 }
