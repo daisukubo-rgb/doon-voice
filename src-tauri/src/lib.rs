@@ -2692,6 +2692,26 @@ mod tests {
     }
 
     #[test]
+    fn aiで整えた長文は文末で段落に分ける() {
+        let first = "あ".repeat(120);
+        let second = "い".repeat(70);
+        let text = format!("{first}。{second}。");
+        let expected = format!("{first}。\n\n{second}。");
+
+        assert_eq!(format_long_voice_text(&text), expected);
+    }
+
+    #[test]
+    fn 短文と句点のない長文には段落を追加しない() {
+        assert_eq!(
+            format_long_voice_text("短い文章です。次の文です。"),
+            "短い文章です。次の文です。"
+        );
+        let no_sentence_end = "あ".repeat(240);
+        assert_eq!(format_long_voice_text(&no_sentence_end), no_sentence_end);
+    }
+
+    #[test]
     fn aiへの指示は質問へ回答せず視点を保持する() {
         let instruction = editor_instruction(&[]);
         assert!(instruction.contains("質問に回答"));
