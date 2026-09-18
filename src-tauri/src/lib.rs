@@ -1363,7 +1363,12 @@ fn publish_installation_progress(
     );
 }
 
-async fn download_to_path(app: &AppHandle, kind: &str, url: &str, target: &Path) -> Result<(), String> {
+async fn download_to_path(
+    app: &AppHandle,
+    kind: &str,
+    url: &str,
+    target: &Path,
+) -> Result<(), String> {
     let part = target.with_extension("part");
     publish_installation_progress(app, kind, "配布元へ接続しています", 0, 0);
     let mut response = download_client()?
@@ -1475,16 +1480,20 @@ async fn pull_local_model(app: AppHandle) -> Result<(), String> {
         .json(&serde_json::json!({ "name": LOCAL_MODEL, "stream": true }))
         .send()
         .await
-        .map_err(|_| "高速ローカルAIの取得を開始できませんでした。Ollamaが起動しているか確認してください。".to_string())?;
+        .map_err(|_| {
+            "高速ローカルAIの取得を開始できませんでした。Ollamaが起動しているか確認してください。"
+                .to_string()
+        })?;
     if !response.status().is_success() {
-        return Err("高速ローカルAIの取得を開始できませんでした。Ollamaを更新して再試行してください。".into());
+        return Err(
+            "高速ローカルAIの取得を開始できませんでした。Ollamaを更新して再試行してください。"
+                .into(),
+        );
     }
     let mut pending = Vec::new();
-    while let Some(chunk) = response
-        .chunk()
-        .await
-        .map_err(|_| "高速ローカルAIの取得が途中で切れました。接続を確認して再試行してください。".to_string())?
-    {
+    while let Some(chunk) = response.chunk().await.map_err(|_| {
+        "高速ローカルAIの取得が途中で切れました。接続を確認して再試行してください。".to_string()
+    })? {
         pending.extend_from_slice(&chunk);
         while let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
             let line = pending.drain(..=end).collect::<Vec<_>>();
@@ -1492,23 +1501,47 @@ async fn pull_local_model(app: AppHandle) -> Result<(), String> {
             if line.is_empty() {
                 continue;
             }
-            let progress = serde_json::from_slice::<OllamaPullProgress>(line)
-                .map_err(|_| "高速ローカルAIの取得状況を読み取れませんでした。再試行してください。".to_string())?;
+            let progress = serde_json::from_slice::<OllamaPullProgress>(line).map_err(|_| {
+                "高速ローカルAIの取得状況を読み取れませんでした。再試行してください。".to_string()
+            })?;
             if let Some(error) = progress.error {
                 return Err(format!("高速ローカルAIを取得できませんでした。{error}"));
             }
-            let phase = if progress.total > 0 { "ダウンロード中" } else { "準備しています" };
-            publish_installation_progress(&app, "local_model", phase, progress.completed, progress.total);
+            let phase = if progress.total > 0 {
+                "ダウンロード中"
+            } else {
+                "準備しています"
+            };
+            publish_installation_progress(
+                &app,
+                "local_model",
+                phase,
+                progress.completed,
+                progress.total,
+            );
         }
     }
     if !pending.is_empty() {
-        let progress = serde_json::from_slice::<OllamaPullProgress>(&pending)
-            .map_err(|_| "高速ローカルAIの取得状況を読み取れませんでした。再試行してください。".to_string())?;
+        let progress = serde_json::from_slice::<OllamaPullProgress>(&pending).map_err(|_| {
+            "高速ローカルAIの取得状況を読み取れませんでした。再試行してください。".to_string()
+        })?;
         if let Some(error) = progress.error {
             return Err(format!("高速ローカルAIを取得できませんでした。{error}"));
         }
-        let phase = if progress.status == "success" { "モデルを準備しています" } else if progress.total > 0 { "ダウンロード中" } else { "準備しています" };
-        publish_installation_progress(&app, "local_model", phase, progress.completed, progress.total);
+        let phase = if progress.status == "success" {
+            "モデルを準備しています"
+        } else if progress.total > 0 {
+            "ダウンロード中"
+        } else {
+            "準備しています"
+        };
+        publish_installation_progress(
+            &app,
+            "local_model",
+            phase,
+            progress.completed,
+            progress.total,
+        );
     }
     publish_installation_progress(&app, "local_model", "モデルを準備しています", 0, 0);
     Ok(())
@@ -1574,7 +1607,13 @@ async fn download_transcription_model(app: AppHandle) -> Result<(), String> {
             if completed.saturating_sub(last_reported) >= 512 * 1024
                 || last_reported_at.elapsed() >= Duration::from_millis(500)
             {
-                publish_installation_progress(&app, "transcription", "ダウンロード中", completed, total);
+                publish_installation_progress(
+                    &app,
+                    "transcription",
+                    "ダウンロード中",
+                    completed,
+                    total,
+                );
                 last_reported = completed;
                 last_reported_at = Instant::now();
             }
@@ -1585,7 +1624,13 @@ async fn download_transcription_model(app: AppHandle) -> Result<(), String> {
         tokio::fs::rename(&part, target)
             .await
             .map_err(|_| "モデルを有効化できませんでした。".to_string())?;
-        publish_installation_progress(&app, "transcription", "モデルを準備しています", completed, total);
+        publish_installation_progress(
+            &app,
+            "transcription",
+            "モデルを準備しています",
+            completed,
+            total,
+        );
         Ok(())
     }
     .await;
