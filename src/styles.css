@@ -183,7 +183,12 @@ html.is-overlay, html.is-overlay body, html.is-overlay #root { width: 100%; min-
 .shortcut-key { min-width: 120px; min-height: 38px; border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 11px; color: var(--deep); background: var(--background); font-size: 11px; font-weight: 700; white-space: nowrap; }
 .shortcut-key:hover, .shortcut-key.is-capturing { border-color: var(--deep); background: var(--paper-tint); }
 .shortcut-key.is-capturing { color: var(--coral); }
-.direct-input-settings, .transcription-settings { margin-top: 32px; }
+.direct-input-settings, .microphone-settings, .transcription-settings { margin-top: 32px; }
+.installation-progress { display: grid; grid-template-columns: auto 1fr; align-items: baseline; column-gap: 9px; max-width: 360px; margin-top: 8px; color: var(--muted); font-size: 9px; line-height: 1.45; }
+.installation-progress > span { color: var(--deep); font-weight: 700; }
+.installation-progress > strong { min-width: 0; font-weight: 600; overflow-wrap: anywhere; }
+.installation-progress > i { grid-column: 1 / -1; display: block; height: 4px; margin-top: 5px; overflow: hidden; background: var(--line); }
+.installation-progress > i > b { display: block; height: 100%; min-width: 8px; background: var(--mint); transition: width 300ms ease; }
 .output-settings { margin-top: 42px; }
 
 @media (max-width: 760px) {

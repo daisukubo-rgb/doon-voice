@@ -25,12 +25,12 @@ use std::{
     collections::HashMap,
     ffi::OsString,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Command,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tauri::{
     menu::{Menu, MenuItem},
@@ -46,7 +46,7 @@ use tauri_plugin_shell::{
 use tokio::io::AsyncWriteExt;
 
 use audio_file::{cleanup_stale_recordings, OwnedAudioFile};
-use cli_command::{cli_command, hide_console};
+use cli_command::cli_command;
 use cloud_runtime::{CloudKind, CloudRuntime, CloudSpec};
 use native_audio::{NativeAudioRecorder, MAX_WAV_BYTES};
 use process_runner::run_bounded;
@@ -1088,6 +1088,13 @@ struct TranscriptionStatus {
     name: String,
     size: String,
 }
+#[derive(Clone, Serialize)]
+struct InstallationProgress {
+    kind: String,
+    phase: String,
+    completed: u64,
+    total: u64,
+}
 #[derive(Deserialize)]
 struct OllamaTags {
     models: Vec<OllamaModel>,
@@ -1099,6 +1106,15 @@ struct OllamaModel {
 #[derive(Deserialize)]
 struct OllamaGenerate {
     response: String,
+}
+#[derive(Deserialize)]
+struct OllamaPullProgress {
+    status: String,
+    #[serde(default)]
+    completed: u64,
+    #[serde(default)]
+    total: u64,
+    error: Option<String>,
 }
 
 impl Provider {
@@ -1329,8 +1345,27 @@ async fn local_llm_status() -> LocalLlmStatus {
         }],
     }
 }
-async fn download_to_path(url: &str, target: &Path) -> Result<(), String> {
+fn publish_installation_progress(
+    app: &AppHandle,
+    kind: &str,
+    phase: &str,
+    completed: u64,
+    total: u64,
+) {
+    let _ = app.emit(
+        "installation-progress",
+        InstallationProgress {
+            kind: kind.to_string(),
+            phase: phase.to_string(),
+            completed,
+            total,
+        },
+    );
+}
+
+async fn download_to_path(app: &AppHandle, kind: &str, url: &str, target: &Path) -> Result<(), String> {
     let part = target.with_extension("part");
+    publish_installation_progress(app, kind, "配布元へ接続しています", 0, 0);
     let mut response = download_client()?
         .get(url)
         .send()
@@ -1339,6 +1374,10 @@ async fn download_to_path(url: &str, target: &Path) -> Result<(), String> {
     if !response.status().is_success() {
         return Err("Ollamaの公式配布元が応答できませんでした。".into());
     }
+    let total = response.content_length().unwrap_or_default();
+    let mut completed = 0_u64;
+    let mut last_reported = 0_u64;
+    let mut last_reported_at = Instant::now();
     let mut file = tokio::fs::File::create(&part)
         .await
         .map_err(|_| "インストーラーを保存できませんでした。".to_string())?;
@@ -1347,20 +1386,30 @@ async fn download_to_path(url: &str, target: &Path) -> Result<(), String> {
         .await
         .map_err(|_| "インストーラーのダウンロードが途中で切れました。".to_string())?
     {
+        completed = completed.saturating_add(chunk.len() as u64);
         file.write_all(&chunk)
             .await
             .map_err(|_| "インストーラーを保存できませんでした。".to_string())?;
+        if completed.saturating_sub(last_reported) >= 512 * 1024
+            || last_reported_at.elapsed() >= Duration::from_millis(500)
+        {
+            publish_installation_progress(app, kind, "ダウンロード中", completed, total);
+            last_reported = completed;
+            last_reported_at = Instant::now();
+        }
     }
     file.flush()
         .await
         .map_err(|_| "インストーラーを保存できませんでした。".to_string())?;
     tokio::fs::rename(part, target)
         .await
-        .map_err(|_| "インストーラーを有効化できませんでした。".to_string())
+        .map_err(|_| "インストーラーを有効化できませんでした。".to_string())?;
+    publish_installation_progress(app, kind, "ダウンロードが完了しました", completed, total);
+    Ok(())
 }
 
 #[tauri::command]
-async fn open_local_llm_install() -> Result<(), String> {
+async fn open_local_llm_install(app: AppHandle) -> Result<(), String> {
     let work = std::env::temp_dir().join(format!(
         "doon-voice-ollama-{}",
         SystemTime::now()
@@ -1373,7 +1422,8 @@ async fn open_local_llm_install() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         let archive = work.join("Ollama-darwin.zip");
-        download_to_path(OLLAMA_MAC_URL, &archive).await?;
+        download_to_path(&app, "ollama", OLLAMA_MAC_URL, &archive).await?;
+        publish_installation_progress(&app, "ollama", "インストーラーを展開しています", 0, 0);
         let extracted = Command::new("ditto")
             .args(["-x", "-k"])
             .arg(&archive)
@@ -1383,12 +1433,13 @@ async fn open_local_llm_install() -> Result<(), String> {
         if !extracted.success() {
             return Err("Ollamaを展開できませんでした。".into());
         }
-        let app = work.join("Ollama.app");
-        if !app.is_dir() {
+        let ollama_app = work.join("Ollama.app");
+        if !ollama_app.is_dir() {
             return Err("Ollamaアプリが見つかりませんでした。".into());
         }
+        publish_installation_progress(&app, "ollama", "インストーラーを開いています", 0, 0);
         Command::new("open")
-            .arg(app)
+            .arg(ollama_app)
             .spawn()
             .map(|_| ())
             .map_err(|_| "Ollamaのインストーラーを起動できませんでした。".into())
@@ -1396,7 +1447,8 @@ async fn open_local_llm_install() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         let installer = work.join("OllamaSetup.exe");
-        download_to_path(OLLAMA_WINDOWS_URL, &installer).await?;
+        download_to_path(&app, "ollama", OLLAMA_WINDOWS_URL, &installer).await?;
+        publish_installation_progress(&app, "ollama", "インストーラーを開いています", 0, 0);
         Command::new(&installer)
             .spawn()
             .map(|_| ())
@@ -1408,7 +1460,7 @@ async fn open_local_llm_install() -> Result<(), String> {
     }
 }
 #[tauri::command]
-async fn pull_local_model() -> Result<(), String> {
+async fn pull_local_model(app: AppHandle) -> Result<(), String> {
     if !ollama_installed() {
         return Err("先にOllamaをインストールしてください。".into());
     }
@@ -1416,28 +1468,50 @@ async fn pull_local_model() -> Result<(), String> {
         &LOCAL_MODEL_PULL_RUNNING,
         "Gemma 4 E2Bを取得中です。完了までお待ちください。",
     )?;
-    let mut command = cli_command(&command_path("ollama"), &cli_path_environment())?;
-    hide_console(&mut command);
-    let mut child = command
-        .args(["pull", LOCAL_MODEL])
-        .env("PATH", cli_path_environment())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|_| "高速ローカルAIの取得を開始できませんでした。".to_string())?;
-    tokio::task::spawn_blocking(move || {
-        let _operation = operation;
-        let status = child
-            .wait()
-            .map_err(|_| "高速ローカルAIの取得結果を確認できませんでした。".to_string())?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err("高速ローカルAIを取得できませんでした。接続を確認して再試行してください。".into())
+    let _operation = operation;
+    publish_installation_progress(&app, "local_model", "モデル情報を確認しています", 0, 0);
+    let mut response = download_client()?
+        .post("http://127.0.0.1:11434/api/pull")
+        .json(&serde_json::json!({ "name": LOCAL_MODEL, "stream": true }))
+        .send()
+        .await
+        .map_err(|_| "高速ローカルAIの取得を開始できませんでした。Ollamaが起動しているか確認してください。".to_string())?;
+    if !response.status().is_success() {
+        return Err("高速ローカルAIの取得を開始できませんでした。Ollamaを更新して再試行してください。".into());
+    }
+    let mut pending = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|_| "高速ローカルAIの取得が途中で切れました。接続を確認して再試行してください。".to_string())?
+    {
+        pending.extend_from_slice(&chunk);
+        while let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
+            let line = pending.drain(..=end).collect::<Vec<_>>();
+            let line = line.strip_suffix(b"\n").unwrap_or(&line);
+            if line.is_empty() {
+                continue;
+            }
+            let progress = serde_json::from_slice::<OllamaPullProgress>(line)
+                .map_err(|_| "高速ローカルAIの取得状況を読み取れませんでした。再試行してください。".to_string())?;
+            if let Some(error) = progress.error {
+                return Err(format!("高速ローカルAIを取得できませんでした。{error}"));
+            }
+            let phase = if progress.total > 0 { "ダウンロード中" } else { "準備しています" };
+            publish_installation_progress(&app, "local_model", phase, progress.completed, progress.total);
         }
-    })
-    .await
-    .map_err(|_| "高速ローカルAIの取得が中断されました。".to_string())?
+    }
+    if !pending.is_empty() {
+        let progress = serde_json::from_slice::<OllamaPullProgress>(&pending)
+            .map_err(|_| "高速ローカルAIの取得状況を読み取れませんでした。再試行してください。".to_string())?;
+        if let Some(error) = progress.error {
+            return Err(format!("高速ローカルAIを取得できませんでした。{error}"));
+        }
+        let phase = if progress.status == "success" { "モデルを準備しています" } else if progress.total > 0 { "ダウンロード中" } else { "準備しています" };
+        publish_installation_progress(&app, "local_model", phase, progress.completed, progress.total);
+    }
+    publish_installation_progress(&app, "local_model", "モデルを準備しています", 0, 0);
+    Ok(())
 }
 
 fn voice_dir(app: &AppHandle) -> Result<PathBuf, String> {
@@ -1472,6 +1546,7 @@ async fn download_transcription_model(app: AppHandle) -> Result<(), String> {
     )?;
     let part = target.with_extension("part");
     let result = async {
+        publish_installation_progress(&app, "transcription", "配布元へ接続しています", 0, 0);
         let mut r = download_client()?
             .get(MODEL_URL)
             .send()
@@ -1480,6 +1555,10 @@ async fn download_transcription_model(app: AppHandle) -> Result<(), String> {
         if !r.status().is_success() {
             return Err("モデルの配布元が応答できませんでした。".into());
         }
+        let total = r.content_length().unwrap_or_default();
+        let mut completed = 0_u64;
+        let mut last_reported = 0_u64;
+        let mut last_reported_at = Instant::now();
         let mut f = tokio::fs::File::create(&part)
             .await
             .map_err(|_| "モデルを保存できませんでした。".to_string())?;
@@ -1488,16 +1567,26 @@ async fn download_transcription_model(app: AppHandle) -> Result<(), String> {
             .await
             .map_err(|_| "モデルのダウンロードが途中で切れました。".to_string())?
         {
+            completed = completed.saturating_add(c.len() as u64);
             f.write_all(&c)
                 .await
                 .map_err(|_| "モデルを保存できませんでした。".to_string())?;
+            if completed.saturating_sub(last_reported) >= 512 * 1024
+                || last_reported_at.elapsed() >= Duration::from_millis(500)
+            {
+                publish_installation_progress(&app, "transcription", "ダウンロード中", completed, total);
+                last_reported = completed;
+                last_reported_at = Instant::now();
+            }
         }
         f.flush()
             .await
             .map_err(|_| "モデルを保存できませんでした。".to_string())?;
         tokio::fs::rename(&part, target)
             .await
-            .map_err(|_| "モデルを有効化できませんでした。".to_string())
+            .map_err(|_| "モデルを有効化できませんでした。".to_string())?;
+        publish_installation_progress(&app, "transcription", "モデルを準備しています", completed, total);
+        Ok(())
     }
     .await;
     if result.is_err() {

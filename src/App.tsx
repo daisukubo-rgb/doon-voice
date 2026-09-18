@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Check, CircleAlert, Download, ExternalLink, Mic, Plus, RefreshCw, WifiOff, X } from "lucide-react";
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
-import { AudioRecorder, startAudioRecorder } from "./audio-recorder";
+import { AudioRecorder, requestMicrophoneAccess, startAudioRecorder } from "./audio-recorder";
 import { DEFAULT_OUTPUT_TARGET, isOutputTarget, OutputTarget, outputTargetLabel } from "./output-target";
 import { DEFAULT_SELECTION_QUESTION_SHORTCUT, DEFAULT_SHORTCUT, shortcutCaptureResult, shortcutLabel } from "./shortcut";
 
@@ -18,6 +18,9 @@ type ProviderStatus = {
 type LocalModel = { id: "gemma4_e2b"; name: string; size: string; installed: boolean };
 type LocalLlmStatus = { installed: boolean; running: boolean; models: LocalModel[] };
 type TranscriptionStatus = { downloaded: boolean; name: string; size: string };
+type InstallationKind = "ollama" | "local_model" | "transcription";
+type InstallationProgress = { kind: InstallationKind; phase: string; completed: number; total: number; startedAt: number };
+type MicrophonePermission = "granted" | "prompt" | "denied" | "unknown" | "unsupported";
 type BrandGlyphName = "coach" | "dx" | "loop" | "move" | "spark" | "speed" | "system" | "work";
 type BackgroundVoiceSnapshot = {
   state: "idle" | "starting" | "recording" | "processing";
@@ -120,6 +123,32 @@ function duration(seconds: number) {
   return minutes ? `${minutes}分 ${rest}秒` : `${rest}秒`;
 }
 
+function storageSize(bytes: number) {
+  if (bytes < 1024 * 1024 * 1024) return `約${Math.round(bytes / (1024 * 1024))} MB`;
+  return `約${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function installationProgressLabel(progress: InstallationProgress, now: number) {
+  if (!progress.total) return progress.phase;
+  const percentage = Math.min(100, Math.floor((progress.completed / progress.total) * 100));
+  const elapsed = Math.max(1, Math.floor((now - progress.startedAt) / 1000));
+  const remaining = progress.completed > 0 && elapsed >= 2
+    ? Math.ceil((progress.total - progress.completed) / (progress.completed / elapsed))
+    : 0;
+  const estimate = remaining > 0 ? ` · 残り時間の目安 ${duration(remaining)}` : "";
+  return `${storageSize(progress.completed)} / ${storageSize(progress.total)} · ${percentage}%${estimate}`;
+}
+
+async function microphonePermission(): Promise<MicrophonePermission> {
+  if (!navigator.mediaDevices?.getUserMedia) return "unsupported";
+  try {
+    const result = await navigator.permissions?.query({ name: "microphone" as PermissionName });
+    return result?.state ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 type OverlayState = "starting" | "listening" | "thinking" | "done" | "error" | "hidden";
 
 function MainApp() {
@@ -133,6 +162,9 @@ function MainApp() {
   const [installingOllama, setInstallingOllama] = useState(false);
   const [pullingLocalModel, setPullingLocalModel] = useState(false);
   const [downloadingTranscription, setDownloadingTranscription] = useState(false);
+  const [installationProgress, setInstallationProgress] = useState<InstallationProgress | null>(null);
+  const [installationNow, setInstallationNow] = useState(() => Date.now());
+  const [microphonePermissionState, setMicrophonePermissionState] = useState<MicrophonePermission>("unknown");
   const [notice, setNotice] = useState("");
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -193,7 +225,7 @@ function MainApp() {
     const refreshPermission = () => {
       void appInvoke<boolean>("direct_input_status").then(setDirectInputAllowed).catch(() => undefined);
     };
-    const refreshOnFocus = () => { void refreshAll(); };
+    const refreshOnFocus = () => { void refreshAll(); void microphonePermission().then(setMicrophonePermissionState); };
     window.addEventListener("focus", refreshOnFocus);
     // macOSのシステム設定で許可を切り替えて戻ってきた場合、WebViewの
     // focusイベントだけでは通知されないことがあるため定期的に再確認する。
@@ -203,11 +235,18 @@ function MainApp() {
       window.clearInterval(timer);
     };
   }, []);
+  useEffect(() => { void microphonePermission().then(setMicrophonePermissionState); }, []);
+  useEffect(() => {
+    if (!installationProgress) return;
+    const timer = window.setInterval(() => setInstallationNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [installationProgress]);
   useEffect(() => {
     if (!isTauriApp()) return;
     let stopListening: (() => void) | undefined;
     let stopQuestionListening: (() => void) | undefined;
     let stopQuestionErrorListening: (() => void) | undefined;
+    let stopInstallationListening: (() => void) | undefined;
     let disposed = false;
     void appInvoke<BackgroundVoiceSnapshot>("background_voice_status")
       .then(applyBackgroundVoiceSnapshot)
@@ -244,7 +283,13 @@ function MainApp() {
       if (disposed) unlisten();
       else stopQuestionErrorListening = unlisten;
     }).catch(() => setNotice("選択文への質問エラーを表示できませんでした"));
-    return () => { disposed = true; stopListening?.(); stopQuestionListening?.(); stopQuestionErrorListening?.(); };
+    void listen<Omit<InstallationProgress, "startedAt">>("installation-progress", (event) => {
+      setInstallationProgress((current) => ({ ...event.payload, startedAt: current?.kind === event.payload.kind ? current.startedAt : Date.now() }));
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else stopInstallationListening = unlisten;
+    }).catch(() => setNotice("取得状況を表示できませんでした"));
+    return () => { disposed = true; stopListening?.(); stopQuestionListening?.(); stopQuestionErrorListening?.(); stopInstallationListening?.(); };
   }, []);
   useEffect(() => {
     if (!recording) return;
@@ -660,6 +705,7 @@ function MainApp() {
   async function installOllama() {
     if (installingOllama) return;
     setInstallingOllama(true);
+    setInstallationProgress({ kind: "ollama", phase: "ダウンロードを準備しています", completed: 0, total: 0, startedAt: Date.now() });
     setNotice("Ollamaのインストーラーを取得しています。完了までこの画面を開いたままにしてください");
     try {
       await appInvoke("open_local_llm_install");
@@ -669,6 +715,19 @@ function MainApp() {
       setNotice(errorMessage(error, "Ollamaのインストーラーを取得できませんでした。公式サイトから手動で入れてください"));
     } finally {
       setInstallingOllama(false);
+      setInstallationProgress(null);
+    }
+  }
+
+  async function requestMicrophonePermission() {
+    try {
+      await requestMicrophoneAccess();
+      setMicrophonePermissionState("granted");
+      setNotice("マイクを許可しました");
+    } catch (error) {
+      const status = await microphonePermission();
+      setMicrophonePermissionState(status);
+      setNotice(errorMessage(error, "マイクを許可できませんでした。OSのマイク設定を確認してください"));
     }
   }
 
@@ -695,6 +754,7 @@ function MainApp() {
     if (pullingLocalModelRef.current) return;
     pullingLocalModelRef.current = true;
     setPullingLocalModel(true);
+    setInstallationProgress({ kind: "local_model", phase: "モデルの取得を準備しています", completed: 0, total: 0, startedAt: Date.now() });
     setNotice("Gemma 4 E2Bを取得しています。完了までこの画面を開いたままにしてください");
     try {
       await appInvoke("pull_local_model");
@@ -705,6 +765,7 @@ function MainApp() {
     } finally {
       pullingLocalModelRef.current = false;
       setPullingLocalModel(false);
+      setInstallationProgress(null);
     }
   }
 
@@ -712,6 +773,7 @@ function MainApp() {
     if (downloadingTranscriptionRef.current) return;
     downloadingTranscriptionRef.current = true;
     setDownloadingTranscription(true);
+    setInstallationProgress({ kind: "transcription", phase: "モデルの取得を準備しています", completed: 0, total: 0, startedAt: Date.now() });
     setNotice("日本語音声認識モデルを取得しています。完了までこの画面を開いたままにしてください");
     try {
       await appInvoke("download_transcription_model");
@@ -722,6 +784,7 @@ function MainApp() {
     } finally {
       downloadingTranscriptionRef.current = false;
       setDownloadingTranscription(false);
+      setInstallationProgress(null);
     }
   }
 
@@ -792,6 +855,11 @@ function MainApp() {
       : null;
   const localReady = Boolean(local?.running && localModel?.installed);
   const isMac = navigator.userAgent.includes("Mac");
+  const progressFor = (kind: InstallationKind) => installationProgress?.kind === kind ? installationProgress : null;
+  const progressPercent = (kind: InstallationKind) => {
+    const progress = progressFor(kind);
+    return progress?.total ? Math.min(100, Math.floor((progress.completed / progress.total) * 100)) : null;
+  };
   useEffect(() => {
     if (!isMac || view !== "settings") return;
     const refreshPermission = () => {
@@ -902,8 +970,9 @@ function MainApp() {
           {configurationNotice}
         </section>
         <div className="settings-list direct-input-settings"><article><span className="setting-icon"><BrandGlyph name="move" /></span><div><h2>カーソル位置へ入力</h2><p>{directInputAllowed ? "ほかのアプリへ直接入力できます。" : "macOSのアクセシビリティ許可が必要です。"}</p></div><span className={directInputAllowed ? "setting-state state-permitted" : "setting-state state-unavailable"}>{directInputAllowed ? <Check size={15} strokeWidth={2.3} /> : <CircleAlert size={15} strokeWidth={2} />}{directInputAllowed ? "許可済み" : "未許可"}</span>{isMac ? <button className="outline-action" type="button" onClick={() => void (directInputAllowed ? openDirectInputSettings() : requestDirectInputPermission())}>{directInputAllowed ? "設定を開く" : "許可する"} <ExternalLink size={15} /></button> : <span />}</article></div>
-        <div className="settings-list transcription-settings"><article><span className="setting-icon"><BrandGlyph name="work" /></span><div><h2>音声認識</h2><p>{transcription?.downloaded ? "日本語音声認識をこのPCで行います。" : "話した言葉を文字にする日本語モデルです。"}</p></div><span className={transcription?.downloaded ? "setting-state state-installed" : "setting-state state-unavailable"}>{transcription?.downloaded ? <Check size={15} strokeWidth={2.3} /> : <Download size={15} strokeWidth={2} />}{transcription?.downloaded ? "モデル取得済み" : downloadingTranscription ? "取得中" : transcription?.size || "未取得"}</span>{transcription?.downloaded ? <span /> : <button className="outline-action" type="button" onClick={() => void downloadTranscriptionModel()} disabled={downloadingTranscription}>{downloadingTranscription ? "取得中" : "モデルを取得"} <Download size={15} /></button>}</article></div>
-        <div className="settings-list">{providers.map(({ id, label, glyph }) => { const status = providerDisplayState(id, false); const connecting = connectingProviders[id]; const loggedIn = connectedProviders[id] && statuses[id]?.authenticated; const unavailable = statuses[id]?.usability === "unavailable"; const detail = id === "codex" ? "GPT-5.6 Lunaで高速整形" : id === "gemini" ? "Gemini 3.6 Flash (Low)で高速整形" : unavailable ? "現在の契約ではClaude Codeを利用できません" : "Claude Haikuで高速整形"; return <article key={id}><span className="setting-icon"><BrandGlyph name={glyph} /></span><div><h2>{label}</h2><p>{detail}</p></div><span className={`setting-state ${status.className}`}>{connecting ? <span className="state-connecting-mark" aria-hidden="true" /> : unavailable ? <CircleAlert size={15} strokeWidth={2} /> : loggedIn ? <Check size={15} strokeWidth={2.3} /> : statuses[id]?.installed ? <span className="state-ring" aria-hidden="true" /> : <CircleAlert size={15} strokeWidth={2} />}{status.label}</span><button className="outline-action" type="button" onClick={() => void connect(id)} disabled={connecting}>{connecting ? "ログイン中" : loggedIn ? "再ログイン" : "ログインする"} {!connecting && <ExternalLink size={15} strokeWidth={1.9} />}</button></article>; })}<article><span className="setting-icon"><BrandGlyph name="dx" /></span><div><h2>ローカルAI</h2><p>{localReady ? "Gemma 4 E2BがこのPCで稼働中です。" : "Gemma 4 E2BをDOON Voice用に取得します。"}</p></div><span className={localReady ? "setting-state state-running" : "setting-state state-unavailable"}>{localReady ? <span className="state-live-dot" aria-hidden="true" /> : <WifiOff size={15} strokeWidth={2} />}{localReady ? "稼働中" : pullingLocalModel ? "取得中" : "未準備"}</span>{!local?.installed ? <button className="outline-action" type="button" onClick={() => void installOllama()} disabled={installingOllama}>{installingOllama ? "Ollamaを取得中" : "Ollamaを自動インストール"} <Download size={15} /></button> : !localModel?.installed ? <button className="outline-action" type="button" onClick={() => void pullModel()} disabled={pullingLocalModel}>{pullingLocalModel ? "取得中" : "Gemmaを取得"} <Download size={15} /></button> : <span />}</article><article className="shortcut-row"><span className="setting-icon"><BrandGlyph name="speed" /></span><div><h2>開始・停止キー</h2><p>{capturingShortcut ? "押した組み合わせを登録します。Escで取り消せます。" : "通常の音声入力の開始と停止"}</p></div><button ref={shortcutButtonRef} className={capturingShortcut ? "shortcut-key is-capturing" : "shortcut-key"} type="button" onClick={() => void beginShortcutCapture()} aria-label="開始・停止キーを変更" aria-pressed={capturingShortcut}>{capturingShortcut ? "キーを押す" : shortcutLabel(shortcut, navigator.userAgent.includes("Mac"))}</button><button className="outline-action" type="button" onClick={() => void applyShortcut(DEFAULT_SHORTCUT)}>標準に戻す</button></article><article className="shortcut-row"><span className="setting-icon"><BrandGlyph name="speed" /></span><div><h2>選択文を質問するキー</h2><p>{capturingSelectionQuestionShortcut ? "押した組み合わせを登録します。Escで取り消せます。" : "選択中の文章へ音声で質問"}</p></div><button ref={selectionQuestionShortcutButtonRef} className={capturingSelectionQuestionShortcut ? "shortcut-key is-capturing" : "shortcut-key"} type="button" onClick={() => void beginSelectionQuestionShortcutCapture()} aria-label="選択文を質問するキーを変更" aria-pressed={capturingSelectionQuestionShortcut}>{capturingSelectionQuestionShortcut ? "キーを押す" : shortcutLabel(selectionQuestionShortcut, navigator.userAgent.includes("Mac"))}</button><button className="outline-action" type="button" onClick={() => void applySelectionQuestionShortcut(DEFAULT_SELECTION_QUESTION_SHORTCUT)}>標準に戻す</button></article></div>{notice && <p className="notice" role="status">{notice}</p>}</section>}
+        <div className="settings-list microphone-settings"><article><span className="setting-icon"><Mic size={22} strokeWidth={1.8} /></span><div><h2>マイク</h2><p>{microphonePermissionState === "granted" ? "このPCのマイクを使えます。" : microphonePermissionState === "unsupported" ? "この環境ではマイクを使えません。" : "初回にこのボタンからマイクを許可します。"}</p></div><span className={microphonePermissionState === "granted" ? "setting-state state-permitted" : "setting-state state-unavailable"}>{microphonePermissionState === "granted" ? <Check size={15} strokeWidth={2.3} /> : <CircleAlert size={15} strokeWidth={2} />}{microphonePermissionState === "granted" ? "許可済み" : microphonePermissionState === "unsupported" ? "利用不可" : "許可が必要"}</span><button className="outline-action" type="button" onClick={() => void requestMicrophonePermission()} disabled={microphonePermissionState === "granted" || microphonePermissionState === "unsupported"}>{microphonePermissionState === "granted" ? "許可済み" : "マイクを許可する"} <Mic size={15} /></button></article></div>
+        <div className="settings-list transcription-settings"><article><span className="setting-icon"><BrandGlyph name="work" /></span><div><h2>音声認識</h2><p>{transcription?.downloaded ? "日本語音声認識をこのPCで行います。" : "話した言葉を文字にする日本語モデルです。"}</p>{progressFor("transcription") && <div className="installation-progress" role="status"><span>{progressFor("transcription")?.phase}</span><strong>{installationProgressLabel(progressFor("transcription")!, installationNow)}</strong><i aria-hidden="true"><b style={{ width: `${progressPercent("transcription") ?? 8}%` }} /></i></div>}</div><span className={transcription?.downloaded ? "setting-state state-installed" : "setting-state state-unavailable"}>{transcription?.downloaded ? <Check size={15} strokeWidth={2.3} /> : <Download size={15} strokeWidth={2} />}{transcription?.downloaded ? "モデル取得済み" : downloadingTranscription ? `${progressPercent("transcription") ?? "…"}%` : transcription?.size || "未取得"}</span>{transcription?.downloaded ? <span /> : <button className="outline-action" type="button" onClick={() => void downloadTranscriptionModel()} disabled={downloadingTranscription}>{downloadingTranscription ? "取得中" : "モデルを取得"} <Download size={15} /></button>}</article></div>
+        <div className="settings-list">{providers.map(({ id, label, glyph }) => { const status = providerDisplayState(id, false); const connecting = connectingProviders[id]; const loggedIn = connectedProviders[id] && statuses[id]?.authenticated; const unavailable = statuses[id]?.usability === "unavailable"; const detail = id === "codex" ? "GPT-5.6 Lunaで高速整形" : id === "gemini" ? "Gemini 3.6 Flash (Low)で高速整形" : unavailable ? "現在の契約ではClaude Codeを利用できません" : "Claude Haikuで高速整形"; return <article key={id}><span className="setting-icon"><BrandGlyph name={glyph} /></span><div><h2>{label}</h2><p>{detail}</p></div><span className={`setting-state ${status.className}`}>{connecting ? <span className="state-connecting-mark" aria-hidden="true" /> : unavailable ? <CircleAlert size={15} strokeWidth={2} /> : loggedIn ? <Check size={15} strokeWidth={2.3} /> : statuses[id]?.installed ? <span className="state-ring" aria-hidden="true" /> : <CircleAlert size={15} strokeWidth={2} />}{status.label}</span><button className="outline-action" type="button" onClick={() => void connect(id)} disabled={connecting}>{connecting ? "ログイン中" : loggedIn ? "再ログイン" : "ログインする"} {!connecting && <ExternalLink size={15} strokeWidth={1.9} />}</button></article>; })}<article><span className="setting-icon"><BrandGlyph name="dx" /></span><div><h2>ローカルAI</h2><p>{localReady ? "Gemma 4 E2BがこのPCで稼働中です。" : "Gemma 4 E2BをDOON Voice用に取得します。"}</p>{(progressFor("ollama") || progressFor("local_model")) && <div className="installation-progress" role="status"><span>{(progressFor("ollama") || progressFor("local_model"))?.phase}</span><strong>{installationProgressLabel((progressFor("ollama") || progressFor("local_model"))!, installationNow)}</strong><i aria-hidden="true"><b style={{ width: `${progressPercent("ollama") ?? progressPercent("local_model") ?? 8}%` }} /></i></div>}</div><span className={localReady ? "setting-state state-running" : "setting-state state-unavailable"}>{localReady ? <span className="state-live-dot" aria-hidden="true" /> : <WifiOff size={15} strokeWidth={2} />}{localReady ? "稼働中" : installingOllama || pullingLocalModel ? `${progressPercent("ollama") ?? progressPercent("local_model") ?? "…"}%` : "未準備"}</span>{!local?.installed ? <button className="outline-action" type="button" onClick={() => void installOllama()} disabled={installingOllama}>{installingOllama ? "Ollamaを取得中" : "Ollamaを自動インストール"} <Download size={15} /></button> : !localModel?.installed ? <button className="outline-action" type="button" onClick={() => void pullModel()} disabled={pullingLocalModel}>{pullingLocalModel ? "取得中" : "Gemmaを取得"} <Download size={15} /></button> : <span />}</article><article className="shortcut-row"><span className="setting-icon"><BrandGlyph name="speed" /></span><div><h2>開始・停止キー</h2><p>{capturingShortcut ? "押した組み合わせを登録します。Escで取り消せます。" : "通常の音声入力の開始と停止"}</p></div><button ref={shortcutButtonRef} className={capturingShortcut ? "shortcut-key is-capturing" : "shortcut-key"} type="button" onClick={() => void beginShortcutCapture()} aria-label="開始・停止キーを変更" aria-pressed={capturingShortcut}>{capturingShortcut ? "キーを押す" : shortcutLabel(shortcut, navigator.userAgent.includes("Mac"))}</button><button className="outline-action" type="button" onClick={() => void applyShortcut(DEFAULT_SHORTCUT)}>標準に戻す</button></article><article className="shortcut-row"><span className="setting-icon"><BrandGlyph name="speed" /></span><div><h2>選択文を質問するキー</h2><p>{capturingSelectionQuestionShortcut ? "押した組み合わせを登録します。Escで取り消せます。" : "選択中の文章へ音声で質問"}</p></div><button ref={selectionQuestionShortcutButtonRef} className={capturingSelectionQuestionShortcut ? "shortcut-key is-capturing" : "shortcut-key"} type="button" onClick={() => void beginSelectionQuestionShortcutCapture()} aria-label="選択文を質問するキーを変更" aria-pressed={capturingSelectionQuestionShortcut}>{capturingSelectionQuestionShortcut ? "キーを押す" : shortcutLabel(selectionQuestionShortcut, navigator.userAgent.includes("Mac"))}</button><button className="outline-action" type="button" onClick={() => void applySelectionQuestionShortcut(DEFAULT_SELECTION_QUESTION_SHORTCUT)}>標準に戻す</button></article></div>{notice && <p className="notice" role="status">{notice}</p>}</section>}
     </section>
 
     {questionOpen && <div className="question-backdrop" role="presentation">

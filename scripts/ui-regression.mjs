@@ -166,6 +166,18 @@ try {
     }));
     await page.getByText(/約286 MB \/ 約574 MB · 49%/).waitFor();
     await page.getByText(/残り時間の目安/).waitFor();
+    await mkdir(artifacts, { recursive: true });
+    await page.screenshot({ path: path.join(artifacts, "settings-install-progress-desktop.png"), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.screenshot({ path: path.join(artifacts, "settings-install-progress-mobile.png"), fullPage: true });
+    await page.close();
+  });
+
+  await check("初回設定でマイク許可の入口を常に表示する", async () => {
+    const page = await pageFor();
+    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await page.getByRole("button", { name: "マイクを許可する", exact: true }).waitFor();
     await page.close();
   });
 

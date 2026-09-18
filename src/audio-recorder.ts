@@ -44,12 +44,31 @@ export type AudioRecorder = {
   stop: () => Promise<Uint8Array>;
 };
 
-export async function startAudioRecorder(): Promise<AudioRecorder> {
-  if (!navigator.mediaDevices?.getUserMedia) throw new Error("この環境ではマイクを使えません。");
+function microphoneAccessError(error: unknown): Error {
+  if (error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "SecurityError")) {
+    return new Error("マイクの使用が許可されていません。接続と設定で「マイクを許可する」を押してください。");
+  }
+  return error instanceof Error ? error : new Error("マイクを開始できませんでした。");
+}
 
-  const stream = await navigator.mediaDevices.getUserMedia({
-    audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-  });
+async function microphoneStream(): Promise<MediaStream> {
+  if (!navigator.mediaDevices?.getUserMedia) throw new Error("この環境ではマイクを使えません。");
+  try {
+    return await navigator.mediaDevices.getUserMedia({
+      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+    });
+  } catch (error) {
+    throw microphoneAccessError(error);
+  }
+}
+
+export async function requestMicrophoneAccess(): Promise<void> {
+  const stream = await microphoneStream();
+  stream.getTracks().forEach((track) => track.stop());
+}
+
+export async function startAudioRecorder(): Promise<AudioRecorder> {
+  const stream = await microphoneStream();
   const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextConstructor) {
     stream.getTracks().forEach((track) => track.stop());
