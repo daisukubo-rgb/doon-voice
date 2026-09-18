@@ -230,6 +230,11 @@ try {
     assert.equal(await page.evaluate(() => window.fixture.clipboard), "選択文への自動回答です。");
     await page.getByRole("button", { name: "カーソル位置へ入力", exact: true }).click();
     await page.waitForFunction(() => window.fixture.pastedAnswer === "選択文への自動回答です。");
+    await mkdir(artifacts, { recursive: true });
+    await page.screenshot({ path: path.join(artifacts, "selection-question-popup-desktop.png"), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.screenshot({ path: path.join(artifacts, "selection-question-popup-mobile.png"), fullPage: true });
     await page.close();
   });
 

@@ -91,6 +91,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .destination-list small.state-unavailable { color: var(--faint); }
 
 .notice { margin: 18px 0 0; color: var(--coral); font-size: 11px; line-height: 1.6; }
+.selection-question-popup-shell { min-height: 100vh; padding: 18px; background: var(--background); }
+.selection-question-popup { width: min(100%, 760px); margin: 0 auto; }
 .question-backdrop { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(17, 47, 42, .28); }
 .question-dialog { display: grid; width: min(100%, 620px); max-height: min(720px, calc(100vh - 48px)); overflow: auto; border: 1px solid var(--deep); border-radius: 6px; padding: 22px; background: var(--paper); box-shadow: 0 18px 52px rgba(8, 31, 27, .28); }
 .question-dialog-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--line); padding-bottom: 14px; }
@@ -215,6 +217,7 @@ html.is-overlay, html.is-overlay body, html.is-overlay #root { width: 100%; min-
   .voice-stage > .cancel-processing { grid-column: 1; justify-self: center; }
   .question-backdrop { align-items: end; padding: 12px; }
   .question-dialog { max-height: calc(100vh - 24px); padding: 18px; }
+  .selection-question-popup-shell { padding: 14px; }
   .question-dialog-header h2 { font-size: 20px; }
 }
 

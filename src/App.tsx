@@ -31,6 +31,7 @@ type BackgroundVoiceSnapshot = {
 type QuestionPhase = "ready" | "recording" | "transcribing" | "answering" | "answer";
 type SelectionQuestionEvent = { selection: string; question: string; answer: string };
 type SelectionQuestionErrorEvent = { selection: string; question: string; error: string };
+type SelectionQuestionPopupPayload = { selection: string; question: string; answer?: string; error?: string; target: OutputTarget };
 
 const MAX_DICTIONARY_TERMS = 100;
 const MAX_TERM_CODEPOINTS = 80;
@@ -954,6 +955,94 @@ function VoiceOverlay() {
   </main>;
 }
 
+function SelectionQuestionPopup() {
+  const [payload, setPayload] = useState<SelectionQuestionPopupPayload | null>(null);
+  const [question, setQuestion] = useState("");
+  const [answer, setAnswer] = useState("");
+  const [error, setError] = useState("");
+  const [answering, setAnswering] = useState(false);
+  const [notice, setNotice] = useState("");
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const composingRef = useRef(false);
+
+  useEffect(() => {
+    void appInvoke<SelectionQuestionPopupPayload>("selection_question_popup_payload")
+      .then((next) => {
+        setPayload(next);
+        setQuestion(next.question);
+        setAnswer(next.answer || "");
+        setError(next.error || "");
+        window.setTimeout(() => inputRef.current?.focus(), 0);
+      })
+      .catch((reason) => setError(errorMessage(reason, "回答の内容を読み取れませんでした")));
+  }, []);
+
+  async function ask() {
+    if (!payload || answering || !question.trim()) return;
+    setAnswering(true);
+    setError("");
+    try {
+      const next = await appInvoke<string>("answer_selection_question", {
+        target: payload.target,
+        selection: payload.selection,
+        question: question.trim(),
+      });
+      setAnswer(next);
+    } catch (reason) {
+      setError(errorMessage(reason, "回答を作れませんでした"));
+    } finally {
+      setAnswering(false);
+      window.setTimeout(() => inputRef.current?.focus(), 0);
+    }
+  }
+
+  async function copyAnswer() {
+    if (!answer) return;
+    try {
+      await navigator.clipboard.writeText(answer);
+      setNotice("回答をクリップボードにコピーしました");
+      window.setTimeout(() => setNotice(""), 3500);
+    } catch {
+      setError("回答をコピーできませんでした。文章を選択してコピーしてください");
+    }
+  }
+
+  async function pasteAnswer() {
+    if (!answer) return;
+    try {
+      await appInvoke("paste_question_answer", { text: answer });
+      setNotice("カーソル位置へ入力しました");
+      window.setTimeout(() => setNotice(""), 3500);
+    } catch (reason) {
+      setError(errorMessage(reason, "回答を入力できませんでした。コピーして貼り付けてください"));
+    }
+  }
+
+  function onQuestionKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.shiftKey) return;
+    if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    void ask();
+  }
+
+  return <main className="selection-question-popup-shell">
+    <section className="selection-question-popup" role="dialog" aria-modal="false" aria-labelledby="selection-question-popup-title">
+      <header className="question-dialog-header"><div><span>ASK WITH SELECTION</span><h2 id="selection-question-popup-title">選択した文章を質問</h2></div><button className="icon-button" type="button" onClick={() => void appInvoke("close_selection_question_popup")} aria-label="質問を閉じる"><X size={19} strokeWidth={2} /></button></header>
+      {!payload && !error && <p className="question-progress" role="status">回答を準備しています</p>}
+      {payload && <><p className="question-selection" aria-label="選択した文章">{payload.selection}</p>
+        {answer && <section className="question-answer" aria-live="polite"><span>ANSWER</span><div>{answer}</div></section>}
+        {error && <p className="question-error" role="alert">{error}</p>}
+        <div className="question-compose"><textarea ref={inputRef} value={question} disabled={answering} onChange={(event) => setQuestion(event.target.value)} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={() => { composingRef.current = false; }} onKeyDown={onQuestionKeyDown} placeholder="質問を入力" aria-label="選択した文章への質問" /><div className="question-compose-actions"><button className="outline-action question-send" type="button" onClick={() => void ask()} disabled={!question.trim() || answering}>{answering ? "回答を作成中" : "質問する"}</button></div></div>
+        {answer && <div className="question-answer-actions"><button className="outline-action" type="button" onClick={() => void copyAnswer()}>回答をコピー</button><button className="outline-action question-send" type="button" onClick={() => void pasteAnswer()}>カーソル位置へ入力</button></div>}
+      </>}
+      {notice && <p className="notice" role="status">{notice}</p>}
+    </section>
+  </main>;
+}
+
 export default function App() {
-  return new URLSearchParams(window.location.search).has("overlay") ? <VoiceOverlay /> : <MainApp />;
+  const query = new URLSearchParams(window.location.search);
+  if (query.has("overlay")) return <VoiceOverlay />;
+  if (query.has("selection-question-popup")) return <SelectionQuestionPopup />;
+  return <MainApp />;
 }

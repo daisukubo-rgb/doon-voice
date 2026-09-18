@@ -15,7 +15,7 @@ use std::{
 const CODEX_INSTRUCTIONS: &str =
     "文章整形だけを行う。シェル、ツール、検索、ファイル操作は使わず、本文だけを返す。";
 const CODEX_QUESTION_INSTRUCTIONS: &str =
-    "選択された文章についての質問に答える。シェル、ツール、検索、ファイル操作は使わず、回答本文だけを返す。";
+    "選択された文章についての質問に答える。最新情報や調査を求められた場合だけWeb検索を使い、確認した事実と出典URLを短く示す。シェルとファイル操作は使わず、回答本文だけを返す。";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CloudKind {
