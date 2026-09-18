@@ -354,21 +354,27 @@ impl BackgroundVoiceRuntime {
     fn configure(
         &mut self,
         target: OutputTarget,
+        selection_question_target: OutputTarget,
         dictionary: Vec<String>,
         save: impl FnOnce(&VoiceRuntimeConfig) -> Result<(), String>,
     ) -> Result<bool, String> {
         if self.phase != BackgroundVoicePhase::Idle {
             // An in-flight recording owns its settings until delivery finishes.
             // A repeated UI synchronization must not invalidate that configuration.
-            if target == self.config.target && dictionary == self.config.dictionary {
+            if target == self.config.target
+                && selection_question_target == self.config.selection_question_target
+                && dictionary == self.config.dictionary
+            {
                 return Ok(false);
             }
             return Err("音声入力が終わってからAIや辞書を変更してください。".into());
         }
         self.configuration_ready = false;
         let dictionary = validate_dictionary(dictionary)?;
+        validate_selection_question_target(selection_question_target)?;
         let mut config = self.config.clone();
         config.target = target;
+        config.selection_question_target = selection_question_target;
         config.dictionary = dictionary;
         save(&config)?;
         self.config = config;
@@ -567,6 +573,7 @@ fn clear_selection_question_shortcut(
 fn configure_background_voice(
     app: AppHandle,
     target: OutputTarget,
+    selection_question_target: OutputTarget,
     dictionary: Vec<String>,
     state: State<'_, BackgroundVoiceState>,
 ) -> Result<(), String> {
@@ -575,12 +582,15 @@ fn configure_background_voice(
             .0
             .lock()
             .map_err(|_| "音声入力の設定を更新できませんでした。")?;
-        runtime.configure(target, dictionary, |config| {
+        runtime.configure(target, selection_question_target, dictionary, |config| {
             save_voice_runtime_config(&app, config)
         })?
     };
     if changed {
         prewarm_output_target(&app, target);
+        if selection_question_target != target {
+            prewarm_output_target(&app, selection_question_target);
+        }
     }
     Ok(())
 }
@@ -600,6 +610,15 @@ fn validate_dictionary(dictionary: Vec<String>) -> Result<Vec<String>, String> {
         }
     }
     Ok(terms)
+}
+
+fn validate_selection_question_target(target: OutputTarget) -> Result<(), String> {
+    if target == OutputTarget::Raw {
+        return Err(
+            "選択文への質問にはChatGPT、Claude、Gemini、またはこのPCのAIを選んでください。".into(),
+        );
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -973,6 +992,8 @@ enum OutputTarget {
 #[derive(Clone, Deserialize, Serialize)]
 struct VoiceRuntimeConfig {
     target: OutputTarget,
+    #[serde(default = "default_selection_question_target")]
+    selection_question_target: OutputTarget,
     dictionary: Vec<String>,
     shortcut: String,
     #[serde(default = "default_selection_question_shortcut")]
@@ -983,10 +1004,15 @@ fn default_selection_question_shortcut() -> String {
     "Ctrl+Alt+Q".into()
 }
 
+fn default_selection_question_target() -> OutputTarget {
+    OutputTarget::Codex
+}
+
 impl Default for VoiceRuntimeConfig {
     fn default() -> Self {
         Self {
             target: OutputTarget::Codex,
+            selection_question_target: default_selection_question_target(),
             dictionary: Vec::new(),
             shortcut: "Ctrl+Alt+Space".into(),
             selection_question_shortcut: default_selection_question_shortcut(),
@@ -1010,8 +1036,22 @@ fn load_voice_runtime_config(app: &AppHandle) -> VoiceRuntimeConfig {
             std::fs::read(path).map_err(|_| "設定はまだ保存されていません。".to_string())
         })
         .and_then(|bytes| {
-            serde_json::from_slice(&bytes)
-                .map_err(|_| "保存済みの設定を読み取れませんでした。".to_string())
+            let value: serde_json::Value = serde_json::from_slice(&bytes)
+                .map_err(|_| "保存済みの設定を読み取れませんでした。".to_string())?;
+            let has_selection_question_target = value.get("selection_question_target").is_some();
+            let mut config: VoiceRuntimeConfig = serde_json::from_value(value)
+                .map_err(|_| "保存済みの設定を読み取れませんでした。".to_string())?;
+            if !has_selection_question_target {
+                config.selection_question_target = if config.target == OutputTarget::Raw {
+                    OutputTarget::Codex
+                } else {
+                    config.target
+                };
+            }
+            if config.selection_question_target == OutputTarget::Raw {
+                config.selection_question_target = OutputTarget::Codex;
+            }
+            Ok(config)
         })
         .unwrap_or_default()
 }
@@ -2817,7 +2857,7 @@ fn stop_and_process_background_recording(
                 let question = recognized.text.clone();
                 match answer_selection_question(
                     app.clone(),
-                    config.target,
+                    config.selection_question_target,
                     selection.clone(),
                     question.clone(),
                 )
@@ -2834,7 +2874,7 @@ fn stop_and_process_background_recording(
                                 question,
                                 answer: Some(answer),
                                 error: None,
-                                target: config.target,
+                                target: config.selection_question_target,
                             },
                         )?;
                         return Ok(());
@@ -2850,7 +2890,7 @@ fn stop_and_process_background_recording(
                                 question,
                                 answer: None,
                                 error: Some(error),
-                                target: config.target,
+                                target: config.selection_question_target,
                             },
                         )?;
                         return Ok(());
@@ -3359,6 +3399,9 @@ pub fn run() {
             });
             let config = load_voice_runtime_config(handle);
             prewarm_output_target(handle, config.target);
+            if config.selection_question_target != config.target {
+                prewarm_output_target(handle, config.selection_question_target);
+            }
             {
                 let state = handle.state::<BackgroundVoiceState>();
                 if let Ok(mut runtime) = state.0.lock() {

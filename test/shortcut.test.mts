@@ -6,7 +6,9 @@ import {
 } from "../src/shortcut.js";
 import {
   DEFAULT_OUTPUT_TARGET,
+  DEFAULT_SELECTION_QUESTION_TARGET,
   isOutputTarget,
+  isSelectionQuestionTarget,
   outputTargetLabel,
 } from "../src/output-target.js";
 
@@ -47,10 +49,13 @@ assert(
 assert(shortcutLabel("Ctrl+Alt+Space", true) === "⌃ ⌥ Space", "Macでは見慣れた記号で表示する");
 assert(shortcutLabel("Ctrl+Alt+Space", false) === "Ctrl + Alt + Space", "Windowsでは文字で表示する");
 assert(DEFAULT_OUTPUT_TARGET === "codex", "標準の出力先はChatGPTにする");
+assert(DEFAULT_SELECTION_QUESTION_TARGET === "codex", "標準の質問先はChatGPTにする");
 assert(outputTargetLabel("local") === "このPCのAI", "端末内AIの選択肢を表示する");
 assert(isOutputTarget("claude"), "Claudeを有効な出力先として扱う");
 assert(isOutputTarget("gemini"), "Geminiを有効な出力先として扱う");
 assert(outputTargetLabel("gemini") === "Gemini", "Antigravity経由のGeminiを表示する");
 assert(!isOutputTarget("unknown"), "未知の出力先は保存しない");
+assert(isSelectionQuestionTarget("local"), "このPCのAIを質問先として扱う");
+assert(!isSelectionQuestionTarget("raw"), "AIなしを質問先として扱わない");
 
 console.info("PASS: ショートカットの変換と表示を検証しました");

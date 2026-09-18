@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { Check, CircleAlert, Download, ExternalLink, Mic, Plus, RefreshCw, WifiOff, X } from "lucide-react";
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
 import { AudioRecorder, requestMicrophoneAccess, startAudioRecorder } from "./audio-recorder";
-import { DEFAULT_OUTPUT_TARGET, isOutputTarget, OutputTarget, outputTargetLabel } from "./output-target";
+import { DEFAULT_OUTPUT_TARGET, DEFAULT_SELECTION_QUESTION_TARGET, isOutputTarget, isSelectionQuestionTarget, OutputTarget, outputTargetLabel, SelectionQuestionTarget } from "./output-target";
 import { DEFAULT_SELECTION_QUESTION_SHORTCUT, DEFAULT_SHORTCUT, shortcutCaptureResult, shortcutLabel } from "./shortcut";
 
 type ProviderId = "codex" | "claude" | "gemini";
@@ -99,6 +99,15 @@ function savedOutputTarget(): OutputTarget {
   } catch { return DEFAULT_OUTPUT_TARGET; }
 }
 
+function savedSelectionQuestionTarget(): SelectionQuestionTarget {
+  try {
+    const saved = window.localStorage.getItem("doon-voice-selection-question-target");
+    if (isSelectionQuestionTarget(saved)) return saved;
+    const legacy = window.localStorage.getItem("doon-voice-output-target");
+    return isSelectionQuestionTarget(legacy) ? legacy : DEFAULT_SELECTION_QUESTION_TARGET;
+  } catch { return DEFAULT_SELECTION_QUESTION_TARGET; }
+}
+
 function savedProviderConnections(key = "doon-voice-provider-connections"): ProviderConnections {
   try {
     const saved = JSON.parse(window.localStorage.getItem(key) || "null");
@@ -153,6 +162,7 @@ type OverlayState = "starting" | "listening" | "thinking" | "done" | "error" | "
 
 function MainApp() {
   const initialOutputTarget = useRef(savedOutputTarget()).current;
+  const initialSelectionQuestionTarget = useRef(savedSelectionQuestionTarget()).current;
   const initialDictionary = useRef(savedDictionary()).current;
   const [view, setView] = useState<View>("home");
   const [statuses, setStatuses] = useState<Record<ProviderId, ProviderStatus | null>>({ codex: null, claude: null, gemini: null });
@@ -178,6 +188,8 @@ function MainApp() {
   const [capturingSelectionQuestionShortcut, setCapturingSelectionQuestionShortcut] = useState(false);
   const [outputTarget, setOutputTarget] = useState<OutputTarget>(initialOutputTarget);
   const outputTargetRef = useRef(initialOutputTarget);
+  const [selectionQuestionTarget, setSelectionQuestionTarget] = useState<SelectionQuestionTarget>(initialSelectionQuestionTarget);
+  const selectionQuestionTargetRef = useRef(initialSelectionQuestionTarget);
   const configQueueRef = useRef<Promise<void>>(Promise.resolve());
   const [configSaving, setConfigSaving] = useState(0);
   const [configError, setConfigError] = useState("");
@@ -307,24 +319,28 @@ function MainApp() {
   }, [terms, unreadableDictionary]);
   useEffect(() => {
     if (unreadableDictionary || dictionaryError(terms)) return;
-    void saveConfiguration(undefined, terms);
+    void saveConfiguration(undefined, undefined, terms);
   }, [terms, unreadableDictionary]);
 
-  function saveConfiguration(target: OutputTarget | undefined, dictionary: unknown[], afterSaved?: () => Promise<void>): Promise<boolean> {
+  function saveConfiguration(target: OutputTarget | undefined, questionTarget: SelectionQuestionTarget | undefined, dictionary: unknown[], afterSaved?: () => Promise<void>): Promise<boolean> {
     setConfigSaving((current) => current + 1);
     const job = configQueueRef.current.then(async () => {
       const error = dictionaryError(dictionary);
       if (error) throw new Error(error);
       // A shortcut can start recording while an earlier configuration awaits its ACK.
-      if (target !== undefined && voiceStateRef.current !== "idle") {
+      if ((target !== undefined || questionTarget !== undefined) && voiceStateRef.current !== "idle") {
         setNotice("音声入力が終わってからAIを変更してください");
         return false;
       }
       const nextTarget = target ?? outputTargetRef.current;
-      await appInvoke("configure_background_voice", { target: nextTarget, dictionary });
+      const nextQuestionTarget = questionTarget ?? selectionQuestionTargetRef.current;
+      await appInvoke("configure_background_voice", { target: nextTarget, selectionQuestionTarget: nextQuestionTarget, dictionary });
       outputTargetRef.current = nextTarget;
       setOutputTarget(nextTarget);
+      selectionQuestionTargetRef.current = nextQuestionTarget;
+      setSelectionQuestionTarget(nextQuestionTarget);
       window.localStorage.setItem("doon-voice-output-target", nextTarget);
+      window.localStorage.setItem("doon-voice-selection-question-target", nextQuestionTarget);
       setConfigError("");
       if (afterSaved) await afterSaved();
       return true;
@@ -458,7 +474,7 @@ function MainApp() {
     setQuestionPhase("answering");
     try {
       const answer = await appInvoke<string>("answer_selection_question", {
-        target: outputTargetRef.current,
+        target: selectionQuestionTargetRef.current,
         selection: questionSelection,
         question: normalizedQuestion,
       });
@@ -697,8 +713,19 @@ function MainApp() {
       return;
     }
     if (unreadableDictionary) { setConfigError("保存された辞書を読み取れません。辞書画面で確認してください"); return; }
-    void saveConfiguration(target, terms).then((saved) => {
+    void saveConfiguration(target, undefined, terms).then((saved) => {
       if (saved) setNotice(target === "raw" ? "AIなしの音声入力に変更しました" : `文章を整えるAIを ${outputTargetLabel(target)} に変更しました`);
+    });
+  }
+
+  function chooseSelectionQuestionTarget(target: SelectionQuestionTarget) {
+    if (voiceStateRef.current !== "idle") {
+      setNotice("音声入力が終わってからAIを変更してください");
+      return;
+    }
+    if (unreadableDictionary) { setConfigError("保存された辞書を読み取れません。辞書画面で確認してください"); return; }
+    void saveConfiguration(undefined, target, terms).then((saved) => {
+      if (saved) setNotice(`選択文を質問するAIを ${outputTargetLabel(target)} に変更しました`);
     });
   }
 
@@ -817,7 +844,7 @@ function MainApp() {
     setResultActionPending(true);
     try {
       if (command === "retry_voice_processing") {
-        const saved = await saveConfiguration(undefined, terms, async () => {
+        const saved = await saveConfiguration(undefined, undefined, terms, async () => {
           if (generation !== resultGenerationRef.current) return;
           await appInvoke(command, { generation });
         });
@@ -851,7 +878,7 @@ function MainApp() {
   const configurationNotice = configSaving > 0
     ? <p className="configuration-notice" role="status">設定を保存しています</p>
     : configError
-      ? <p className="configuration-notice" role="alert"><span>{configError}</span><button className="outline-action" type="button" onClick={() => { if (!unreadableDictionary) void saveConfiguration(undefined, terms); }} disabled={unreadableDictionary}>設定を再保存</button></p>
+      ? <p className="configuration-notice" role="alert"><span>{configError}</span><button className="outline-action" type="button" onClick={() => { if (!unreadableDictionary) void saveConfiguration(undefined, undefined, terms); }} disabled={unreadableDictionary}>設定を再保存</button></p>
       : null;
   const localReady = Boolean(local?.running && localModel?.installed);
   const isMac = navigator.userAgent.includes("Mac");
@@ -960,14 +987,25 @@ function MainApp() {
         <div className="view-heading"><span>SETTINGS</span><h1 id="settings-title">接続と設定</h1></div>
         <section className="output-settings" aria-labelledby="output-settings-title">
           <div className="output-settings-heading"><span>TEXT PROCESSOR</span><h2 id="output-settings-title">文章を整えるAI</h2></div>
+          <p className="settings-help">おすすめはこのPCのAIです。通信せず、このPC内で文章を整えます。</p>
           <div className="output-choice-list" role="radiogroup" aria-label="文章を整えるAI">
             <button className={outputTarget === "raw" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "raw"} disabled={busy} onClick={() => chooseOutputTarget("raw")}><Mic size={27} strokeWidth={1.8} /><span><strong>AIなし</strong><small>音声認識のみ</small></span>{outputTarget === "raw" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
             <button className={outputTarget === "codex" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "codex"} disabled={busy} onClick={() => chooseOutputTarget("codex")}><BrandGlyph name="spark" /><span><strong>ChatGPT</strong><small>Codexで整える</small></span>{outputTarget === "codex" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
             <button className={outputTarget === "claude" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "claude"} disabled={busy} onClick={() => chooseOutputTarget("claude")}><BrandGlyph name="coach" /><span><strong>Claude</strong><small>Claude Codeで整える</small></span>{outputTarget === "claude" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
             <button className={outputTarget === "gemini" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "gemini"} disabled={busy} onClick={() => chooseOutputTarget("gemini")}><BrandGlyph name="loop" /><span><strong>Gemini</strong><small>Antigravity Flashで整える</small></span>{outputTarget === "gemini" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
-            <button className={outputTarget === "local" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "local"} disabled={busy} onClick={() => chooseOutputTarget("local")}><BrandGlyph name="dx" /><span><strong>このPCのAI</strong><small>Gemma 4 E2Bで高速整形</small></span>{outputTarget === "local" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
+            <button className={outputTarget === "local" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "local"} disabled={busy} onClick={() => chooseOutputTarget("local")}><BrandGlyph name="dx" /><span><strong>このPCのAI</strong><small>おすすめ · Gemma 4 E2Bで整える</small></span>{outputTarget === "local" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
           </div>
           {configurationNotice}
+        </section>
+        <section className="output-settings" aria-labelledby="selection-question-settings-title">
+          <div className="output-settings-heading"><span>SELECTION QUESTION</span><h2 id="selection-question-settings-title">選択文を質問するAI</h2></div>
+          <p className="settings-help">おすすめはChatGPTです。調査や最新情報の確認には、クラウドAIを選びます。</p>
+          <div className="output-choice-list" role="radiogroup" aria-label="選択文を質問するAI">
+            <button className={selectionQuestionTarget === "codex" ? "is-selected" : ""} type="button" role="radio" aria-checked={selectionQuestionTarget === "codex"} disabled={busy} onClick={() => chooseSelectionQuestionTarget("codex")}><BrandGlyph name="spark" /><span><strong>ChatGPT</strong><small>おすすめ · 調べて答える</small></span>{selectionQuestionTarget === "codex" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
+            <button className={selectionQuestionTarget === "claude" ? "is-selected" : ""} type="button" role="radio" aria-checked={selectionQuestionTarget === "claude"} disabled={busy} onClick={() => chooseSelectionQuestionTarget("claude")}><BrandGlyph name="coach" /><span><strong>Claude</strong><small>Claude Codeで答える</small></span>{selectionQuestionTarget === "claude" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
+            <button className={selectionQuestionTarget === "gemini" ? "is-selected" : ""} type="button" role="radio" aria-checked={selectionQuestionTarget === "gemini"} disabled={busy} onClick={() => chooseSelectionQuestionTarget("gemini")}><BrandGlyph name="loop" /><span><strong>Gemini</strong><small>Antigravityで答える</small></span>{selectionQuestionTarget === "gemini" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
+            <button className={selectionQuestionTarget === "local" ? "is-selected" : ""} type="button" role="radio" aria-checked={selectionQuestionTarget === "local"} disabled={busy} onClick={() => chooseSelectionQuestionTarget("local")}><BrandGlyph name="dx" /><span><strong>このPCのAI</strong><small>Gemma 4 E2Bで答える</small></span>{selectionQuestionTarget === "local" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
+          </div>
         </section>
         <div className="settings-list direct-input-settings"><article><span className="setting-icon"><BrandGlyph name="move" /></span><div><h2>カーソル位置へ入力</h2><p>{directInputAllowed ? "ほかのアプリへ直接入力できます。" : "macOSのアクセシビリティ許可が必要です。"}</p></div><span className={directInputAllowed ? "setting-state state-permitted" : "setting-state state-unavailable"}>{directInputAllowed ? <Check size={15} strokeWidth={2.3} /> : <CircleAlert size={15} strokeWidth={2} />}{directInputAllowed ? "許可済み" : "未許可"}</span>{isMac ? <button className="outline-action" type="button" onClick={() => void (directInputAllowed ? openDirectInputSettings() : requestDirectInputPermission())}>{directInputAllowed ? "設定を開く" : "許可する"} <ExternalLink size={15} /></button> : <span />}</article></div>
         <div className="settings-list microphone-settings"><article><span className="setting-icon"><Mic size={22} strokeWidth={1.8} /></span><div><h2>マイク</h2><p>{microphonePermissionState === "granted" ? "このPCのマイクを使えます。" : microphonePermissionState === "unsupported" ? "この環境ではマイクを使えません。" : "初回にこのボタンからマイクを許可します。"}</p></div><span className={microphonePermissionState === "granted" ? "setting-state state-permitted" : "setting-state state-unavailable"}>{microphonePermissionState === "granted" ? <Check size={15} strokeWidth={2.3} /> : <CircleAlert size={15} strokeWidth={2} />}{microphonePermissionState === "granted" ? "許可済み" : microphonePermissionState === "unsupported" ? "利用不可" : "許可が必要"}</span><button className="outline-action" type="button" onClick={() => void requestMicrophonePermission()} disabled={microphonePermissionState === "granted" || microphonePermissionState === "unsupported"}>{microphonePermissionState === "granted" ? "許可済み" : "マイクを許可する"} <Mic size={15} /></button></article></div>

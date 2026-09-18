@@ -30,6 +30,7 @@
           <li><a href="#install">Mac・Windowsへ入れる</a></li>
           <li><a href="#first-setup">最初の設定</a></li>
           <li><a href="#how-to-use">音声入力を使う</a></li>
+          <li><a href="#ai-choice">AIを用途別に選ぶ</a></li>
           <li><a href="#trouble">うまくいかないとき</a></li>
         </ol>
       </nav>
@@ -51,7 +52,7 @@
             <h3>Windows 10 / 11（64ビット）</h3>
             <ol class="steps">
               <li><code>DOON Voice-Windows.zip</code> を右クリックし、<strong>すべて展開</strong>を選びます。</li>
-              <li>展開したフォルダ内の <code>DOON Voice_0.5.32_x64_en-US.msi</code> をダブルクリックします。</li>
+              <li>展開したフォルダ内の <code>DOON Voice_0.5.33_x64_en-US.msi</code> をダブルクリックします。</li>
               <li>画面の案内に沿ってインストールします。</li>
               <li>スタートメニューからDOON Voiceを開きます。</li>
             </ol>
@@ -68,7 +69,7 @@
           <li><strong>音声認識</strong> の <strong>モデルを取得</strong> を押します。約574MBあるため、初回はインターネット接続が必要です。取得済み容量・全容量・進捗・残り時間の目安が表示されます。</li>
           <li>許可画面が出ない、または以前に拒否した場合は、Windowsでは「設定」で <strong>マイク</strong> を検索し、マイクとデスクトップアプリのアクセスをオンにします。</li>
           <li>Macでは <strong>カーソル位置へ入力</strong> の <strong>許可する</strong> を押し、システム設定のアクセシビリティでDOON Voiceをオンにします。</li>
-          <li>最初は <strong>文章の仕上げ</strong> で <strong>AIなし</strong> を選びます。</li>
+          <li>最初は <strong>文章を整えるAI</strong> で <strong>AIなし</strong> を選びます。</li>
         </ol>
         <div class="note"><strong>AIは後からで大丈夫です</strong>AIなしでも、話した内容をこのPC内で文字にできます。ChatGPT、Claude、Geminiを使う場合だけ、各サービスのCLIとログインが必要です。</div>
       </section>
@@ -85,8 +86,20 @@
         <div class="note"><strong>入力されなかったとき</strong>ホーム画面の <strong>原文をコピー</strong> または <strong>文章をコピー</strong> で文章を回収できます。コピーした内容は、入力したいアプリへ手動で貼り付けてください。</div>
       </section>
 
+      <section class="section" id="ai-choice">
+        <h2>4. AIを用途別に選ぶ</h2>
+        <p><strong>接続と設定</strong>では、文章を整えるAIと、選択した文章を質問するAIを別々に選べます。</p>
+        <table>
+          <tbody>
+            <tr><th>文章を整えるAI</th><td><strong>このPCのAI</strong>がおすすめです。Gemma 4 E2BがPC内で文章を整えるため、本文をクラウドへ送らずに使えます。初回だけOllamaとGemmaの取得が必要です。</td></tr>
+            <tr><th>選択文を質問するAI</th><td><strong>ChatGPT</strong>がおすすめです。会社名・用語・最新情報を調べたいときはクラウドAIを選びます。ChatGPT、Claude、Geminiは各サービスへのログインが必要です。</td></tr>
+          </tbody>
+        </table>
+        <p>選択文を質問するキーで呼び出した場合も、ここで選んだ質問用AIが回答します。回答は専用の小さな画面に出るので、<strong>回答をコピー</strong>で使ってください。</p>
+      </section>
+
       <section class="section" id="trouble">
-        <h2>4. うまくいかないとき</h2>
+        <h2>5. うまくいかないとき</h2>
         <table>
           <tbody>
             <tr><th>話しても録音が始まらない</th><td>接続と設定の「マイクを許可する」を押します。許可画面が出ない、または以前に拒否した場合はOSのマイク設定でDOON Voiceを許可し、音声認識モデルの取得状態も確認してください。Macでマイク設定を読み取れない場合は、アプリを閉じて「システム設定」→「サウンド」→「入力」で「MacBookのマイク」など利用する入力を選び、開き直します。開始・停止キーが他のアプリと重なる場合は、接続と設定で変更します。</td></tr>

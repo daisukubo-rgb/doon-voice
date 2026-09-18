@@ -30,17 +30,18 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
     selectionQuestionPopup: { selection: "選択された説明文です。", question: "これは何ですか", answer: "選択文への自動回答です。", target: "codex" },
     registeredShortcut: null, registeredQuestionShortcut: null, snapshot: { ...idle, ...snapshot },
     deferClipboard: false, pendingClipboard: null, deferConfigs: false, rejectConfigs: false,
-    pendingConfigs: [], activeTarget: "codex", activeDictionary: dictionary,
+    pendingConfigs: [], activeTarget: "codex", activeSelectionQuestionTarget: "codex", activeDictionary: dictionary,
     deferConfigReplies: false, pendingConfigReplies: [], deferNextClear: false, pendingClear: null,
     transcription, local, pendingTranscriptionDownload: null, pendingLocalModelPull: null,
     commitConfig(args) {
       const dictionary = [...new Set(args.dictionary.map((term) => term.trim()))];
       if (this.snapshot.state !== "idle") {
-        if (args.target === this.activeTarget && JSON.stringify(dictionary) === JSON.stringify(this.activeDictionary)) return;
+        if (args.target === this.activeTarget && args.selectionQuestionTarget === this.activeSelectionQuestionTarget && JSON.stringify(dictionary) === JSON.stringify(this.activeDictionary)) return;
         throw new Error("音声入力中は設定を変更できません。処理が終わってから変更してください");
       }
       if (this.rejectConfigs) throw new Error("設定を保存できませんでした");
       this.activeTarget = args.target;
+      this.activeSelectionQuestionTarget = args.selectionQuestionTarget;
       this.activeDictionary = dictionary;
     },
     resolveConfig(index = 0) {
@@ -178,6 +179,23 @@ try {
     const page = await pageFor();
     await page.getByRole("button", { name: "接続と設定", exact: true }).click();
     await page.getByRole("button", { name: "マイクを許可する", exact: true }).waitFor();
+    await page.close();
+  });
+
+  await check("文章整形と選択文質問のAIを別々に保存して使う", async () => {
+    const page = await pageFor({ local: { installed: true, running: true, models: [{ id: "gemma4_e2b", name: "Gemma 4 E2B", size: "7.2 GB", installed: true }] } });
+    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await page.getByRole("radiogroup", { name: "文章を整えるAI" }).getByRole("radio", { name: /このPCのAI/ }).click();
+    await page.getByRole("radiogroup", { name: "選択文を質問するAI" }).getByRole("radio", { name: /Gemini/ }).click();
+    await page.waitForFunction(() => window.fixture.activeTarget === "local" && window.fixture.activeSelectionQuestionTarget === "gemini");
+    const settingsCall = await page.evaluate(() => window.fixture.calls.filter(({ command }) => command === "configure_background_voice").at(-1));
+    assert.equal(settingsCall.args.target, "local");
+    assert.equal(settingsCall.args.selectionQuestionTarget, "gemini");
+    await page.getByRole("button", { name: "ホーム", exact: true }).click();
+    await page.getByRole("button", { name: "選択した文章を質問", exact: true }).click();
+    await page.getByRole("textbox", { name: "選択した文章への質問" }).fill("これは何ですか");
+    await page.getByRole("button", { name: "質問する", exact: true }).click();
+    await page.waitForFunction(() => window.fixture.calls.some(({ command, args }) => command === "answer_selection_question" && args.target === "gemini"));
     await page.close();
   });
 
@@ -335,7 +353,7 @@ try {
         const page = await pageFor({ snapshot: { state } });
         await page.getByRole("button", { name: view, exact: true }).click();
         const choices = page.locator(view === "ホーム" ? ".destination-list > button" : ".output-choice-list > button");
-        assert.equal(await choices.count(), 5);
+        assert.equal(await choices.count(), view === "ホーム" ? 5 : 9);
         for (const choice of await choices.all()) assert.equal(await choice.isDisabled(), true);
         const callsBefore = await page.evaluate(() => window.fixture.calls.length);
         await choices.evaluateAll((buttons) => buttons.forEach((button) => button.click()));
@@ -343,8 +361,9 @@ try {
         assert.equal(await page.evaluate(() => window.fixture.activeTarget), "codex");
 
         await page.evaluate(() => window.fixture.publish({ state: "idle" }));
+        const formattingChoices = view === "ホーム" ? choices : page.getByRole("radiogroup", { name: "文章を整えるAI" }).getByRole("radio");
         for (const [index, target] of ["raw", "codex", "claude", "gemini", "local"].entries()) {
-          await choices.nth(index).click();
+          await formattingChoices.nth(index).click();
           await page.waitForFunction((expected) => localStorage.getItem("doon-voice-output-target") === expected, target);
           assert.equal(await page.evaluate(() => window.fixture.activeTarget), target);
         }
