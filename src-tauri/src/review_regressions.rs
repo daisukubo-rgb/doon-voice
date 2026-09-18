@@ -77,7 +77,7 @@ fn idle_settings_are_committed_only_after_successful_persistence() {
 }
 
 #[test]
-fn exiting_keeps_active_recordings_and_unrecovered_text_available() {
+fn exiting_keeps_active_recordings_but_never_requires_discarding_text() {
     let mut runtime = BackgroundVoiceRuntime::new(VoiceRuntimeConfig::default());
     assert!(runtime.exit_block_reason().is_none());
     for phase in [
@@ -91,8 +91,6 @@ fn exiting_keeps_active_recordings_and_unrecovered_text_available() {
     runtime.phase = BackgroundVoicePhase::Idle;
     runtime.transcript = "回収する原文".into();
     runtime.recovery_pending = true;
-    assert!(runtime.exit_block_reason().is_some());
-    runtime.acknowledge_result();
     assert!(runtime.exit_block_reason().is_none());
 }
 
@@ -141,16 +139,14 @@ fn dictionary_rejects_overflow_without_silently_dropping_terms() {
 }
 
 #[test]
-fn recovery_requires_acknowledgment_before_new_recording() {
+fn recovery_does_not_block_the_next_recording() {
     let mut runtime = BackgroundVoiceRuntime::new(VoiceRuntimeConfig::default());
     runtime.configuration_ready = true;
     runtime.transcript = "残す原文".into();
     runtime.recovery_pending = true;
-    assert!(runtime.ensure_can_record().is_err());
-    runtime.acknowledge_result();
     assert!(runtime.ensure_can_record().is_ok());
     assert_eq!(runtime.transcript, "残す原文");
-    assert!(runtime.clipboard_saved);
+    assert!(!runtime.clipboard_saved);
 }
 
 #[test]

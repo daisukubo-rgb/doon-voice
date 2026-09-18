@@ -3316,6 +3316,18 @@ mod tests {
     }
 
     #[test]
+    fn ai整形はフィラーを除き文脈に沿う表記へ整える() {
+        let instruction = editor_instruction(&["DOON Voice".into()]);
+        assert!(instruction.contains("フィラー"));
+        assert!(instruction.contains("文脈"));
+        assert!(instruction.contains("漢字"));
+
+        let transcript = "えっと今から話すことをよく聞いてください一つ目としてはチャットGPTはすごく優れていますあと二つ目にクロードも優れていますあとは三つ目にはジミニも優れています";
+        let polished = "今から話すことをよく聞いてください。\n\n- 一つ目は、ChatGPTが優れています。\n- 二つ目は、Claudeも優れています。\n- 三つ目は、Geminiも優れています。";
+        assert_eq!(preserve_transcription_meaning(transcript, polished), polished);
+    }
+
+    #[test]
     fn aiで整えた長文は文末で段落に分ける() {
         let first = "あ".repeat(120);
         let second = "い".repeat(70);
