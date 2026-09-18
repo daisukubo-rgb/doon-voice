@@ -418,6 +418,18 @@ try {
     await page.close();
   });
 
+  await check("選択文を質問するキーは音声入力キーと別に登録できる", async () => {
+    const page = await pageFor();
+    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await page.getByRole("button", { name: "選択文を質問するキーを変更" }).click();
+    await page.waitForFunction(() => window.fixture.calls.some(({ command }) => command === "clear_selection_question_shortcut"));
+    await page.keyboard.press("Control+Shift+Q");
+    await page.waitForFunction(() => window.fixture.calls.some(({ command, args }) => command === "set_selection_question_shortcut" && args.shortcut === "Ctrl+Shift+Q"));
+    assert.equal(await page.evaluate(() => window.fixture.registeredShortcut), "Ctrl+Alt+Space");
+    assert.equal(await page.evaluate(() => window.fixture.registeredQuestionShortcut), "Ctrl+Shift+Q");
+    await page.close();
+  });
+
   await check("an old shortcut-clear response cannot restore over a newer shortcut", async () => {
     const page = await pageFor();
     await page.getByRole("button", { name: "接続と設定", exact: true }).click();
