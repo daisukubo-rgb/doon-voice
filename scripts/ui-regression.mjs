@@ -27,7 +27,7 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
   window.fixture = {
     calls: [], errors: [], authenticated, clipboard: "", clipboardFails: false,
     selection: "この文章は選択された文脈です。", questionAnswer: "選択文を根拠にした回答です。", pastedAnswer: "",
-    registeredShortcut: null, snapshot: { ...idle, ...snapshot },
+    registeredShortcut: null, registeredQuestionShortcut: null, snapshot: { ...idle, ...snapshot },
     deferClipboard: false, pendingClipboard: null, deferConfigs: false, rejectConfigs: false,
     pendingConfigs: [], activeTarget: "codex", activeDictionary: dictionary,
     deferConfigReplies: false, pendingConfigReplies: [], deferNextClear: false, pendingClear: null,
@@ -88,6 +88,8 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
           if (f.deferConfigReplies) return new Promise((resolve) => f.pendingConfigReplies.push(resolve));
           return;
         case "set_voice_shortcut": f.registeredShortcut = args.shortcut; return;
+        case "set_selection_question_shortcut": f.registeredQuestionShortcut = args.shortcut; return;
+        case "clear_selection_question_shortcut": f.registeredQuestionShortcut = null; return;
         case "clear_voice_shortcut":
           f.registeredShortcut = null;
           if (f.deferNextClear) { f.deferNextClear = false; return new Promise((resolve) => { f.pendingClear = resolve; }); }

@@ -4,7 +4,7 @@ import { Check, CircleAlert, Download, ExternalLink, Mic, Plus, RefreshCw, WifiO
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
 import { AudioRecorder, startAudioRecorder } from "./audio-recorder";
 import { DEFAULT_OUTPUT_TARGET, isOutputTarget, OutputTarget, outputTargetLabel } from "./output-target";
-import { DEFAULT_SHORTCUT, shortcutCaptureResult, shortcutLabel } from "./shortcut";
+import { DEFAULT_SELECTION_QUESTION_SHORTCUT, DEFAULT_SHORTCUT, shortcutCaptureResult, shortcutLabel } from "./shortcut";
 
 type ProviderId = "codex" | "claude" | "gemini";
 type ProviderConnections = Record<ProviderId, boolean>;
@@ -83,6 +83,11 @@ function savedShortcut() {
   catch { return DEFAULT_SHORTCUT; }
 }
 
+function savedSelectionQuestionShortcut() {
+  try { return window.localStorage.getItem("doon-voice-selection-question-shortcut") || DEFAULT_SELECTION_QUESTION_SHORTCUT; }
+  catch { return DEFAULT_SELECTION_QUESTION_SHORTCUT; }
+}
+
 function savedOutputTarget(): OutputTarget {
   try {
     const saved = window.localStorage.getItem("doon-voice-output-target");
@@ -135,7 +140,9 @@ function MainApp() {
   const [termDraft, setTermDraft] = useState("");
   const [termError, setTermError] = useState("");
   const [shortcut, setShortcut] = useState(savedShortcut);
+  const [selectionQuestionShortcut, setSelectionQuestionShortcut] = useState(savedSelectionQuestionShortcut);
   const [capturingShortcut, setCapturingShortcut] = useState(false);
+  const [capturingSelectionQuestionShortcut, setCapturingSelectionQuestionShortcut] = useState(false);
   const [outputTarget, setOutputTarget] = useState<OutputTarget>(initialOutputTarget);
   const outputTargetRef = useRef(initialOutputTarget);
   const configQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -162,10 +169,15 @@ function MainApp() {
   const [questionPhase, setQuestionPhase] = useState<QuestionPhase>("ready");
   const startRef = useRef<number | null>(null);
   const registeredShortcutRef = useRef<string | null>(null);
+  const registeredSelectionQuestionShortcutRef = useRef<string | null>(null);
   const capturedFromShortcutRef = useRef<string | null>(null);
+  const capturedFromSelectionQuestionShortcutRef = useRef<string | null>(null);
   const shortcutCaptureActiveRef = useRef(false);
+  const selectionQuestionShortcutCaptureActiveRef = useRef(false);
   const shortcutOperationRef = useRef(0);
+  const selectionQuestionShortcutOperationRef = useRef(0);
   const shortcutButtonRef = useRef<HTMLButtonElement | null>(null);
+  const selectionQuestionShortcutButtonRef = useRef<HTMLButtonElement | null>(null);
   const pullingLocalModelRef = useRef(false);
   const downloadingTranscriptionRef = useRef(false);
   const questionInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -240,7 +252,10 @@ function MainApp() {
     }, 250);
     return () => window.clearInterval(timer);
   }, [recording]);
-  useEffect(() => { if (capturingShortcut) shortcutButtonRef.current?.focus(); }, [capturingShortcut]);
+  useEffect(() => {
+    if (capturingShortcut) shortcutButtonRef.current?.focus();
+    if (capturingSelectionQuestionShortcut) selectionQuestionShortcutButtonRef.current?.focus();
+  }, [capturingShortcut, capturingSelectionQuestionShortcut]);
   useEffect(() => {
     if (!unreadableDictionary) window.localStorage.setItem("doon-voice-dictionary", JSON.stringify(terms));
   }, [terms, unreadableDictionary]);
@@ -488,94 +503,114 @@ function MainApp() {
       }
       window.localStorage.setItem("doon-voice-shortcut", next);
       setShortcut(next);
-      setCapturingShortcut(false);
       capturedFromShortcutRef.current = null;
       if (notify) setNotice(`開始・停止キーを ${shortcutLabel(next, navigator.userAgent.includes("Mac"))} に変更しました`);
     } catch {
       if (operation !== shortcutOperationRef.current) return;
       const restore = previous ?? capturedFromShortcutRef.current;
       if (restore && isTauriApp()) {
-        try {
-          await appInvoke("set_voice_shortcut", { shortcut: restore });
-          registeredShortcutRef.current = restore;
-        } catch {
-          registeredShortcutRef.current = null;
-          setNotice("元の開始・停止キーを復元できませんでした。設定からキーを登録し直してください");
-          capturedFromShortcutRef.current = null;
-          return;
-        }
+        try { await appInvoke("set_voice_shortcut", { shortcut: restore }); registeredShortcutRef.current = restore; }
+        catch { registeredShortcutRef.current = null; setNotice("元の開始・停止キーを復元できませんでした。設定からキーを登録し直してください"); capturedFromShortcutRef.current = null; return; }
       }
-      setCapturingShortcut(false);
       capturedFromShortcutRef.current = null;
       setNotice("そのキーは他のアプリかOSが使っています。別の組み合わせを選んでください");
     }
   }
 
-  useEffect(() => { void applyShortcut(shortcut, false); }, []);
+  async function applySelectionQuestionShortcut(next: string, notify = true) {
+    const operation = ++selectionQuestionShortcutOperationRef.current;
+    selectionQuestionShortcutCaptureActiveRef.current = false;
+    setCapturingSelectionQuestionShortcut(false);
+    const previous = registeredSelectionQuestionShortcutRef.current;
+    try {
+      if (isTauriApp()) {
+        await appInvoke("set_selection_question_shortcut", { shortcut: next });
+        if (operation !== selectionQuestionShortcutOperationRef.current) return;
+        registeredSelectionQuestionShortcutRef.current = next;
+      }
+      window.localStorage.setItem("doon-voice-selection-question-shortcut", next);
+      setSelectionQuestionShortcut(next);
+      capturedFromSelectionQuestionShortcutRef.current = null;
+      if (notify) setNotice(`選択文を質問するキーを ${shortcutLabel(next, navigator.userAgent.includes("Mac"))} に変更しました`);
+    } catch {
+      if (operation !== selectionQuestionShortcutOperationRef.current) return;
+      const restore = previous ?? capturedFromSelectionQuestionShortcutRef.current;
+      if (restore && isTauriApp()) {
+        try { await appInvoke("set_selection_question_shortcut", { shortcut: restore }); registeredSelectionQuestionShortcutRef.current = restore; }
+        catch { registeredSelectionQuestionShortcutRef.current = null; setNotice("元の質問用キーを復元できませんでした。設定からキーを登録し直してください"); capturedFromSelectionQuestionShortcutRef.current = null; return; }
+      }
+      capturedFromSelectionQuestionShortcutRef.current = null;
+      setNotice("そのキーは他のアプリかOSが使っています。別の組み合わせを選んでください");
+    }
+  }
+
+  useEffect(() => { void applyShortcut(shortcut, false); void applySelectionQuestionShortcut(selectionQuestionShortcut, false); }, []);
 
   async function beginShortcutCapture() {
-    if (shortcutCaptureActiveRef.current) return;
+    if (shortcutCaptureActiveRef.current || selectionQuestionShortcutCaptureActiveRef.current) return;
     const operation = ++shortcutOperationRef.current;
     const previous = registeredShortcutRef.current ?? shortcut;
     capturedFromShortcutRef.current = previous;
     shortcutCaptureActiveRef.current = true;
     try {
-      if (isTauriApp()) {
-        await appInvoke("clear_voice_shortcut");
-        if (operation !== shortcutOperationRef.current) return;
-        registeredShortcutRef.current = null;
-      }
+      if (isTauriApp()) { await appInvoke("clear_voice_shortcut"); if (operation !== shortcutOperationRef.current) return; registeredShortcutRef.current = null; }
       if (shortcutCaptureActiveRef.current) setCapturingShortcut(true);
-    } catch {
-      if (operation !== shortcutOperationRef.current) return;
-      shortcutCaptureActiveRef.current = false;
-      capturedFromShortcutRef.current = null;
-      setNotice("開始・停止キーの変更を始められませんでした。もう一度試してください");
-    }
+    } catch { if (operation !== shortcutOperationRef.current) return; shortcutCaptureActiveRef.current = false; capturedFromShortcutRef.current = null; setNotice("開始・停止キーの変更を始められませんでした。もう一度試してください"); }
+  }
+
+  async function beginSelectionQuestionShortcutCapture() {
+    if (shortcutCaptureActiveRef.current || selectionQuestionShortcutCaptureActiveRef.current) return;
+    const operation = ++selectionQuestionShortcutOperationRef.current;
+    const previous = registeredSelectionQuestionShortcutRef.current ?? selectionQuestionShortcut;
+    capturedFromSelectionQuestionShortcutRef.current = previous;
+    selectionQuestionShortcutCaptureActiveRef.current = true;
+    try {
+      if (isTauriApp()) { await appInvoke("clear_selection_question_shortcut"); if (operation !== selectionQuestionShortcutOperationRef.current) return; registeredSelectionQuestionShortcutRef.current = null; }
+      if (selectionQuestionShortcutCaptureActiveRef.current) setCapturingSelectionQuestionShortcut(true);
+    } catch { if (operation !== selectionQuestionShortcutOperationRef.current) return; selectionQuestionShortcutCaptureActiveRef.current = false; capturedFromSelectionQuestionShortcutRef.current = null; setNotice("質問用キーの変更を始められませんでした。もう一度試してください"); }
   }
 
   function cancelShortcutCapture() {
-    if (!shortcutCaptureActiveRef.current) return;
-    shortcutOperationRef.current += 1;
-    shortcutCaptureActiveRef.current = false;
-    const previous = capturedFromShortcutRef.current;
-    setCapturingShortcut(false);
-    if (previous) void applyShortcut(previous, false);
+    if (shortcutCaptureActiveRef.current) {
+      shortcutOperationRef.current += 1; shortcutCaptureActiveRef.current = false;
+      const previous = capturedFromShortcutRef.current; setCapturingShortcut(false);
+      if (previous) void applyShortcut(previous, false);
+    }
+    if (selectionQuestionShortcutCaptureActiveRef.current) {
+      selectionQuestionShortcutOperationRef.current += 1; selectionQuestionShortcutCaptureActiveRef.current = false;
+      const previous = capturedFromSelectionQuestionShortcutRef.current; setCapturingSelectionQuestionShortcut(false);
+      if (previous) void applySelectionQuestionShortcut(previous, false);
+    }
   }
 
-  function navigate(next: View) {
-    cancelShortcutCapture();
-    setView(next);
-  }
+  function navigate(next: View) { cancelShortcutCapture(); setView(next); }
 
   useEffect(() => {
     window.addEventListener("blur", cancelShortcutCapture);
     return () => {
       window.removeEventListener("blur", cancelShortcutCapture);
-      if (shortcutCaptureActiveRef.current && capturedFromShortcutRef.current) {
-        void appInvoke("set_voice_shortcut", { shortcut: capturedFromShortcutRef.current });
-      }
+      if (shortcutCaptureActiveRef.current && capturedFromShortcutRef.current) void appInvoke("set_voice_shortcut", { shortcut: capturedFromShortcutRef.current });
+      if (selectionQuestionShortcutCaptureActiveRef.current && capturedFromSelectionQuestionShortcutRef.current) void appInvoke("set_selection_question_shortcut", { shortcut: capturedFromSelectionQuestionShortcutRef.current });
     };
   }, []);
 
   useEffect(() => {
-    if (!capturingShortcut) return;
+    if (!capturingShortcut && !capturingSelectionQuestionShortcut) return;
     const captureShortcut = (event: KeyboardEvent) => {
-      if (!shortcutCaptureActiveRef.current) return;
+      const captureInput = shortcutCaptureActiveRef.current;
+      const captureQuestion = selectionQuestionShortcutCaptureActiveRef.current;
+      if (!captureInput && !captureQuestion) return;
       if (event.repeat) return;
-      event.preventDefault();
-      event.stopPropagation();
+      event.preventDefault(); event.stopPropagation();
       const result = shortcutCaptureResult(event);
       if (result.kind === "cancel") { cancelShortcutCapture(); return; }
-      if (result.kind === "invalid") {
-        setNotice("Control、Option/Alt、Shift、Commandのいずれかを一緒に押してください");
-        return;
-      }
-      void applyShortcut(result.shortcut);
+      if (result.kind === "invalid") { setNotice("Control、Option/Alt、Shift、Commandのいずれかを一緒に押してください"); return; }
+      if (captureInput) void applyShortcut(result.shortcut);
+      else void applySelectionQuestionShortcut(result.shortcut);
     };
     window.addEventListener("keydown", captureShortcut, true);
     return () => window.removeEventListener("keydown", captureShortcut, true);
-  }, [capturingShortcut]);
+  }, [capturingShortcut, capturingSelectionQuestionShortcut]);
 
   async function connect(provider: ProviderId) {
     if (!statuses[provider]?.installed) {
@@ -867,7 +902,7 @@ function MainApp() {
         </section>
         <div className="settings-list direct-input-settings"><article><span className="setting-icon"><BrandGlyph name="move" /></span><div><h2>カーソル位置へ入力</h2><p>{directInputAllowed ? "ほかのアプリへ直接入力できます。" : "macOSのアクセシビリティ許可が必要です。"}</p></div><span className={directInputAllowed ? "setting-state state-permitted" : "setting-state state-unavailable"}>{directInputAllowed ? <Check size={15} strokeWidth={2.3} /> : <CircleAlert size={15} strokeWidth={2} />}{directInputAllowed ? "許可済み" : "未許可"}</span>{isMac ? <button className="outline-action" type="button" onClick={() => void (directInputAllowed ? openDirectInputSettings() : requestDirectInputPermission())}>{directInputAllowed ? "設定を開く" : "許可する"} <ExternalLink size={15} /></button> : <span />}</article></div>
         <div className="settings-list transcription-settings"><article><span className="setting-icon"><BrandGlyph name="work" /></span><div><h2>音声認識</h2><p>{transcription?.downloaded ? "日本語音声認識をこのPCで行います。" : "話した言葉を文字にする日本語モデルです。"}</p></div><span className={transcription?.downloaded ? "setting-state state-installed" : "setting-state state-unavailable"}>{transcription?.downloaded ? <Check size={15} strokeWidth={2.3} /> : <Download size={15} strokeWidth={2} />}{transcription?.downloaded ? "モデル取得済み" : downloadingTranscription ? "取得中" : transcription?.size || "未取得"}</span>{transcription?.downloaded ? <span /> : <button className="outline-action" type="button" onClick={() => void downloadTranscriptionModel()} disabled={downloadingTranscription}>{downloadingTranscription ? "取得中" : "モデルを取得"} <Download size={15} /></button>}</article></div>
-        <div className="settings-list">{providers.map(({ id, label, glyph }) => { const status = providerDisplayState(id, false); const connecting = connectingProviders[id]; const loggedIn = connectedProviders[id] && statuses[id]?.authenticated; const unavailable = statuses[id]?.usability === "unavailable"; const detail = id === "codex" ? "GPT-5.6 Lunaで高速整形" : id === "gemini" ? "Gemini 3.6 Flash (Low)で高速整形" : unavailable ? "現在の契約ではClaude Codeを利用できません" : "Claude Haikuで高速整形"; return <article key={id}><span className="setting-icon"><BrandGlyph name={glyph} /></span><div><h2>{label}</h2><p>{detail}</p></div><span className={`setting-state ${status.className}`}>{connecting ? <span className="state-connecting-mark" aria-hidden="true" /> : unavailable ? <CircleAlert size={15} strokeWidth={2} /> : loggedIn ? <Check size={15} strokeWidth={2.3} /> : statuses[id]?.installed ? <span className="state-ring" aria-hidden="true" /> : <CircleAlert size={15} strokeWidth={2} />}{status.label}</span><button className="outline-action" type="button" onClick={() => void connect(id)} disabled={connecting}>{connecting ? "ログイン中" : loggedIn ? "再ログイン" : "ログインする"} {!connecting && <ExternalLink size={15} strokeWidth={1.9} />}</button></article>; })}<article><span className="setting-icon"><BrandGlyph name="dx" /></span><div><h2>ローカルAI</h2><p>{localReady ? "Gemma 4 E2BがこのPCで稼働中です。" : "Gemma 4 E2BをDOON Voice用に取得します。"}</p></div><span className={localReady ? "setting-state state-running" : "setting-state state-unavailable"}>{localReady ? <span className="state-live-dot" aria-hidden="true" /> : <WifiOff size={15} strokeWidth={2} />}{localReady ? "稼働中" : pullingLocalModel ? "取得中" : "未準備"}</span>{!local?.installed ? <button className="outline-action" type="button" onClick={() => void installOllama()} disabled={installingOllama}>{installingOllama ? "Ollamaを取得中" : "Ollamaを自動インストール"} <Download size={15} /></button> : !localModel?.installed ? <button className="outline-action" type="button" onClick={() => void pullModel()} disabled={pullingLocalModel}>{pullingLocalModel ? "取得中" : "Gemmaを取得"} <Download size={15} /></button> : <span />}</article><article className="shortcut-row"><span className="setting-icon"><BrandGlyph name="speed" /></span><div><h2>開始・停止キー</h2><p>{capturingShortcut ? "押した組み合わせを登録します。Escで取り消せます。" : "音声入力の開始と停止"}</p></div><button ref={shortcutButtonRef} className={capturingShortcut ? "shortcut-key is-capturing" : "shortcut-key"} type="button" onClick={() => void beginShortcutCapture()} aria-label="開始・停止キーを変更" aria-pressed={capturingShortcut}>{capturingShortcut ? "キーを押す" : shortcutLabel(shortcut, navigator.userAgent.includes("Mac"))}</button><button className="outline-action" type="button" onClick={() => void applyShortcut(DEFAULT_SHORTCUT)}>標準に戻す</button></article></div>{notice && <p className="notice" role="status">{notice}</p>}</section>}
+        <div className="settings-list">{providers.map(({ id, label, glyph }) => { const status = providerDisplayState(id, false); const connecting = connectingProviders[id]; const loggedIn = connectedProviders[id] && statuses[id]?.authenticated; const unavailable = statuses[id]?.usability === "unavailable"; const detail = id === "codex" ? "GPT-5.6 Lunaで高速整形" : id === "gemini" ? "Gemini 3.6 Flash (Low)で高速整形" : unavailable ? "現在の契約ではClaude Codeを利用できません" : "Claude Haikuで高速整形"; return <article key={id}><span className="setting-icon"><BrandGlyph name={glyph} /></span><div><h2>{label}</h2><p>{detail}</p></div><span className={`setting-state ${status.className}`}>{connecting ? <span className="state-connecting-mark" aria-hidden="true" /> : unavailable ? <CircleAlert size={15} strokeWidth={2} /> : loggedIn ? <Check size={15} strokeWidth={2.3} /> : statuses[id]?.installed ? <span className="state-ring" aria-hidden="true" /> : <CircleAlert size={15} strokeWidth={2} />}{status.label}</span><button className="outline-action" type="button" onClick={() => void connect(id)} disabled={connecting}>{connecting ? "ログイン中" : loggedIn ? "再ログイン" : "ログインする"} {!connecting && <ExternalLink size={15} strokeWidth={1.9} />}</button></article>; })}<article><span className="setting-icon"><BrandGlyph name="dx" /></span><div><h2>ローカルAI</h2><p>{localReady ? "Gemma 4 E2BがこのPCで稼働中です。" : "Gemma 4 E2BをDOON Voice用に取得します。"}</p></div><span className={localReady ? "setting-state state-running" : "setting-state state-unavailable"}>{localReady ? <span className="state-live-dot" aria-hidden="true" /> : <WifiOff size={15} strokeWidth={2} />}{localReady ? "稼働中" : pullingLocalModel ? "取得中" : "未準備"}</span>{!local?.installed ? <button className="outline-action" type="button" onClick={() => void installOllama()} disabled={installingOllama}>{installingOllama ? "Ollamaを取得中" : "Ollamaを自動インストール"} <Download size={15} /></button> : !localModel?.installed ? <button className="outline-action" type="button" onClick={() => void pullModel()} disabled={pullingLocalModel}>{pullingLocalModel ? "取得中" : "Gemmaを取得"} <Download size={15} /></button> : <span />}</article><article className="shortcut-row"><span className="setting-icon"><BrandGlyph name="speed" /></span><div><h2>開始・停止キー</h2><p>{capturingShortcut ? "押した組み合わせを登録します。Escで取り消せます。" : "通常の音声入力の開始と停止"}</p></div><button ref={shortcutButtonRef} className={capturingShortcut ? "shortcut-key is-capturing" : "shortcut-key"} type="button" onClick={() => void beginShortcutCapture()} aria-label="開始・停止キーを変更" aria-pressed={capturingShortcut}>{capturingShortcut ? "キーを押す" : shortcutLabel(shortcut, navigator.userAgent.includes("Mac"))}</button><button className="outline-action" type="button" onClick={() => void applyShortcut(DEFAULT_SHORTCUT)}>標準に戻す</button></article><article className="shortcut-row"><span className="setting-icon"><BrandGlyph name="speed" /></span><div><h2>選択文を質問するキー</h2><p>{capturingSelectionQuestionShortcut ? "押した組み合わせを登録します。Escで取り消せます。" : "選択中の文章へ音声で質問"}</p></div><button ref={selectionQuestionShortcutButtonRef} className={capturingSelectionQuestionShortcut ? "shortcut-key is-capturing" : "shortcut-key"} type="button" onClick={() => void beginSelectionQuestionShortcutCapture()} aria-label="選択文を質問するキーを変更" aria-pressed={capturingSelectionQuestionShortcut}>{capturingSelectionQuestionShortcut ? "キーを押す" : shortcutLabel(selectionQuestionShortcut, navigator.userAgent.includes("Mac"))}</button><button className="outline-action" type="button" onClick={() => void applySelectionQuestionShortcut(DEFAULT_SELECTION_QUESTION_SHORTCUT)}>標準に戻す</button></article></div>{notice && <p className="notice" role="status">{notice}</p>}</section>}
     </section>
 
     {questionOpen && <div className="question-backdrop" role="presentation">

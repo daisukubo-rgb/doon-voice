@@ -233,7 +233,20 @@ fn overlay_url_with_state(mut url: tauri::Url, state: &str) -> Result<tauri::Url
     Ok(url)
 }
 
-struct VoiceShortcutState(Mutex<Option<String>>);
+#[derive(Clone, Copy)]
+enum VoiceShortcutKind {
+    Input,
+    SelectionQuestion,
+}
+
+#[derive(Default)]
+struct VoiceShortcutRegistrations {
+    input: Option<String>,
+    selection_question: Option<String>,
+}
+
+#[derive(Default)]
+struct VoiceShortcutState(Mutex<VoiceShortcutRegistrations>);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -411,14 +424,108 @@ fn publish_background_voice(app: &AppHandle, snapshot: &BackgroundVoiceSnapshot)
     let _ = app.emit("background-voice-state", snapshot);
 }
 
-fn register_voice_shortcut_handler(app: &AppHandle, shortcut: &str) -> Result<(), String> {
+fn register_voice_shortcut_handler(
+    app: &AppHandle,
+    shortcut: &str,
+    kind: VoiceShortcutKind,
+) -> Result<(), String> {
     app.global_shortcut()
-        .on_shortcut(shortcut, |app, _, event| {
+        .on_shortcut(shortcut, move |app, _, event| {
             if event.state == ShortcutState::Pressed {
-                let _ = handle_background_voice_toggle(app);
+                let _ = handle_background_voice_toggle(
+                    app,
+                    matches!(kind, VoiceShortcutKind::SelectionQuestion),
+                );
             }
         })
         .map_err(|error| format!("ショートカットを登録できませんでした: {error}"))
+}
+
+fn set_registered_shortcut(
+    app: AppHandle,
+    shortcut: String,
+    kind: VoiceShortcutKind,
+    state: State<'_, VoiceShortcutState>,
+    voice: State<'_, BackgroundVoiceState>,
+) -> Result<(), String> {
+    let shortcut = shortcut.trim().to_string();
+    if shortcut.is_empty() {
+        return Err("ショートカットが空です。".into());
+    }
+    let mut registrations = state
+        .0
+        .lock()
+        .map_err(|_| "ショートカット状態を確認できませんでした。")?;
+    let (previous, other) = match kind {
+        VoiceShortcutKind::Input => (
+            registrations.input.clone(),
+            registrations.selection_question.as_deref(),
+        ),
+        VoiceShortcutKind::SelectionQuestion => (
+            registrations.selection_question.clone(),
+            registrations.input.as_deref(),
+        ),
+    };
+    if other == Some(shortcut.as_str()) {
+        return Err(
+            "音声入力キーと選択文を質問するキーには別の組み合わせを指定してください。".into(),
+        );
+    }
+    if previous.as_deref() != Some(shortcut.as_str()) {
+        if let Some(previous) = previous.as_deref() {
+            app.global_shortcut()
+                .unregister(previous)
+                .map_err(|error| format!("以前のショートカットを解除できませんでした: {error}"))?;
+        }
+        if let Err(error) = register_voice_shortcut_handler(&app, &shortcut, kind) {
+            if let Some(previous) = previous.as_deref() {
+                let _ = register_voice_shortcut_handler(&app, previous, kind);
+            }
+            return Err(error);
+        }
+        match kind {
+            VoiceShortcutKind::Input => registrations.input = Some(shortcut.clone()),
+            VoiceShortcutKind::SelectionQuestion => {
+                registrations.selection_question = Some(shortcut.clone())
+            }
+        }
+    }
+    drop(registrations);
+    let config = {
+        let mut runtime = voice
+            .0
+            .lock()
+            .map_err(|_| "音声入力の設定を更新できませんでした。")?;
+        match kind {
+            VoiceShortcutKind::Input => runtime.config.shortcut = shortcut,
+            VoiceShortcutKind::SelectionQuestion => {
+                runtime.config.selection_question_shortcut = shortcut
+            }
+        }
+        runtime.config.clone()
+    };
+    save_voice_runtime_config(&app, &config)
+}
+
+fn clear_registered_shortcut(
+    app: AppHandle,
+    kind: VoiceShortcutKind,
+    state: State<'_, VoiceShortcutState>,
+) -> Result<(), String> {
+    let mut registrations = state
+        .0
+        .lock()
+        .map_err(|_| "ショートカット状態を確認できませんでした。")?;
+    let registered = match kind {
+        VoiceShortcutKind::Input => &mut registrations.input,
+        VoiceShortcutKind::SelectionQuestion => &mut registrations.selection_question,
+    };
+    if let Some(shortcut) = registered.take() {
+        app.global_shortcut()
+            .unregister(shortcut.as_str())
+            .map_err(|error| format!("ショートカットを解除できませんでした: {error}"))?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -428,44 +535,23 @@ fn set_voice_shortcut(
     state: State<'_, VoiceShortcutState>,
     voice: State<'_, BackgroundVoiceState>,
 ) -> Result<(), String> {
-    let shortcut = shortcut.trim().to_string();
-    if shortcut.is_empty() {
-        return Err("ショートカットが空です。".to_string());
-    }
+    set_registered_shortcut(app, shortcut, VoiceShortcutKind::Input, state, voice)
+}
 
-    let mut registered = state
-        .0
-        .lock()
-        .map_err(|_| "ショートカット状態を確認できませんでした。")?;
-    let already_registered = registered.as_deref() == Some(shortcut.as_str());
-
-    if !already_registered {
-        let previous = registered.clone();
-        if let Some(previous) = previous.as_deref() {
-            app.global_shortcut()
-                .unregister(previous)
-                .map_err(|error| format!("以前のショートカットを解除できませんでした: {error}"))?;
-        }
-
-        if let Err(error) = register_voice_shortcut_handler(&app, &shortcut) {
-            if let Some(previous) = previous.as_deref() {
-                let _ = register_voice_shortcut_handler(&app, previous);
-            }
-            return Err(error);
-        }
-        *registered = Some(shortcut.clone());
-    }
-    drop(registered);
-
-    let config = {
-        let mut runtime = voice
-            .0
-            .lock()
-            .map_err(|_| "音声入力の設定を更新できませんでした。")?;
-        runtime.config.shortcut = shortcut;
-        runtime.config.clone()
-    };
-    save_voice_runtime_config(&app, &config)
+#[tauri::command]
+fn set_selection_question_shortcut(
+    app: AppHandle,
+    shortcut: String,
+    state: State<'_, VoiceShortcutState>,
+    voice: State<'_, BackgroundVoiceState>,
+) -> Result<(), String> {
+    set_registered_shortcut(
+        app,
+        shortcut,
+        VoiceShortcutKind::SelectionQuestion,
+        state,
+        voice,
+    )
 }
 
 #[tauri::command]
@@ -473,16 +559,15 @@ fn clear_voice_shortcut(
     app: AppHandle,
     state: State<'_, VoiceShortcutState>,
 ) -> Result<(), String> {
-    let mut registered = state
-        .0
-        .lock()
-        .map_err(|_| "ショートカット状態を確認できませんでした。")?;
-    if let Some(shortcut) = registered.take() {
-        app.global_shortcut()
-            .unregister(shortcut.as_str())
-            .map_err(|error| format!("ショートカットを解除できませんでした: {error}"))?;
-    }
-    Ok(())
+    clear_registered_shortcut(app, VoiceShortcutKind::Input, state)
+}
+
+#[tauri::command]
+fn clear_selection_question_shortcut(
+    app: AppHandle,
+    state: State<'_, VoiceShortcutState>,
+) -> Result<(), String> {
+    clear_registered_shortcut(app, VoiceShortcutKind::SelectionQuestion, state)
 }
 
 #[tauri::command]
@@ -537,7 +622,7 @@ fn background_voice_status(
 
 #[tauri::command]
 fn toggle_background_voice(app: AppHandle) -> Result<(), String> {
-    handle_background_voice_toggle(&app)
+    handle_background_voice_toggle(&app, false)
 }
 
 #[tauri::command]
@@ -889,6 +974,12 @@ struct VoiceRuntimeConfig {
     target: OutputTarget,
     dictionary: Vec<String>,
     shortcut: String,
+    #[serde(default = "default_selection_question_shortcut")]
+    selection_question_shortcut: String,
+}
+
+fn default_selection_question_shortcut() -> String {
+    "Ctrl+Alt+Q".into()
 }
 
 impl Default for VoiceRuntimeConfig {
@@ -897,6 +988,7 @@ impl Default for VoiceRuntimeConfig {
             target: OutputTarget::Codex,
             dictionary: Vec::new(),
             shortcut: "Ctrl+Alt+Space".into(),
+            selection_question_shortcut: default_selection_question_shortcut(),
         }
     }
 }
@@ -2230,7 +2322,7 @@ async fn answer_selection_question(
     }
     answer
 }
-fn handle_background_voice_toggle(app: &AppHandle) -> Result<(), String> {
+fn handle_background_voice_toggle(app: &AppHandle, selection_question: bool) -> Result<(), String> {
     let state = app.state::<BackgroundVoiceState>();
     let action = {
         let runtime = state
@@ -2241,7 +2333,9 @@ fn handle_background_voice_toggle(app: &AppHandle) -> Result<(), String> {
     };
 
     let result = match action {
-        BackgroundVoiceAction::StartRecording => start_background_recording(app, &state),
+        BackgroundVoiceAction::StartRecording => {
+            start_background_recording(app, &state, selection_question)
+        }
         BackgroundVoiceAction::StopAndProcess => stop_and_process_background_recording(app, &state),
         BackgroundVoiceAction::CancelStarting => cancel_background_recording_start(app, &state),
         BackgroundVoiceAction::Ignore => Ok(()),
@@ -2269,8 +2363,15 @@ fn handle_background_voice_toggle(app: &AppHandle) -> Result<(), String> {
 fn start_background_recording(
     app: &AppHandle,
     state: &State<'_, BackgroundVoiceState>,
+    selection_question: bool,
 ) -> Result<(), String> {
-    let selected_question_context = capture_active_selection_for_voice_question(app);
+    let selected_question_context = if selection_question {
+        Some(capture_active_selection_for_voice_question(app).ok_or_else(|| {
+            "選択した文章を取得できませんでした。文章を選択してから質問用のキーを押してください。".to_string()
+        })?)
+    } else {
+        None
+    };
     let (generation, snapshot) = {
         let mut runtime = state
             .0
@@ -2878,7 +2979,7 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
-        .manage(VoiceShortcutState(Mutex::new(None)))
+        .manage(VoiceShortcutState::default())
         .manage(ProviderHealthState::default())
         .manage(CloudRuntime::default())
         .manage(BackgroundVoiceState(Mutex::new(
@@ -2911,19 +3012,31 @@ pub fn run() {
                     runtime.config = config.clone();
                 };
             }
-            match register_voice_shortcut_handler(handle, &config.shortcut) {
-                Ok(()) => {
-                    let state = handle.state::<VoiceShortcutState>();
-                    if let Ok(mut registered) = state.0.lock() {
-                        *registered = Some(config.shortcut);
-                    };
-                }
-                Err(error) => {
-                    let state = handle.state::<BackgroundVoiceState>();
-                    if let Ok(mut runtime) = state.0.lock() {
-                        runtime.message = error;
-                    };
-                }
+            let registration_result = (|| {
+                register_voice_shortcut_handler(
+                    handle,
+                    &config.shortcut,
+                    VoiceShortcutKind::Input,
+                )?;
+                register_voice_shortcut_handler(
+                    handle,
+                    &config.selection_question_shortcut,
+                    VoiceShortcutKind::SelectionQuestion,
+                )?;
+                let state = handle.state::<VoiceShortcutState>();
+                let mut registered = state
+                    .0
+                    .lock()
+                    .map_err(|_| "ショートカット状態を確認できませんでした。".to_string())?;
+                registered.input = Some(config.shortcut.clone());
+                registered.selection_question = Some(config.selection_question_shortcut.clone());
+                Ok::<(), String>(())
+            })();
+            if let Err(error) = registration_result {
+                let state = handle.state::<BackgroundVoiceState>();
+                if let Ok(mut runtime) = state.0.lock() {
+                    runtime.message = error;
+                };
             }
             Ok(())
         })
@@ -2954,7 +3067,9 @@ pub fn run() {
             open_direct_input_settings,
             set_voice_overlay,
             set_voice_shortcut,
+            set_selection_question_shortcut,
             clear_voice_shortcut,
+            clear_selection_question_shortcut,
             configure_background_voice,
             background_voice_status,
             ack_voice_result,

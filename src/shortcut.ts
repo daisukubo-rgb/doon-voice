@@ -1,4 +1,5 @@
 export const DEFAULT_SHORTCUT = "Ctrl+Alt+Space";
+export const DEFAULT_SELECTION_QUESTION_SHORTCUT = "Ctrl+Alt+Q";
 
 type ShortcutKeyboardEvent = Pick<KeyboardEvent, "code" | "key" | "ctrlKey" | "altKey" | "shiftKey" | "metaKey" | "repeat">;
 
