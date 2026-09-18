@@ -1007,17 +1007,6 @@ function SelectionQuestionPopup() {
     }
   }
 
-  async function pasteAnswer() {
-    if (!answer) return;
-    try {
-      await appInvoke("paste_question_answer", { text: answer });
-      setNotice("カーソル位置へ入力しました");
-      window.setTimeout(() => setNotice(""), 3500);
-    } catch (reason) {
-      setError(errorMessage(reason, "回答を入力できませんでした。コピーして貼り付けてください"));
-    }
-  }
-
   function onQuestionKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
     if (event.key !== "Enter" || event.shiftKey) return;
     if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
@@ -1033,7 +1022,7 @@ function SelectionQuestionPopup() {
         {answer && <section className="question-answer" aria-live="polite"><span>ANSWER</span><div>{answer}</div></section>}
         {error && <p className="question-error" role="alert">{error}</p>}
         <div className="question-compose"><textarea ref={inputRef} value={question} disabled={answering} onChange={(event) => setQuestion(event.target.value)} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={() => { composingRef.current = false; }} onKeyDown={onQuestionKeyDown} placeholder="質問を入力" aria-label="選択した文章への質問" /><div className="question-compose-actions"><button className="outline-action question-send" type="button" onClick={() => void ask()} disabled={!question.trim() || answering}>{answering ? "回答を作成中" : "質問する"}</button></div></div>
-        {answer && <div className="question-answer-actions"><button className="outline-action" type="button" onClick={() => void copyAnswer()}>回答をコピー</button><button className="outline-action question-send" type="button" onClick={() => void pasteAnswer()}>カーソル位置へ入力</button></div>}
+        {answer && <div className="question-answer-actions"><button className="outline-action" type="button" onClick={() => void copyAnswer()}>回答をコピー</button></div>}
       </>}
       {notice && <p className="notice" role="status">{notice}</p>}
     </section>
