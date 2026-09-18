@@ -265,18 +265,15 @@ try {
     await page.close();
   });
 
-  await check("recovery blocks recording and supports retry / discard", async () => {
+  await check("recovery keeps voice input usable without discarding", async () => {
     const page = await pageFor({ snapshot: recovery });
-    assert.equal(await page.getByRole("button", { name: "音声入力を開始" }).isDisabled(), true);
-    await page.getByRole("button", { name: "再試行", exact: true }).click();
-    await page.waitForFunction(() => window.fixture.calls.some(({ command }) => command === "retry_voice_processing"));
-    assert.equal(await page.evaluate(() => {
-      const index = window.fixture.calls.findIndex(({ command }) => command === "retry_voice_processing");
-      return window.fixture.calls[index - 1]?.command;
-    }), "configure_background_voice");
+    assert.equal(await page.getByRole("button", { name: "音声入力を開始" }).isEnabled(), true);
+    assert.equal(await page.getByRole("button", { name: "選択した文章を質問" }).isEnabled(), true);
+    await page.getByRole("button", { name: "音声入力を開始" }).click();
+    await page.waitForFunction(() => window.fixture.calls.some(({ command }) => command === "toggle_background_voice"));
+    assert.equal(await page.evaluate(() => window.fixture.snapshot.recovery_pending), true);
     await page.evaluate(() => window.fixture.publish({ state: "idle" }));
-    await page.getByRole("button", { name: "破棄", exact: true }).click();
-    await page.waitForFunction(() => window.fixture.snapshot.transcript === "");
+    await page.waitForFunction(() => document.querySelector('[aria-label="音声入力を開始"]')?.disabled === false);
     assert.equal(await page.getByRole("button", { name: "音声入力を開始" }).isEnabled(), true);
     await page.close();
   });
@@ -292,7 +289,7 @@ try {
     });
     await page.getByRole("button", { name: "原文をコピー", exact: true }).waitFor();
     await page.waitForFunction(() => !document.querySelector(".result-actions button")?.disabled);
-    assert.equal(await page.getByRole("button", { name: "音声入力を開始" }).isDisabled(), true);
+    assert.equal(await page.getByRole("button", { name: "音声入力を開始" }).isEnabled(), true);
     assert.doesNotMatch(await page.locator(".result-actions").innerText(), /コピー済み/);
     assert.equal(await page.evaluate(() => window.fixture.calls.some(({ command, args }) => command === "ack_voice_result" && args?.generation !== 1)), false);
     await page.close();

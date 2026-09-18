@@ -842,10 +842,10 @@ function MainApp() {
           <div className="hero-brand"><img src="/brand/doon-logo.png" alt="DOON" /><span>VOICE</span></div>
           <h1 id="home-title"><em>AIで</em>言語化をイージーに</h1>
           <p>{recording ? `音声入力中 · ${duration(elapsed)}` : starting ? "マイクを準備しています" : processing ? "音声を処理しています" : "どのアプリにも、そのまま入力。"}</p>
-          <button className="record-button" type="button" onClick={() => void toggleRecording()} disabled={starting || processing || (!recording && (recoveryPending || configSaving > 0 || Boolean(configError) || Boolean(existingDictionaryError)))} aria-label={recording ? "音声入力を停止" : "音声入力を開始"}><span className="record-button-icon"><Mic size={27} strokeWidth={1.8} /></span><strong>{recording ? "停止" : "話す"}</strong><small>{shortcutLabel(shortcut, isMac)}</small></button>
+          <button className="record-button" type="button" onClick={() => void toggleRecording()} disabled={starting || processing || (!recording && (configSaving > 0 || Boolean(configError) || Boolean(existingDictionaryError)))} aria-label={recording ? "音声入力を停止" : "音声入力を開始"}><span className="record-button-icon"><Mic size={27} strokeWidth={1.8} /></span><strong>{recording ? "停止" : "話す"}</strong><small>{shortcutLabel(shortcut, isMac)}</small></button>
           <button className="selection-question-button" type="button" onClick={() => void openSelectionQuestion()} disabled={busy} aria-label="選択した文章を質問">選択した文章を質問</button>
           {(starting || processing) && <button className="outline-action cancel-processing" type="button" onClick={() => void resultAction("cancel_voice_processing")} disabled={resultActionPending} aria-label="処理を取り消す">取り消す</button>}
-          {recoveryPending && !busy && <p className="recovery-state">前回の内容を確認してください</p>}
+          {recoveryPending && !busy && <p className="recovery-state">前回の結果はコピーできます。続けて音声入力できます。</p>}
           {existingDictionaryError && <p className="recovery-state" role="alert">辞書に修正が必要です <button className="outline-action" type="button" onClick={() => navigate("dictionary")}>辞書を確認</button></p>}
         </section>
         <section className="destination-section" aria-labelledby="destination-title">
