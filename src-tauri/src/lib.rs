@@ -855,10 +855,19 @@ fn capture_selection_after_copy() -> Result<String, String> {
     let previous = read_clipboard_raw_text()?;
     let probe = selection_probe_marker();
     copy_to_clipboard(&probe)?;
-    let copied = (|| {
+    let copied: Result<String, String> = (|| -> Result<String, String> {
         send_copy_shortcut()?;
-        std::thread::sleep(Duration::from_millis(80));
-        read_clipboard_raw_text()
+        // Some accessibility-aware apps publish Cmd/Ctrl+C asynchronously.
+        // Keep the probe in place until the source has had a short chance to
+        // replace it, rather than treating the first clipboard poll as final.
+        for _ in 0..8 {
+            std::thread::sleep(Duration::from_millis(25));
+            let copied = read_clipboard_raw_text()?;
+            if copied != probe {
+                return Ok(copied);
+            }
+        }
+        Ok(probe.clone())
     })();
     let selection = copied
         .ok()
@@ -896,13 +905,12 @@ fn capture_selected_text(app: AppHandle) -> Result<String, String> {
     result
 }
 
-fn capture_active_selection_for_voice_question(app: &AppHandle) -> Option<String> {
-    if !direct_input_allowed()
-        || app
-            .get_webview_window("main")
-            .and_then(|window| window.is_focused().ok())
-            .unwrap_or(false)
-    {
+fn selection_capture_allowed_for_voice_question(direct_input_is_allowed: bool) -> bool {
+    direct_input_is_allowed
+}
+
+fn capture_active_selection_for_voice_question(_app: &AppHandle) -> Option<String> {
+    if !selection_capture_allowed_for_voice_question(direct_input_allowed()) {
         return None;
     }
     capture_selection_after_copy().ok()
@@ -3355,7 +3363,7 @@ mod tests {
     }
 
     #[test]
-    fn 質問用キーはDOON_Voiceの画面で選択した文章も取得対象にする() {
+    fn 質問用キーはdoon_voiceの画面で選択した文章も取得対象にする() {
         assert!(selection_capture_allowed_for_voice_question(true));
         assert!(!selection_capture_allowed_for_voice_question(false));
     }
