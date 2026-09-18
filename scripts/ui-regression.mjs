@@ -27,6 +27,7 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
   window.fixture = {
     calls: [], errors: [], authenticated, clipboard: "", clipboardFails: false,
     selection: "この文章は選択された文脈です。", questionAnswer: "選択文を根拠にした回答です。", pastedAnswer: "",
+    selectionQuestionPopup: { selection: "選択された説明文です。", question: "これは何ですか", answer: "選択文への自動回答です。", target: "codex" },
     registeredShortcut: null, registeredQuestionShortcut: null, snapshot: { ...idle, ...snapshot },
     deferClipboard: false, pendingClipboard: null, deferConfigs: false, rejectConfigs: false,
     pendingConfigs: [], activeTarget: "codex", activeDictionary: dictionary,
@@ -82,6 +83,8 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
         case "transcribe_voice": return "これは何ですか";
         case "answer_selection_question": return f.questionAnswer;
         case "paste_question_answer": f.pastedAnswer = args.text; return;
+        case "selection_question_popup_payload": return f.selectionQuestionPopup;
+        case "close_selection_question_popup": return;
         case "configure_background_voice":
           if (f.deferConfigs) return new Promise((resolve, reject) => f.pendingConfigs.push({ args, resolve, reject }));
           f.commitConfig(args);
@@ -213,6 +216,20 @@ try {
     await dialog.waitFor();
     assert.equal(await page.getByRole("textbox", { name: "選択した文章への質問" }).inputValue(), "これは何ですか");
     await page.getByText("選択文への自動回答です。", { exact: true }).waitFor();
+    await page.close();
+  });
+
+  await check("選択文の回答はDOON Voice本体を開かない専用ウィンドウで操作できる", async () => {
+    const page = await pageFor({}, "?selection-question-popup");
+    const dialog = page.getByRole("dialog", { name: "選択した文章を質問" });
+    await dialog.waitFor();
+    await page.getByText("選択された説明文です。", { exact: true }).waitFor();
+    await page.getByText("選択文への自動回答です。", { exact: true }).waitFor();
+    assert.equal(await page.getByRole("button", { name: "音声入力を開始" }).count(), 0);
+    await page.getByRole("button", { name: "回答をコピー", exact: true }).click();
+    assert.equal(await page.evaluate(() => window.fixture.clipboard), "選択文への自動回答です。");
+    await page.getByRole("button", { name: "カーソル位置へ入力", exact: true }).click();
+    await page.waitForFunction(() => window.fixture.pastedAnswer === "選択文への自動回答です。");
     await page.close();
   });
 
