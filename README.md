@@ -37,7 +37,7 @@ WindowsではRustの導入後に、Visual Studio Installerで「Desktop developm
 
 ## 完成版インストーラーを使う
 
-### Windowsテスト版 0.5.30
+### Windowsテスト版 0.5.31
 
 配布用の `DOON Voice-Windows.zip` をすべて展開し、中の `.msi` を実行してください。対象はWindows 10/11の64ビット（x64）です。アプリの利用にNode.jsやRustの開発環境は不要です。
 
@@ -46,7 +46,8 @@ CPUに合わせて高速な音声エンジンを自動選択します。AVX2等�
 1. DOON Voiceを起動し、「接続と設定」で「マイクを許可する」を押します。表示されたOSの確認画面で許可します。
 2. 同じ画面で音声認識モデル（約574MB）を取得します。取得済み容量・全容量・進捗・残り時間の目安を確認できます。
 3. Windowsで許可画面が出ない、または以前に拒否した場合は、「設定」で「マイク」を検索し、マイクと「デスクトップアプリにマイクへのアクセスを許可する」をオンにします。
-4. 「AIなし」を選び、メモ帳などの入力欄で`Ctrl+Alt+Space`を押して録音し、もう一度押して止めます。
+4. Macで「マイクの設定を読み取れませんでした」と出る場合は、アプリを閉じ、macOSの「システム設定」→「サウンド」→「入力」で「MacBookのマイク」など利用するマイクを選んでから開き直します。v0.5.31では対応形式と別の入力機器を自動で試します。
+5. 「AIなし」を選び、メモ帳などの入力欄で`Ctrl+Alt+Space`を押して録音し、もう一度押して止めます。
 5. 認識した言葉、待ち時間、入力先への貼り付けを確認してください。終了は通知領域のDOON Voiceアイコンから選べます。
 
 ChatGPT／Claude／Geminiの文章整形は、相手自身の対応CLIとログインが必要です。`AIなし`での録音・文字起こしにはこれらのログインは不要です。クラウドAIを選ぶと本文と辞書が対応サービスへ送られます。
@@ -57,7 +58,7 @@ ChatGPT／Claude／Geminiの文章整形は、相手自身の対応CLIとログ�
 
 ### 一般公開版
 
-GitHubの [Releases](https://github.com/daisukubo-rgb/doon-voice/releases) からOSに合うファイルを取得します。Windowsテスト版0.5.30はまだReleaseに掲載していません。
+GitHubの [Releases](https://github.com/daisukubo-rgb/doon-voice/releases) からOSに合うファイルを取得します。Windowsテスト版0.5.31はまだReleaseに掲載していません。
 
 - macOS Apple Silicon: `DOON.Voice-macOS.zip` を展開し、中の `.dmg` を開きます。
 - macOS Intel: `DOON.Voice-macOS-Intel.zip` を展開し、中の `.dmg` を開きます。
