@@ -30,6 +30,7 @@ type BackgroundVoiceSnapshot = {
 };
 type QuestionPhase = "ready" | "recording" | "transcribing" | "answering" | "answer";
 type SelectionQuestionEvent = { selection: string; question: string; answer: string };
+type SelectionQuestionErrorEvent = { selection: string; question: string; error: string };
 
 const MAX_DICTIONARY_TERMS = 100;
 const MAX_TERM_CODEPOINTS = 80;
@@ -193,6 +194,7 @@ function MainApp() {
     if (!isTauriApp()) return;
     let stopListening: (() => void) | undefined;
     let stopQuestionListening: (() => void) | undefined;
+    let stopQuestionErrorListening: (() => void) | undefined;
     let disposed = false;
     void appInvoke<BackgroundVoiceSnapshot>("background_voice_status")
       .then(applyBackgroundVoiceSnapshot)
@@ -216,7 +218,20 @@ function MainApp() {
       if (disposed) unlisten();
       else stopQuestionListening = unlisten;
     }).catch(() => setNotice("選択文への回答を表示できませんでした"));
-    return () => { disposed = true; stopListening?.(); stopQuestionListening?.(); };
+    void listen<SelectionQuestionErrorEvent>("selection-question-error", (event) => {
+      questionOperationRef.current += 1;
+      setQuestionSelection(event.payload.selection);
+      setQuestionDraft(event.payload.question);
+      setQuestionAnswer("");
+      setQuestionError(event.payload.error);
+      setQuestionPhase("ready");
+      setQuestionOpen(true);
+      focusQuestionInput();
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else stopQuestionErrorListening = unlisten;
+    }).catch(() => setNotice("選択文への質問エラーを表示できませんでした"));
+    return () => { disposed = true; stopListening?.(); stopQuestionListening?.(); stopQuestionErrorListening?.(); };
   }, []);
   useEffect(() => {
     if (!recording) return;

@@ -400,6 +400,13 @@ struct SelectionQuestionEvent {
     answer: String,
 }
 
+#[derive(Clone, Serialize)]
+struct SelectionQuestionErrorEvent {
+    selection: String,
+    question: String,
+    error: String,
+}
+
 fn publish_background_voice(app: &AppHandle, snapshot: &BackgroundVoiceSnapshot) {
     let _ = app.emit("background-voice-state", snapshot);
 }
@@ -737,11 +744,49 @@ fn paste_to_active_app(text: String) -> Result<(), String> {
     deliver_text(&text, &AtomicBool::new(false)).1
 }
 
-fn read_clipboard_text() -> Result<String, String> {
-    let text = arboard::Clipboard::new()
+fn read_clipboard_raw_text() -> Result<String, String> {
+    arboard::Clipboard::new()
         .and_then(|mut clipboard| clipboard.get_text())
-        .map_err(|_| "クリップボードの文章を読めませんでした。質問したい文章を選択してコピーしてから、もう一度試してください。".to_string())?;
-    clean(&text)
+        .map_err(|_| "クリップボードの文章を読めませんでした。質問したい文章を選択してコピーしてから、もう一度試してください。".to_string())
+}
+
+fn read_clipboard_text() -> Result<String, String> {
+    clean(&read_clipboard_raw_text()?)
+}
+
+fn selection_probe_marker() -> String {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    format!("__DOON_VOICE_SELECTION_PROBE_{nonce}__")
+}
+
+fn selection_from_copy_probe(_previous: &str, probe: &str, copied: &str) -> Option<String> {
+    // The probe is written before Cmd/Ctrl+C. A source selection may be equal
+    // to the previous clipboard, so compare only with the unique probe.
+    (copied != probe && !copied.trim().is_empty()).then(|| copied.to_string())
+}
+
+fn capture_selection_after_copy() -> Result<String, String> {
+    let previous = read_clipboard_raw_text()?;
+    let probe = selection_probe_marker();
+    copy_to_clipboard(&probe)?;
+    let copied = (|| {
+        send_copy_shortcut()?;
+        std::thread::sleep(Duration::from_millis(80));
+        read_clipboard_raw_text()
+    })();
+    let selection = copied
+        .ok()
+        .and_then(|copied| selection_from_copy_probe(&previous, &probe, &copied))
+        .and_then(|text| clean(&text).ok());
+    if selection.is_none() {
+        let _ = copy_to_clipboard(&previous);
+    }
+    selection.ok_or_else(|| {
+        "選択した文章を取得できませんでした。質問したい文章を選択してから、もう一度試してください。".to_string()
+    })
 }
 
 #[tauri::command]
@@ -755,13 +800,11 @@ fn capture_selected_text(app: AppHandle) -> Result<String, String> {
         std::thread::sleep(Duration::from_millis(150));
     }
 
-    let result = (|| {
-        if direct_input_allowed() {
-            send_copy_shortcut()?;
-            std::thread::sleep(Duration::from_millis(80));
-        }
+    let result = if direct_input_allowed() {
+        capture_selection_after_copy()
+    } else {
         read_clipboard_text()
-    })();
+    };
 
     if let Some(window) = window {
         let _ = window.show();
@@ -771,9 +814,6 @@ fn capture_selected_text(app: AppHandle) -> Result<String, String> {
 }
 
 fn capture_active_selection_for_voice_question(app: &AppHandle) -> Option<String> {
-    // A global shortcut is pressed while another app has focus. Compare the
-    // clipboard before and after Copy so stale clipboard text never turns an
-    // ordinary dictation into a question.
     if !direct_input_allowed()
         || app
             .get_webview_window("main")
@@ -782,11 +822,7 @@ fn capture_active_selection_for_voice_question(app: &AppHandle) -> Option<String
     {
         return None;
     }
-    let before = read_clipboard_text().ok();
-    send_copy_shortcut().ok()?;
-    std::thread::sleep(Duration::from_millis(80));
-    let selection = read_clipboard_text().ok()?;
-    (before.as_deref() != Some(selection.as_str())).then_some(selection)
+    capture_selection_after_copy().ok()
 }
 
 #[tauri::command]
@@ -1031,10 +1067,19 @@ fn prewarm_output_target(app: &AppHandle, target: OutputTarget) {
                 OutputTarget::Local | OutputTarget::Raw => return,
             };
             let app = app.clone();
+            // Only Codex can keep a fresh, ephemeral thread on a warmed
+            // process. Claude and Gemini must end their stream process after
+            // every request, so warming them only adds lock contention.
+            if provider != Provider::Codex {
+                return;
+            }
             tauri::async_runtime::spawn_blocking(move || {
-                let Ok(spec) = cloud_spec(&app, provider, false) else {
+                let Ok(mut spec) = cloud_spec(&app, provider, false) else {
                     return;
                 };
+                // A warm-up is best effort. It must never hold the provider
+                // slot for the full request deadline when the CLI is slow.
+                spec.timeout = Duration::from_secs(5);
                 let cloud = app.state::<CloudRuntime>();
                 let _ = cloud.warm(spec);
             });
@@ -2390,27 +2435,45 @@ fn stop_and_process_background_recording(
                     runtime.recovery_pending = false;
                     runtime.message = "選択した文章への回答を作っています".into();
                 })?;
-                let answer = answer_selection_question(
+                let question = recognized.text.clone();
+                match answer_selection_question(
                     app.clone(),
                     config.target,
                     selection.clone(),
-                    recognized.text.clone(),
+                    question.clone(),
                 )
-                .await?;
-                update_processing_result(&app, generation, |runtime| {
-                    runtime.question_result_opened = true;
-                })?;
-                show_main_window(&app)?;
-                app.emit(
-                    "selection-question-answer",
-                    SelectionQuestionEvent {
-                        selection,
-                        question: recognized.text,
-                        answer,
-                    },
-                )
-                .map_err(|_| "回答画面を表示できませんでした。".to_string())?;
-                return Ok(());
+                .await
+                {
+                    Ok(answer) => {
+                        update_processing_result(&app, generation, |runtime| {
+                            runtime.question_result_opened = true;
+                        })?;
+                        show_main_window(&app)?;
+                        app.emit(
+                            "selection-question-answer",
+                            SelectionQuestionEvent {
+                                selection,
+                                question,
+                                answer,
+                            },
+                        )
+                        .map_err(|_| "回答画面を表示できませんでした。".to_string())?;
+                        return Ok(());
+                    }
+                    Err(error) => {
+                        show_main_window(&app)?;
+                        app.emit(
+                            "selection-question-error",
+                            SelectionQuestionErrorEvent {
+                                selection,
+                                question,
+                                error: error.clone(),
+                            },
+                        )
+                        .map_err(|_| "回答画面を表示できませんでした。".to_string())?;
+                        return Err(error);
+                    }
+                }
             }
             process_and_deliver_text(&app, generation, config, recognized.text, cancelled).await
         }
