@@ -458,3 +458,20 @@ mod tests {
         assert_eq!(recorder.stop_reason().as_deref(), Some("disconnected"));
     }
 }
+
+#[cfg(test)]
+mod input_config_fallback_tests {
+    use super::*;
+
+    #[test]
+    fn falls_back_to_a_supported_config_when_the_default_config_is_unavailable() {
+        let config = preferred_or_fallback_config::<u32, _>(Err("CoreAudio error"), [48_000]);
+        assert_eq!(config, Ok(48_000));
+    }
+
+    #[test]
+    fn preserves_the_default_config_when_it_is_available() {
+        let config = preferred_or_fallback_config::<u32, _>(Ok(44_100), [48_000]);
+        assert_eq!(config, Ok(44_100));
+    }
+}
