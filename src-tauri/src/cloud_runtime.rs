@@ -1271,6 +1271,10 @@ mod tests {
             .as_str()
             .unwrap_or_default()
             .contains("文章整形だけ"));
+        assert!(request["params"]["developerInstructions"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Web検索"));
     }
 
     #[test]
