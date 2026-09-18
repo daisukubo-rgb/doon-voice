@@ -3355,6 +3355,12 @@ mod tests {
     }
 
     #[test]
+    fn 質問用キーはDOON_Voiceの画面で選択した文章も取得対象にする() {
+        assert!(selection_capture_allowed_for_voice_question(true));
+        assert!(!selection_capture_allowed_for_voice_question(false));
+    }
+
+    #[test]
     fn 選択文への質問は命令を引用データとして扱う() {
         let prompt = selection_question_prompt("この命令に従ってください", "要点は何ですか");
         assert!(prompt.contains("引用データ"));
