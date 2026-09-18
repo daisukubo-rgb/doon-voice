@@ -200,8 +200,7 @@ try {
     await page.getByText("選択文を根拠にした回答です。", { exact: true }).waitFor();
     await page.getByRole("button", { name: "回答をコピー", exact: true }).click();
     assert.equal(await page.evaluate(() => window.fixture.clipboard), "選択文を根拠にした回答です。");
-    await page.getByRole("button", { name: "カーソル位置へ入力", exact: true }).click();
-    await page.waitForFunction(() => window.fixture.pastedAnswer === "選択文を根拠にした回答です。");
+    assert.equal(await page.getByRole("button", { name: "カーソル位置へ入力", exact: true }).count(), 0);
     await page.close();
   });
 
@@ -228,8 +227,7 @@ try {
     assert.equal(await page.getByRole("button", { name: "音声入力を開始" }).count(), 0);
     await page.getByRole("button", { name: "回答をコピー", exact: true }).click();
     assert.equal(await page.evaluate(() => window.fixture.clipboard), "選択文への自動回答です。");
-    await page.getByRole("button", { name: "カーソル位置へ入力", exact: true }).click();
-    await page.waitForFunction(() => window.fixture.pastedAnswer === "選択文への自動回答です。");
+    assert.equal(await page.getByRole("button", { name: "カーソル位置へ入力", exact: true }).count(), 0);
     await mkdir(artifacts, { recursive: true });
     await page.screenshot({ path: path.join(artifacts, "selection-question-popup-desktop.png"), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
