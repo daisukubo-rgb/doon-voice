@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Check, CircleAlert, Download, ExternalLink, Mic, Plus, RefreshCw, WifiOff, X } from "lucide-react";
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
+import { AudioRecorder, startAudioRecorder } from "./audio-recorder";
 import { DEFAULT_OUTPUT_TARGET, isOutputTarget, OutputTarget, outputTargetLabel } from "./output-target";
 import { DEFAULT_SHORTCUT, shortcutCaptureResult, shortcutLabel } from "./shortcut";
 
@@ -27,6 +28,8 @@ type BackgroundVoiceSnapshot = {
   clipboard_saved: boolean;
   recovery_pending: boolean;
 };
+type QuestionPhase = "ready" | "recording" | "transcribing" | "answering" | "answer";
+type SelectionQuestionEvent = { selection: string; question: string; answer: string };
 
 const MAX_DICTIONARY_TERMS = 100;
 const MAX_TERM_CODEPOINTS = 80;
@@ -58,6 +61,8 @@ function appInvoke<T>(command: string, args?: Record<string, unknown>): Promise<
     direct_input_status: true,
     request_direct_input_permission: true,
     background_voice_status: { state: "idle", generation: 0, transcript: "", output: "", message: "", clipboard_saved: false, recovery_pending: false },
+    capture_selected_text: "選択した文章について質問できます。",
+    answer_selection_question: "選択した文章をもとにした回答です。",
   };
   return Promise.resolve(preview[command] as T);
 }
@@ -148,6 +153,12 @@ function MainApp() {
   const voiceStateRef = useRef<BackgroundVoiceSnapshot["state"]>("idle");
   const [directInputAllowed, setDirectInputAllowed] = useState<boolean | null>(null);
   const [connectingProviders, setConnectingProviders] = useState<Record<ProviderId, boolean>>({ codex: false, claude: false, gemini: false });
+  const [questionOpen, setQuestionOpen] = useState(false);
+  const [questionSelection, setQuestionSelection] = useState("");
+  const [questionDraft, setQuestionDraft] = useState("");
+  const [questionAnswer, setQuestionAnswer] = useState("");
+  const [questionError, setQuestionError] = useState("");
+  const [questionPhase, setQuestionPhase] = useState<QuestionPhase>("ready");
   const startRef = useRef<number | null>(null);
   const registeredShortcutRef = useRef<string | null>(null);
   const capturedFromShortcutRef = useRef<string | null>(null);
@@ -156,6 +167,10 @@ function MainApp() {
   const shortcutButtonRef = useRef<HTMLButtonElement | null>(null);
   const pullingLocalModelRef = useRef(false);
   const downloadingTranscriptionRef = useRef(false);
+  const questionInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const questionRecorderRef = useRef<AudioRecorder | null>(null);
+  const questionOperationRef = useRef(0);
+  const questionComposingRef = useRef(false);
 
   useEffect(() => { void refreshAll(); }, []);
   useEffect(() => { window.localStorage.removeItem("doon-voice-history"); }, []);
@@ -177,6 +192,7 @@ function MainApp() {
   useEffect(() => {
     if (!isTauriApp()) return;
     let stopListening: (() => void) | undefined;
+    let stopQuestionListening: (() => void) | undefined;
     let disposed = false;
     void appInvoke<BackgroundVoiceSnapshot>("background_voice_status")
       .then(applyBackgroundVoiceSnapshot)
@@ -187,7 +203,20 @@ function MainApp() {
       if (disposed) unlisten();
       else stopListening = unlisten;
     }).catch(() => setNotice("音声入力の状態を受け取れませんでした"));
-    return () => { disposed = true; stopListening?.(); };
+    void listen<SelectionQuestionEvent>("selection-question-answer", (event) => {
+      questionOperationRef.current += 1;
+      setQuestionSelection(event.payload.selection);
+      setQuestionDraft(event.payload.question);
+      setQuestionAnswer(event.payload.answer);
+      setQuestionError("");
+      setQuestionPhase("answer");
+      setQuestionOpen(true);
+      focusQuestionInput();
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else stopQuestionListening = unlisten;
+    }).catch(() => setNotice("選択文への回答を表示できませんでした"));
+    return () => { disposed = true; stopListening?.(); stopQuestionListening?.(); };
   }, []);
   useEffect(() => {
     if (!recording) return;
@@ -304,6 +333,131 @@ function MainApp() {
     } catch (error) {
       setNotice(errorMessage(error, "音声入力を切り替えられませんでした"));
     }
+  }
+
+  function focusQuestionInput() {
+    window.setTimeout(() => questionInputRef.current?.focus(), 0);
+  }
+
+  async function openSelectionQuestion() {
+    if (busy || questionPhase === "recording" || questionPhase === "transcribing" || questionPhase === "answering") return;
+    const operation = ++questionOperationRef.current;
+    try {
+      const selection = (await appInvoke<string>("capture_selected_text")).trim();
+      if (!selection) throw new Error("質問したい文章を選択してコピーしてから、もう一度試してください");
+      if (operation !== questionOperationRef.current) return;
+      setQuestionSelection(selection);
+      setQuestionDraft("");
+      setQuestionAnswer("");
+      setQuestionError("");
+      setQuestionPhase("ready");
+      setQuestionOpen(true);
+      focusQuestionInput();
+    } catch (error) {
+      if (operation === questionOperationRef.current) setNotice(errorMessage(error, "選択した文章を読み取れませんでした"));
+    }
+  }
+
+  function closeSelectionQuestion() {
+    questionOperationRef.current += 1;
+    const recorder = questionRecorderRef.current;
+    questionRecorderRef.current = null;
+    if (recorder) void recorder.stop().catch(() => undefined);
+    setQuestionOpen(false);
+    setQuestionError("");
+    setQuestionPhase("ready");
+  }
+
+  async function askSelectionQuestion(question = questionDraft) {
+    const normalizedQuestion = question.trim();
+    if (!normalizedQuestion || questionPhase === "recording" || questionPhase === "transcribing" || questionPhase === "answering") return;
+    if (outputTarget === "raw") {
+      setQuestionError("回答にはChatGPT、Claude、Gemini、またはこのPCのAIを選んでください");
+      return;
+    }
+    const operation = ++questionOperationRef.current;
+    setQuestionError("");
+    setQuestionAnswer("");
+    setQuestionDraft("");
+    setQuestionPhase("answering");
+    try {
+      const answer = await appInvoke<string>("answer_selection_question", {
+        target: outputTargetRef.current,
+        selection: questionSelection,
+        question: normalizedQuestion,
+      });
+      if (operation !== questionOperationRef.current) return;
+      setQuestionAnswer(answer);
+      setQuestionPhase("answer");
+      focusQuestionInput();
+    } catch (error) {
+      if (operation !== questionOperationRef.current) return;
+      setQuestionDraft(normalizedQuestion);
+      setQuestionError(errorMessage(error, "回答を作れませんでした"));
+      setQuestionPhase("ready");
+      focusQuestionInput();
+    }
+  }
+
+  async function toggleQuestionVoice() {
+    if (questionPhase === "answering" || questionPhase === "transcribing") return;
+    if (questionPhase === "recording") {
+      const recorder = questionRecorderRef.current;
+      questionRecorderRef.current = null;
+      if (!recorder) return;
+      const operation = ++questionOperationRef.current;
+      setQuestionPhase("transcribing");
+      setQuestionError("");
+      try {
+        const audio = await recorder.stop();
+        const dictionary = terms.filter((term): term is string => typeof term === "string");
+        const question = await appInvoke<string>("transcribe_voice", { audio: Array.from(audio), dictionary });
+        if (operation !== questionOperationRef.current) return;
+        setQuestionDraft(question);
+        setQuestionPhase("ready");
+        window.setTimeout(() => { void askSelectionQuestion(question); }, 0);
+      } catch (error) {
+        if (operation !== questionOperationRef.current) return;
+        setQuestionError(errorMessage(error, "質問の音声を読み取れませんでした"));
+        setQuestionPhase("ready");
+        focusQuestionInput();
+      }
+      return;
+    }
+    try {
+      setQuestionError("");
+      questionRecorderRef.current = await startAudioRecorder();
+      setQuestionPhase("recording");
+    } catch (error) {
+      setQuestionError(errorMessage(error, "質問用のマイクを開始できませんでした"));
+    }
+  }
+
+  async function copyQuestionAnswer() {
+    if (!questionAnswer) return;
+    try {
+      await navigator.clipboard.writeText(questionAnswer);
+      setQuestionError("");
+      setNotice("回答をクリップボードにコピーしました");
+    } catch {
+      setQuestionError("回答をコピーできませんでした。文章を選択してコピーしてください");
+    }
+  }
+
+  async function pasteQuestionAnswer() {
+    if (!questionAnswer) return;
+    try {
+      await appInvoke("paste_question_answer", { text: questionAnswer });
+    } catch (error) {
+      setQuestionError(errorMessage(error, "回答を入力できませんでした。コピーして貼り付けてください"));
+    }
+  }
+
+  function questionKeyDown(event: ReactKeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== "Enter" || event.shiftKey) return;
+    if (questionComposingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
+    event.preventDefault();
+    void askSelectionQuestion();
   }
 
   async function applyShortcut(next: string, notify = true) {
@@ -638,6 +792,7 @@ function MainApp() {
           <h1 id="home-title"><em>AIで</em>言語化をイージーに</h1>
           <p>{recording ? `音声入力中 · ${duration(elapsed)}` : starting ? "マイクを準備しています" : processing ? "音声を処理しています" : "どのアプリにも、そのまま入力。"}</p>
           <button className="record-button" type="button" onClick={() => void toggleRecording()} disabled={starting || processing || (!recording && (recoveryPending || configSaving > 0 || Boolean(configError) || Boolean(existingDictionaryError)))} aria-label={recording ? "音声入力を停止" : "音声入力を開始"}><span className="record-button-icon"><Mic size={27} strokeWidth={1.8} /></span><strong>{recording ? "停止" : "話す"}</strong><small>{shortcutLabel(shortcut, isMac)}</small></button>
+          <button className="selection-question-button" type="button" onClick={() => void openSelectionQuestion()} disabled={busy} aria-label="選択した文章を質問">選択した文章を質問</button>
           {(starting || processing) && <button className="outline-action cancel-processing" type="button" onClick={() => void resultAction("cancel_voice_processing")} disabled={resultActionPending} aria-label="処理を取り消す">取り消す</button>}
           {recoveryPending && !busy && <p className="recovery-state">前回の内容を確認してください</p>}
           {existingDictionaryError && <p className="recovery-state" role="alert">辞書に修正が必要です <button className="outline-action" type="button" onClick={() => navigate("dictionary")}>辞書を確認</button></p>}
@@ -699,6 +854,22 @@ function MainApp() {
         <div className="settings-list transcription-settings"><article><span className="setting-icon"><BrandGlyph name="work" /></span><div><h2>音声認識</h2><p>{transcription?.downloaded ? "日本語音声認識をこのPCで行います。" : "話した言葉を文字にする日本語モデルです。"}</p></div><span className={transcription?.downloaded ? "setting-state state-installed" : "setting-state state-unavailable"}>{transcription?.downloaded ? <Check size={15} strokeWidth={2.3} /> : <Download size={15} strokeWidth={2} />}{transcription?.downloaded ? "モデル取得済み" : downloadingTranscription ? "取得中" : transcription?.size || "未取得"}</span>{transcription?.downloaded ? <span /> : <button className="outline-action" type="button" onClick={() => void downloadTranscriptionModel()} disabled={downloadingTranscription}>{downloadingTranscription ? "取得中" : "モデルを取得"} <Download size={15} /></button>}</article></div>
         <div className="settings-list">{providers.map(({ id, label, glyph }) => { const status = providerDisplayState(id, false); const connecting = connectingProviders[id]; const loggedIn = connectedProviders[id] && statuses[id]?.authenticated; const unavailable = statuses[id]?.usability === "unavailable"; const detail = id === "codex" ? "GPT-5.6 Lunaで高速整形" : id === "gemini" ? "Gemini 3.6 Flash (Low)で高速整形" : unavailable ? "現在の契約ではClaude Codeを利用できません" : "Claude Haikuで高速整形"; return <article key={id}><span className="setting-icon"><BrandGlyph name={glyph} /></span><div><h2>{label}</h2><p>{detail}</p></div><span className={`setting-state ${status.className}`}>{connecting ? <span className="state-connecting-mark" aria-hidden="true" /> : unavailable ? <CircleAlert size={15} strokeWidth={2} /> : loggedIn ? <Check size={15} strokeWidth={2.3} /> : statuses[id]?.installed ? <span className="state-ring" aria-hidden="true" /> : <CircleAlert size={15} strokeWidth={2} />}{status.label}</span><button className="outline-action" type="button" onClick={() => void connect(id)} disabled={connecting}>{connecting ? "ログイン中" : loggedIn ? "再ログイン" : "ログインする"} {!connecting && <ExternalLink size={15} strokeWidth={1.9} />}</button></article>; })}<article><span className="setting-icon"><BrandGlyph name="dx" /></span><div><h2>ローカルAI</h2><p>{localReady ? "Gemma 4 E2BがこのPCで稼働中です。" : "Gemma 4 E2BをDOON Voice用に取得します。"}</p></div><span className={localReady ? "setting-state state-running" : "setting-state state-unavailable"}>{localReady ? <span className="state-live-dot" aria-hidden="true" /> : <WifiOff size={15} strokeWidth={2} />}{localReady ? "稼働中" : pullingLocalModel ? "取得中" : "未準備"}</span>{!local?.installed ? <button className="outline-action" type="button" onClick={() => void installOllama()} disabled={installingOllama}>{installingOllama ? "Ollamaを取得中" : "Ollamaを自動インストール"} <Download size={15} /></button> : !localModel?.installed ? <button className="outline-action" type="button" onClick={() => void pullModel()} disabled={pullingLocalModel}>{pullingLocalModel ? "取得中" : "Gemmaを取得"} <Download size={15} /></button> : <span />}</article><article className="shortcut-row"><span className="setting-icon"><BrandGlyph name="speed" /></span><div><h2>開始・停止キー</h2><p>{capturingShortcut ? "押した組み合わせを登録します。Escで取り消せます。" : "音声入力の開始と停止"}</p></div><button ref={shortcutButtonRef} className={capturingShortcut ? "shortcut-key is-capturing" : "shortcut-key"} type="button" onClick={() => void beginShortcutCapture()} aria-label="開始・停止キーを変更" aria-pressed={capturingShortcut}>{capturingShortcut ? "キーを押す" : shortcutLabel(shortcut, navigator.userAgent.includes("Mac"))}</button><button className="outline-action" type="button" onClick={() => void applyShortcut(DEFAULT_SHORTCUT)}>標準に戻す</button></article></div>{notice && <p className="notice" role="status">{notice}</p>}</section>}
     </section>
+
+    {questionOpen && <div className="question-backdrop" role="presentation">
+      <section className="question-dialog" role="dialog" aria-modal="true" aria-labelledby="selection-question-title">
+        <header className="question-dialog-header"><div><span>ASK WITH SELECTION</span><h2 id="selection-question-title">選択した文章を質問</h2></div><button className="icon-button" type="button" onClick={closeSelectionQuestion} aria-label="質問を閉じる"><X size={19} strokeWidth={2} /></button></header>
+        <p className="question-selection" aria-label="選択した文章">{questionSelection}</p>
+        {questionAnswer && <section className="question-answer" aria-live="polite"><span>ANSWER</span><div>{questionAnswer}</div></section>}
+        {questionPhase === "answering" && <p className="question-progress" role="status">回答を考えています</p>}
+        {questionPhase === "transcribing" && <p className="question-progress" role="status">質問を文字にしています</p>}
+        {questionError && <p className="question-error" role="alert">{questionError}</p>}
+        <div className="question-compose">
+          <textarea ref={questionInputRef} value={questionDraft} disabled={questionPhase === "recording" || questionPhase === "transcribing" || questionPhase === "answering"} onChange={(event) => setQuestionDraft(event.target.value)} onCompositionStart={() => { questionComposingRef.current = true; }} onCompositionEnd={() => { questionComposingRef.current = false; }} onKeyDown={questionKeyDown} placeholder="質問を入力" aria-label="選択した文章への質問" />
+          <div className="question-compose-actions"><button className={questionPhase === "recording" ? "outline-action is-recording" : "outline-action"} type="button" onClick={() => void toggleQuestionVoice()} disabled={questionPhase === "transcribing" || questionPhase === "answering"}>{questionPhase === "recording" ? "録音を止める" : "音声で質問"}</button><button className="outline-action question-send" type="button" onClick={() => void askSelectionQuestion()} disabled={!questionDraft.trim() || questionPhase === "recording" || questionPhase === "transcribing" || questionPhase === "answering"}>質問する</button></div>
+        </div>
+        {questionAnswer && <div className="question-answer-actions"><button className="outline-action" type="button" onClick={() => void copyQuestionAnswer()}>回答をコピー</button><button className="outline-action question-send" type="button" onClick={() => void pasteQuestionAnswer()}>カーソル位置へ入力</button></div>}
+      </section>
+    </div>}
 
   </main>;
 }

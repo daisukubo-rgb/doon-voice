@@ -14,6 +14,8 @@ use std::{
 
 const CODEX_INSTRUCTIONS: &str =
     "文章整形だけを行う。シェル、ツール、検索、ファイル操作は使わず、本文だけを返す。";
+const CODEX_QUESTION_INSTRUCTIONS: &str =
+    "選択された文章についての質問に答える。シェル、ツール、検索、ファイル操作は使わず、回答本文だけを返す。";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CloudKind {
@@ -30,6 +32,7 @@ pub(crate) struct CloudSpec {
     pub model: String,
     pub timeout: Duration,
     pub cancelled: Arc<AtomicBool>,
+    pub question_mode: bool,
 }
 
 #[derive(Default)]
@@ -60,7 +63,7 @@ impl CloudRuntime {
             spec.timeout = remaining_cloud_time(deadline)?;
             let client = ensure_client(&mut slot, &spec)?;
             client.set_cancellation(Arc::clone(&spec.cancelled));
-            client.rewrite(prompt, remaining_cloud_time(deadline)?)
+            client.rewrite(prompt, remaining_cloud_time(deadline)?, spec.question_mode)
         })();
         // A stream-json process is one conversation. Only Codex supports a
         // fresh ephemeral thread while keeping the same process alive.
@@ -162,9 +165,14 @@ impl CloudClient {
         }
     }
 
-    fn rewrite(&mut self, prompt: &str, timeout: Duration) -> Result<String, String> {
+    fn rewrite(
+        &mut self,
+        prompt: &str,
+        timeout: Duration,
+        question_mode: bool,
+    ) -> Result<String, String> {
         match self {
-            Self::Codex(client) => client.rewrite(prompt, timeout),
+            Self::Codex(client) => client.rewrite(prompt, timeout, question_mode),
             Self::Claude(client) => {
                 client.rewrite(prompt, timeout, claude_input, claude_final_result)
             }
@@ -383,12 +391,22 @@ impl CodexClient {
         })
     }
 
-    fn rewrite(&mut self, prompt: &str, timeout: Duration) -> Result<String, String> {
+    fn rewrite(
+        &mut self,
+        prompt: &str,
+        timeout: Duration,
+        question_mode: bool,
+    ) -> Result<String, String> {
         let thread_request_id = self.take_id();
         self.process.send(&codex_thread_start_request(
             thread_request_id,
             &self.cwd,
             &self.model,
+            if question_mode {
+                CODEX_QUESTION_INSTRUCTIONS
+            } else {
+                CODEX_INSTRUCTIONS
+            },
         ))?;
         let deadline = Instant::now() + timeout;
         let response = wait_for_response(&self.process, thread_request_id, deadline)?;
@@ -627,7 +645,12 @@ fn nonempty(text: String, message: &str) -> Result<String, String> {
     }
 }
 
-pub(crate) fn codex_thread_start_request(id: u64, cwd: &str, model: &str) -> Value {
+pub(crate) fn codex_thread_start_request(
+    id: u64,
+    cwd: &str,
+    model: &str,
+    developer_instructions: &str,
+) -> Value {
     json!({
         "method": "thread/start",
         "id": id,
@@ -638,7 +661,7 @@ pub(crate) fn codex_thread_start_request(id: u64, cwd: &str, model: &str) -> Val
             "ephemeral": true,
             "model": model,
             "serviceName": "doon_voice",
-            "developerInstructions": CODEX_INSTRUCTIONS
+            "developerInstructions": developer_instructions
         }
     })
 }
@@ -969,7 +992,7 @@ mod tests {
                 cwd: std::env::temp_dir().to_string_lossy().into_owned(),
                 model: "fixture".into(),
             };
-            let result = client.rewrite("人工的なテスト文", Duration::from_secs(5));
+            let result = client.rewrite("人工的なテスト文", Duration::from_secs(5), false);
             if mode == "completed" {
                 assert_eq!(result.unwrap(), "明日は会議です。");
             } else {
@@ -1000,7 +1023,7 @@ mod tests {
         let mut client = fake_codex("completion-before-ack");
         assert_eq!(
             client
-                .rewrite("人工的なテスト文", Duration::from_millis(500))
+                .rewrite("人工的なテスト文", Duration::from_millis(500), false)
                 .unwrap(),
             "明日は会議です。"
         );
@@ -1011,7 +1034,7 @@ mod tests {
         let mut client = fake_codex("unrelated-rpc-error");
         assert_eq!(
             client
-                .rewrite("人工的なテスト文", Duration::from_secs(2))
+                .rewrite("人工的なテスト文", Duration::from_secs(2), false)
                 .unwrap(),
             "明日は会議です。"
         );
@@ -1022,7 +1045,7 @@ mod tests {
         let mut client = fake_codex("large-stderr");
         assert_eq!(
             client
-                .rewrite("人工的なテスト文", Duration::from_secs(2))
+                .rewrite("人工的なテスト文", Duration::from_secs(2), false)
                 .unwrap(),
             "明日は会議です。"
         );
@@ -1032,7 +1055,7 @@ mod tests {
     fn empty_final_is_an_error_even_when_commentary_exists() {
         let mut client = fake_codex("empty-final");
         assert!(client
-            .rewrite("人工的なテスト文", Duration::from_secs(2))
+            .rewrite("人工的なテスト文", Duration::from_secs(2), false)
             .is_err());
     }
 
@@ -1058,6 +1081,7 @@ mod tests {
                 model: "fixture".into(),
                 timeout: Duration::from_secs(1),
                 cancelled: Arc::new(AtomicBool::new(true)),
+                question_mode: false,
             },
             "人工的なテスト文",
         );
@@ -1073,6 +1097,7 @@ mod tests {
             model: "fixture".into(),
             timeout: Duration::from_secs(2),
             cancelled: Arc::new(AtomicBool::new(false)),
+            question_mode: false,
         }
     }
 
@@ -1217,13 +1242,32 @@ mod tests {
 
     #[test]
     fn codexは一時スレッドで文章整形だけを要求する() {
-        let request = codex_thread_start_request(7, "/tmp/doon-voice", "gpt-5.6-luna");
+        let request =
+            codex_thread_start_request(7, "/tmp/doon-voice", "gpt-5.6-luna", CODEX_INSTRUCTIONS);
         assert_eq!(request["method"], "thread/start");
         assert_eq!(request["id"], 7);
         assert_eq!(request["params"]["ephemeral"], true);
         assert_eq!(request["params"]["approvalPolicy"], "never");
         assert_eq!(request["params"]["sandbox"], "read-only");
         assert!(request["params"]["developerInstructions"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("文章整形だけ"));
+    }
+
+    #[test]
+    fn codexの質問スレッドは回答用途の指示を使える() {
+        let request = codex_thread_start_request(
+            8,
+            "/tmp/doon-voice",
+            "gpt-5.6-luna",
+            CODEX_QUESTION_INSTRUCTIONS,
+        );
+        assert!(request["params"]["developerInstructions"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("質問に答える"));
+        assert!(!request["params"]["developerInstructions"]
             .as_str()
             .unwrap_or_default()
             .contains("文章整形だけ"));
@@ -1292,6 +1336,7 @@ mod tests {
                 model: model.into(),
                 timeout: Duration::from_secs(timeout),
                 cancelled: Arc::new(AtomicBool::new(false)),
+                question_mode: false,
             };
             runtime.warm(make_spec()).expect("常駐接続を開始できる");
             let first = runtime.process_id(kind).expect("プロセスIDを取得できる");
@@ -1324,6 +1369,7 @@ mod tests {
                 model: model.into(),
                 timeout: Duration::from_secs(90),
                 cancelled: Arc::new(AtomicBool::new(false)),
+                question_mode: false,
             };
             let first = runtime
                 .rewrite(make_spec(), prompt)

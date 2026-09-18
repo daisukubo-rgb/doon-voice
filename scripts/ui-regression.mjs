@@ -26,6 +26,7 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
   const idle = { state: "idle", generation: 1, transcript: "", output: "", message: "", clipboard_saved: false, recovery_pending: false };
   window.fixture = {
     calls: [], errors: [], authenticated, clipboard: "", clipboardFails: false,
+    selection: "この文章は選択された文脈です。", questionAnswer: "選択文を根拠にした回答です。", pastedAnswer: "",
     registeredShortcut: null, snapshot: { ...idle, ...snapshot },
     deferClipboard: false, pendingClipboard: null, deferConfigs: false, rejectConfigs: false,
     pendingConfigs: [], activeTarget: "codex", activeDictionary: dictionary,
@@ -77,6 +78,10 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
         case "transcription_status": return { downloaded: true, name: "音声認識", size: "574 MB" };
         case "direct_input_status": return true;
         case "background_voice_status": return f.snapshot;
+        case "capture_selected_text": return f.selection;
+        case "transcribe_voice": return "これは何ですか";
+        case "answer_selection_question": return f.questionAnswer;
+        case "paste_question_answer": f.pastedAnswer = args.text; return;
         case "configure_background_voice":
           if (f.deferConfigs) return new Promise((resolve, reject) => f.pendingConfigs.push({ args, resolve, reject }));
           f.commitConfig(args);
@@ -141,6 +146,71 @@ try {
     await output.waitFor();
     assert.equal(await output.innerText(), formattedLongOutput);
     assert.equal(await output.evaluate((element) => getComputedStyle(element).whiteSpace), "pre-wrap");
+    await page.close();
+  });
+
+  async function openSelectionQuestion(page) {
+    await page.getByRole("button", { name: "選択した文章を質問", exact: true }).click();
+    await page.getByRole("dialog", { name: "選択した文章を質問" }).waitFor();
+    return page.getByRole("textbox", { name: "選択した文章への質問" });
+  }
+
+  await check("質問UI: 変換確定のEnterでは送信しない", async () => {
+    const page = await pageFor();
+    const input = await openSelectionQuestion(page);
+    await input.fill("これは何ですか");
+    await input.evaluate((element) => element.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true })));
+    await input.press("Enter");
+    assert.equal(await page.evaluate(() => window.fixture.calls.some(({ command }) => command === "answer_selection_question")), false);
+    await page.close();
+  });
+
+  await check("質問UI: 変換後のEnterで送信する", async () => {
+    const page = await pageFor();
+    const input = await openSelectionQuestion(page);
+    await input.fill("これは何ですか");
+    await input.evaluate((element) => element.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true })));
+    await input.press("Enter");
+    await page.getByText("選択文を根拠にした回答です。", { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => window.fixture.calls.filter(({ command }) => command === "answer_selection_question").length), 1);
+    await page.close();
+  });
+
+  await check("質問UI: Shift+Enterは改行して送信しない", async () => {
+    const page = await pageFor();
+    const input = await openSelectionQuestion(page);
+    await input.fill("一行目");
+    await input.press("Shift+Enter");
+    await input.pressSequentially("二行目");
+    assert.equal(await input.inputValue(), "一行目\n二行目");
+    assert.equal(await page.evaluate(() => window.fixture.calls.some(({ command }) => command === "answer_selection_question")), false);
+    await page.close();
+  });
+
+  await check("質問UI: 送信ボタンで質問し、回答をコピーと入力できる", async () => {
+    const page = await pageFor();
+    const input = await openSelectionQuestion(page);
+    await input.fill("これは何ですか");
+    await page.getByRole("button", { name: "質問する", exact: true }).click();
+    await page.getByText("選択文を根拠にした回答です。", { exact: true }).waitFor();
+    await page.getByRole("button", { name: "回答をコピー", exact: true }).click();
+    assert.equal(await page.evaluate(() => window.fixture.clipboard), "選択文を根拠にした回答です。");
+    await page.getByRole("button", { name: "カーソル位置へ入力", exact: true }).click();
+    await page.waitForFunction(() => window.fixture.pastedAnswer === "選択文を根拠にした回答です。");
+    await page.close();
+  });
+
+  await check("選択中に話した質問は回答ポップアップを自動で開く", async () => {
+    const page = await pageFor();
+    await page.evaluate(() => window.fixture.emit("selection-question-answer", {
+      selection: "選択された説明文です。",
+      question: "これは何ですか",
+      answer: "選択文への自動回答です。",
+    }));
+    const dialog = page.getByRole("dialog", { name: "選択した文章を質問" });
+    await dialog.waitFor();
+    assert.equal(await page.getByRole("textbox", { name: "選択した文章への質問" }).inputValue(), "これは何ですか");
+    await page.getByText("選択文への自動回答です。", { exact: true }).waitFor();
     await page.close();
   });
 
@@ -483,6 +553,10 @@ try {
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${label}-${view}: horizontal overflow`);
       }
       await page.getByRole("button", { name: "ホーム", exact: true }).click();
+      await page.getByRole("button", { name: "選択した文章を質問", exact: true }).click();
+      await page.screenshot({ path: path.join(artifacts, `${label}-selection-question.png`), fullPage: true });
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${label}-selection-question: horizontal overflow`);
+      await page.getByRole("button", { name: "質問を閉じる", exact: true }).click();
       await page.evaluate(() => { window.fixture.rejectConfigs = true; });
       await page.getByRole("button", { name: /AIなし/ }).click();
       await page.getByText("設定を保存できませんでした", { exact: true }).waitFor();

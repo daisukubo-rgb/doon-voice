@@ -811,7 +811,7 @@ dependencies = [
 
 [[package]]
 name = "doon-voice-desktop"
-version = "0.5.20"
+version = "0.5.23"
 dependencies = [
  "arboard",
  "core-foundation",
