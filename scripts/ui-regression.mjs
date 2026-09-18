@@ -16,7 +16,7 @@ const browser = await chromium.launch({ headless: true });
 let failures = 0;
 const browserErrors = [];
 
-function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authenticated = {} } = {}) {
+function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authenticated = {}, transcription = { downloaded: true, name: "音声認識", size: "574 MB" }, local = { installed: false, running: false, models: [] } } = {}) {
   localStorage.clear();
   localStorage.setItem("doon-voice-dictionary", dictionaryRaw ?? JSON.stringify(dictionary));
   localStorage.setItem("doon-voice-provider-connections", JSON.stringify({ codex: false, claude: false, gemini: false }));
@@ -32,6 +32,7 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
     deferClipboard: false, pendingClipboard: null, deferConfigs: false, rejectConfigs: false,
     pendingConfigs: [], activeTarget: "codex", activeDictionary: dictionary,
     deferConfigReplies: false, pendingConfigReplies: [], deferNextClear: false, pendingClear: null,
+    transcription, local, pendingTranscriptionDownload: null, pendingLocalModelPull: null,
     commitConfig(args) {
       const dictionary = [...new Set(args.dictionary.map((term) => term.trim()))];
       if (this.snapshot.state !== "idle") {
@@ -75,8 +76,10 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
       if (["ack_voice_result", "clear_voice_result", "retry_voice_processing", "cancel_voice_processing"].includes(command) && args?.generation !== f.snapshot.generation) throw new Error("結果が更新されています");
       switch (command) {
         case "provider_status": return { provider: args.provider, installed: true, authenticated: Boolean(f.authenticated[args.provider]), usability: "unknown" };
-        case "local_llm_status": return { installed: false, running: false, models: [] };
-        case "transcription_status": return { downloaded: true, name: "音声認識", size: "574 MB" };
+        case "local_llm_status": return f.local;
+        case "transcription_status": return f.transcription;
+        case "download_transcription_model": return new Promise((resolve) => { f.pendingTranscriptionDownload = resolve; });
+        case "pull_local_model": return new Promise((resolve) => { f.pendingLocalModelPull = resolve; });
         case "direct_input_status": return true;
         case "background_voice_status": return f.snapshot;
         case "capture_selected_text": return f.selection;
@@ -151,6 +154,18 @@ try {
     await output.waitFor();
     assert.equal(await output.innerText(), formattedLongOutput);
     assert.equal(await output.evaluate((element) => getComputedStyle(element).whiteSpace), "pre-wrap");
+    await page.close();
+  });
+
+  await check("初回モデル取得は容量・進捗・残り時間の目安を表示する", async () => {
+    const page = await pageFor({ transcription: { downloaded: false, name: "音声認識", size: "約574 MB" } });
+    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await page.getByRole("button", { name: "モデルを取得", exact: true }).click();
+    await page.evaluate(() => window.fixture.emit("installation-progress", {
+      kind: "transcription", phase: "ダウンロード中", completed: 286 * 1024 * 1024, total: 574 * 1024 * 1024,
+    }));
+    await page.getByText(/約286 MB \/ 約574 MB · 49%/).waitFor();
+    await page.getByText(/残り時間の目安/).waitFor();
     await page.close();
   });
 

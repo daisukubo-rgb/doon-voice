@@ -1,4 +1,4 @@
-import { encodeWav, mergeAudioChunks, startAudioRecorder } from "../src/audio-recorder.js";
+import { encodeWav, mergeAudioChunks, requestMicrophoneAccess, startAudioRecorder } from "../src/audio-recorder.js";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -58,6 +58,10 @@ try {
   const recorded = await recorder.stop();
   assert(recorded.length === 48, "録音した2サンプルをWAVへ変換する");
   assert(stopped && closed, "録音停止時にマイクとAudioContextを解放する");
+
+  stopped = false;
+  await requestMicrophoneAccess();
+  assert(stopped, "マイクを許可する操作は、許可確認後にマイクをすぐ解放する");
 } finally {
   if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
   else delete (globalThis as { navigator?: Navigator }).navigator;
