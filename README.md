@@ -37,7 +37,7 @@ WindowsではRustの導入後に、Visual Studio Installerで「Desktop developm
 
 ## 完成版インストーラーを使う
 
-### Windowsテスト版 0.5.19
+### Windowsテスト版 0.5.20
 
 配布用の `DOON Voice-Windows.zip` をすべて展開し、中の `.msi` を実行してください。対象はWindows 10/11の64ビット（x64）です。アプリの利用にNode.jsやRustの開発環境は不要です。
 
@@ -56,7 +56,7 @@ ChatGPT／Claude／Geminiの文章整形は、相手自身の対応CLIとログ�
 
 ### 一般公開版
 
-GitHubの [Releases](https://github.com/daisukubo-rgb/doon-voice/releases) からOSに合うファイルを取得します。Windowsテスト版0.5.19はまだReleaseに掲載していません。
+GitHubの [Releases](https://github.com/daisukubo-rgb/doon-voice/releases) からOSに合うファイルを取得します。Windowsテスト版0.5.20はまだReleaseに掲載していません。
 
 - macOS Apple Silicon: `DOON.Voice-macOS.zip` を展開し、中の `.dmg` を開きます。
 - macOS Intel: `DOON.Voice-macOS-Intel.zip` を展開し、中の `.dmg` を開きます。

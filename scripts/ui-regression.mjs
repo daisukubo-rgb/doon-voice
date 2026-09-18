@@ -119,6 +119,7 @@ async function check(name, body) {
 }
 
 const recovery = { transcript: "明日は行きません。", output: "", recovery_pending: true, message: "文章整形に失敗しました" };
+const formattedLongOutput = "明日の営業会議では、各担当が今週の進捗と次週までに決める事項を順番に共有します。\n\n資料の数字に変更があった担当は、会議前に最新版へ差し替えてください。\n\n終わりに、次回までの担当と期限を確認します。";
 
 try {
   await check("RCS-006: error overlay never claims a successful clipboard write", async () => {
@@ -131,6 +132,15 @@ try {
     const page = await pageFor({ snapshot: { ...recovery, output: "確認用の結果", clipboard_saved: false } });
     await page.getByText("確認用の結果", { exact: true }).waitFor();
     assert.doesNotMatch(await page.locator("main").innerText(), /クリップボードに保存済み/);
+    await page.close();
+  });
+
+  await check("DV-003: 長文の整形結果は段落改行を表示する", async () => {
+    const page = await pageFor({ snapshot: { ...recovery, output: formattedLongOutput } });
+    const output = page.locator(".result-output");
+    await output.waitFor();
+    assert.equal(await output.innerText(), formattedLongOutput);
+    assert.equal(await output.evaluate((element) => getComputedStyle(element).whiteSpace), "pre-wrap");
     await page.close();
   });
 
@@ -464,7 +474,7 @@ try {
 
   if (process.env.UI_SCREENSHOTS) {
     await mkdir(artifacts, { recursive: true });
-    const page = await pageFor({ snapshot: { ...recovery, output: "確認用の文章です。" } });
+    const page = await pageFor({ snapshot: { ...recovery, output: formattedLongOutput } });
     for (const [label, width, height] of [["pc", 1440, 900], ["mobile", 390, 844]]) {
       await page.setViewportSize({ width, height });
       for (const [view, name] of [["home", "ホーム"], ["settings", "接続と設定"], ["dictionary", "辞書"]]) {

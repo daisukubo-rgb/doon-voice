@@ -56,6 +56,8 @@ const MODEL_URL: &str =
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin?download=true";
 const MAX_TEXT: usize = 20_000;
 const MAX_WAV: usize = MAX_WAV_BYTES;
+const LONG_TEXT_FORMAT_THRESHOLD: usize = 180;
+const LONG_TEXT_PARAGRAPH_TARGET: usize = 120;
 const EMPTY_AI_RESPONSE: &str = "文章を受け取れませんでした。もう一度話してください。";
 const CLAUDE_SUBSCRIPTION_UNAVAILABLE: &str =
     "Claudeはログイン済みですが、Claude Codeの利用が無効です。ChatGPTまたはローカルAIを選んでください。";
@@ -1629,6 +1631,32 @@ fn use_ai_output_or_transcript(
         Err(error) => Err(error),
     }
 }
+
+fn format_long_voice_text(text: &str) -> String {
+    if text.chars().count() < LONG_TEXT_FORMAT_THRESHOLD || !text.contains('。') {
+        return text.to_string();
+    }
+
+    let mut formatted = String::with_capacity(text.len() + 8);
+    let mut characters_since_break = 0;
+    let mut characters = text.chars().peekable();
+
+    while let Some(character) = characters.next() {
+        formatted.push(character);
+        characters_since_break += 1;
+
+        if character == '。'
+            && characters_since_break >= LONG_TEXT_PARAGRAPH_TARGET
+            && characters.clone().any(|next| !next.is_whitespace())
+        {
+            formatted.push_str("\n\n");
+            characters_since_break = 0;
+        }
+    }
+
+    formatted
+}
+
 fn local_generate_payload(prompt: &str) -> serde_json::Value {
     serde_json::json!({
         "model": LOCAL_MODEL,
@@ -1861,7 +1889,7 @@ async fn process_voice_text_cancellable(
             Err(_) => {}
         }
     }
-    use_ai_output_or_transcript(&transcript, polished)
+    use_ai_output_or_transcript(&transcript, polished).map(|text| format_long_voice_text(&text))
 }
 fn handle_background_voice_toggle(app: &AppHandle) -> Result<(), String> {
     let state = app.state::<BackgroundVoiceState>();
