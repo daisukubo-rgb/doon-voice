@@ -58,7 +58,7 @@ ChatGPT／Claude／Geminiの文章整形は、相手自身の対応CLIとログ�
 
 ### 一般公開版
 
-GitHubの [Releases](https://github.com/daisukubo-rgb/doon-voice/releases) からOSに合うファイルを取得します。Windowsテスト版0.5.31はまだReleaseに掲載していません。
+GitHubの [Releases](https://github.com/daisukubo-rgb/doon-voice/releases) からOSに合うファイルを取得します。Windowsテスト版0.5.32はまだReleaseに掲載していません。
 
 - macOS Apple Silicon: `DOON.Voice-macOS.zip` を展開し、中の `.dmg` を開きます。
 - macOS Intel: `DOON.Voice-macOS-Intel.zip` を展開し、中の `.dmg` を開きます。
