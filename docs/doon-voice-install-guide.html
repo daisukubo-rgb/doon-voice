@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <link rel="stylesheet" href="doon-voice-install-guide.css" />
+    <title>DOON Voice インストール手順</title>
+  </head>
+  <body>
+    <header>
+      <div class="shell topline">
+        <div class="brand"><img src="install-guide-assets/doon-logo.png" alt="DOON" /><span>VOICE GUIDE</span></div>
+        <time datetime="2026-09-18">2026年9月18日</time>
+      </div>
+    </header>
+    <main class="shell">
+      <p class="eyebrow">FIRST SETUP GUIDE</p>
+      <h1>DOON Voice<br />インストール手順</h1>
+      <p class="lead">話した内容を文字にして、いまカーソルがある入力欄へ入れるアプリです。最初は「AIなし」で動作を確かめてください。</p>
+
+      <section class="quick">
+        <strong>はじめる前に</strong>
+        <p>配布フォルダから、ご利用のOSに合うZIPをダウンロードします。ZIPの中身をすべて展開してから、MacはDMG、WindowsはMSIを開いてください。</p>
+      </section>
+
+      <nav class="toc" aria-label="目次">
+        <strong>この手順書の内容</strong>
+        <ol>
+          <li><a href="#install">Mac・Windowsへ入れる</a></li>
+          <li><a href="#first-setup">最初の設定</a></li>
+          <li><a href="#how-to-use">音声入力を使う</a></li>
+          <li><a href="#trouble">うまくいかないとき</a></li>
+        </ol>
+      </nav>
+
+      <section class="section" id="install">
+        <h2>1. Mac・Windowsへ入れる</h2>
+        <div class="two-columns">
+          <article class="platform">
+            <h3>Mac</h3>
+            <ol class="steps">
+              <li><code>DOON Voice-macOS.zip</code> をダブルクリックして展開します。</li>
+              <li>中の <code>.dmg</code> ファイルを開きます。</li>
+              <li>表示された <strong>DOON Voice</strong> を <strong>Applications</strong> フォルダへドラッグします。</li>
+              <li>ApplicationsフォルダからDOON Voiceを開きます。</li>
+            </ol>
+            <div class="warning"><strong>開けない場合</strong>macOSの表示した案内を確認してください。警告や組織の端末制限で止まる場合は、表示された文言を添えて配布元へ連絡してください。</div>
+          </article>
+          <article class="platform">
+            <h3>Windows 10 / 11（64ビット）</h3>
+            <ol class="steps">
+              <li><code>DOON Voice-Windows.zip</code> を右クリックし、<strong>すべて展開</strong>を選びます。</li>
+              <li>展開したフォルダ内の <code>DOON Voice_0.5.19_x64_en-US.msi</code> をダブルクリックします。</li>
+              <li>画面の案内に沿ってインストールします。</li>
+              <li>スタートメニューからDOON Voiceを開きます。</li>
+            </ol>
+            <div class="warning"><strong>警告や制限が出た場合</strong>テスト版はコード署名証明書を付けていません。組織のPCで起動が止まるときは、表示された文言を添えて管理者または配布元へ連絡してください。</div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="first-setup">
+        <h2>2. 最初の設定</h2>
+        <ol class="steps">
+          <li>DOON Voice左下の <strong>接続と設定</strong> を開きます。</li>
+          <li><strong>音声認識</strong> の <strong>モデルを取得</strong> を押します。約574MBあるため、初回はインターネット接続が必要です。</li>
+          <li>マイクの利用を許可します。Windowsでは「設定」で <strong>マイク</strong> を検索し、マイクとデスクトップアプリのアクセスをオンにします。</li>
+          <li>Macでは <strong>カーソル位置へ入力</strong> の <strong>許可する</strong> を押し、システム設定のアクセシビリティでDOON Voiceをオンにします。</li>
+          <li>最初は <strong>文章の仕上げ</strong> で <strong>AIなし</strong> を選びます。</li>
+        </ol>
+        <div class="note"><strong>AIは後からで大丈夫です</strong>AIなしでも、話した内容をこのPC内で文字にできます。ChatGPT、Claude、Geminiを使う場合だけ、各サービスのCLIとログインが必要です。</div>
+      </section>
+
+      <section class="section" id="how-to-use">
+        <h2>3. 音声入力を使う</h2>
+        <div class="flow" aria-label="音声入力の流れ">
+          <div><b>01</b><span>入力したい場所をクリック</span></div>
+          <div><b>02</b><span><code>Ctrl + Alt + Space</code> で開始</span></div>
+          <div><b>03</b><span>もう一度同じキーで停止</span></div>
+          <div><b>04</b><span>文章が入力欄とクリップボードへ入る</span></div>
+        </div>
+        <p style="margin-top:18px">開始・停止キーは <strong>接続と設定</strong> で変更できます。画面を閉じたあとも、Macはメニューバー、Windowsは通知領域のDOON Voiceアイコンからもう一度開けます。</p>
+        <div class="note"><strong>入力されなかったとき</strong>ホーム画面の <strong>原文をコピー</strong> または <strong>文章をコピー</strong> で文章を回収できます。コピーした内容は、入力したいアプリへ手動で貼り付けてください。</div>
+      </section>
+
+      <section class="section" id="trouble">
+        <h2>4. うまくいかないとき</h2>
+        <table>
+          <tbody>
+            <tr><th>話しても録音が始まらない</th><td>マイクの許可と、音声認識モデルの取得状態を確認してください。開始・停止キーが他のアプリと重なる場合は、接続と設定で変更します。</td></tr>
+            <tr><th>文字は出るが入力欄へ入らない</th><td>MacはアクセシビリティでDOON Voiceがオンか確認します。Windowsは入力先アプリをクリックしてカーソルを置いてから試します。原文をコピーして貼り付ける方法も使えます。</td></tr>
+            <tr><th>アプリが開かない</th><td>警告やエラーの文言を控えて、配布元へ知らせてください。ZIP内のファイルを直接開かず、展開したフォルダから開いているかも確認します。</td></tr>
+            <tr><th>AIの設定ができない</th><td>AIなしなら設定不要です。ChatGPT、Claude、Geminiを使う場合は、それぞれのCLIをPCへ入れてログインします。</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <section class="section">
+        <h2>テスト時に知らせてほしいこと</h2>
+        <ul class="checklist">
+          <li>認識された文章</li>
+          <li>開始から入力までにかかった時間</li>
+          <li>入力先に使ったアプリ</li>
+          <li>エラーや警告が出た場合は、その画面の文言と操作手順</li>
+        </ul>
+      </section>
+    </main>
+    <footer><div class="shell">DOON Voice テスト配布版向けの手順書です。音声認識は端末内で行い、AIなしでは本文を外部AIへ送信しません。</div></footer>
+  </body>
+</html>

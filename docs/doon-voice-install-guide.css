@@ -1,0 +1,114 @@
+:root {
+  --bg: #f5f1e8;
+  --paper: #fffaf0;
+  --ink: #151713;
+  --muted: #625c51;
+  --line: #e8dfcf;
+  --deep: #112f2a;
+  --coral: #db6d5f;
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: "Noto Sans JP", "Hiragino Kaku Gothic ProN", "Yu Gothic", Meiryo, sans-serif;
+  line-height: 1.75;
+}
+
+.shell { width: min(960px, calc(100% - 40px)); margin: 0 auto; }
+
+header { background: var(--deep); border-bottom: 3px solid var(--coral); }
+
+.topline {
+  display: flex;
+  min-height: 76px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--paper);
+}
+
+.brand { display: flex; align-items: center; gap: 14px; }
+.brand img { display: block; width: 78px; height: 46px; object-fit: contain; filter: brightness(0) invert(1); }
+.brand span { border-left: 1px solid rgba(255, 250, 240, .42); padding-left: 14px; font-size: .82rem; font-weight: 700; letter-spacing: .1em; }
+.topline time { color: rgba(255, 250, 240, .78); font-size: .82rem; }
+
+main { padding: 54px 0 72px; }
+h1 { margin: 0; max-width: 820px; font-size: clamp(2rem, 5vw, 4rem); line-height: 1.15; letter-spacing: -.04em; }
+h2 { margin: 0 0 18px; font-size: 1.28rem; }
+h3 { margin: 28px 0 8px; font-size: 1.05rem; }
+p { margin: 0 0 14px; }
+.eyebrow { margin-bottom: 14px; color: var(--deep); font-size: .85rem; font-weight: 700; letter-spacing: .08em; }
+.lead { max-width: 760px; margin-top: 24px; color: var(--muted); font-size: clamp(1.04rem, 2vw, 1.22rem); }
+
+.quick {
+  margin: 38px 0 0;
+  padding: 22px 0;
+  border-block: 3px solid var(--deep);
+}
+
+.quick strong { display: block; font-size: 1.16rem; }
+.quick p { margin: 5px 0 0; }
+
+.toc { margin-top: 30px; padding: 18px 20px; background: var(--paper); border-left: 4px solid var(--coral); }
+.toc a { color: inherit; text-underline-offset: 3px; }
+.toc ol { margin: 8px 0 0; padding-left: 1.3em; }
+
+.section { padding: 34px 0; border-top: 1px solid var(--line); }
+.steps { margin: 0; padding-left: 1.4em; }
+.steps li { margin: 0 0 14px; padding-left: .15em; }
+
+.two-columns { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 28px; }
+.platform { padding: 22px 0 0; border-top: 3px solid var(--deep); }
+.platform p { color: var(--muted); }
+
+.note, .warning {
+  margin-top: 18px;
+  padding: 15px 18px;
+  border-left: 4px solid var(--deep);
+  background: var(--paper);
+}
+
+.warning { border-left-color: var(--coral); }
+.note strong, .warning strong { display: block; margin-bottom: 3px; }
+
+code {
+  padding: .08em .35em;
+  background: #eee7da;
+  border-radius: 3px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .9em;
+}
+
+.flow { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--line); border-left: 1px solid var(--line); }
+.flow div { min-height: 106px; padding: 16px; background: var(--paper); border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.flow b { display: block; color: var(--deep); font-size: .84rem; letter-spacing: .06em; }
+.flow span { display: block; margin-top: 5px; font-weight: 700; }
+
+table { width: 100%; border-collapse: collapse; background: var(--paper); }
+th, td { padding: 14px 16px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+th { width: 30%; color: var(--muted); font-weight: 700; }
+
+.checklist { margin: 0; padding-left: 1.3em; }
+.checklist li { margin-bottom: 8px; }
+
+footer { border-top: 1px solid var(--line); padding: 22px 0 42px; color: var(--muted); font-size: .88rem; }
+
+@media (max-width: 680px) {
+  .shell { width: min(100% - 28px, 960px); }
+  .topline { min-height: 68px; }
+  .brand { gap: 10px; }
+  .brand img { width: 66px; height: 40px; }
+  .brand span { padding-left: 10px; font-size: .72rem; }
+  .topline time { font-size: .72rem; }
+  main { padding-top: 38px; }
+  .two-columns { grid-template-columns: 1fr; gap: 20px; }
+  .flow { grid-template-columns: repeat(2, 1fr); }
+  th, td { display: block; width: 100%; padding: 11px 14px; }
+  th { padding-bottom: 2px; }
+}
