@@ -214,6 +214,20 @@ try {
     await page.close();
   });
 
+  await check("選択中の音声質問が失敗しても質問ポップアップに理由を表示する", async () => {
+    const page = await pageFor();
+    await page.evaluate(() => window.fixture.emit("selection-question-error", {
+      selection: "選択された説明文です。",
+      question: "これは何ですか",
+      error: "ChatGPTの応答が時間切れになりました。",
+    }));
+    const dialog = page.getByRole("dialog", { name: "選択した文章を質問" });
+    await dialog.waitFor();
+    assert.equal(await page.getByRole("textbox", { name: "選択した文章への質問" }).inputValue(), "これは何ですか");
+    await page.getByText("ChatGPTの応答が時間切れになりました。", { exact: true }).waitFor();
+    await page.close();
+  });
+
   await check("RCS-006: failed copy preserves original; successful copy acknowledges recovery", async () => {
     const page = await pageFor({ snapshot: recovery });
     await page.evaluate(() => { window.fixture.clipboardFails = true; });
