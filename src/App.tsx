@@ -1,3 +1,4 @@
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -178,6 +179,14 @@ function MainApp() {
   const [installationNow, setInstallationNow] = useState(() => Date.now());
   const [microphonePermissionState, setMicrophonePermissionState] = useState<MicrophonePermission>("unknown");
   const [notice, setNotice] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshingRef = useRef(false);
+  const [refreshToast, setRefreshToast] = useState("");
+  const refreshToastTimerRef = useRef<number | null>(null);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [latestAppVersion, setLatestAppVersion] = useState<string | null>(null);
+  const [updateCheckedAt, setUpdateCheckedAt] = useState<number | null>(null);
+  const [updateCheckError, setUpdateCheckError] = useState("");
   const [updatingApp, setUpdatingApp] = useState(false);
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
@@ -234,6 +243,16 @@ function MainApp() {
   const questionComposingRef = useRef(false);
 
   useEffect(() => { void refreshAll(); }, []);
+  useEffect(() => {
+    if (!isTauriApp()) {
+      setAppVersion("開発版");
+      return;
+    }
+    void getVersion().then(setAppVersion).catch(() => setAppVersion("確認できません"));
+  }, []);
+  useEffect(() => () => {
+    if (refreshToastTimerRef.current !== null) window.clearTimeout(refreshToastTimerRef.current);
+  }, []);
   useEffect(() => { window.localStorage.removeItem("doon-voice-history"); }, []);
   useEffect(() => { window.scrollTo(0, 0); }, [view]);
   useEffect(() => {
@@ -384,21 +403,48 @@ function MainApp() {
     }
   }
 
-  async function refreshAll() {
-    await Promise.all([
-      ...providers.map(async ({ id }) => {
-        try {
-          const status = await appInvoke<ProviderStatus>("provider_status", { provider: id });
-          setStatuses((current) => ({ ...current, [id]: status }));
-          completePendingConnection(id, status);
-        } catch {
-          setStatuses((current) => ({ ...current, [id]: null }));
-        }
-      }),
-      appInvoke<LocalLlmStatus>("local_llm_status").then(setLocal).catch(() => setLocal(null)),
-      appInvoke<TranscriptionStatus>("transcription_status").then(setTranscription).catch(() => setTranscription(null)),
-      appInvoke<boolean>("direct_input_status").then(setDirectInputAllowed).catch(() => setDirectInputAllowed(null)),
-    ]);
+  function showRefreshToast(message: string) {
+    if (refreshToastTimerRef.current !== null) window.clearTimeout(refreshToastTimerRef.current);
+    setRefreshToast(message);
+    refreshToastTimerRef.current = window.setTimeout(() => {
+      setRefreshToast("");
+      refreshToastTimerRef.current = null;
+    }, 3500);
+  }
+
+  async function refreshAll(manual = false) {
+    if (refreshingRef.current) return;
+    refreshingRef.current = true;
+    setRefreshing(true);
+    try {
+      await Promise.all([
+        ...providers.map(async ({ id }) => {
+          try {
+            const status = await appInvoke<ProviderStatus>("provider_status", { provider: id });
+            setStatuses((current) => ({ ...current, [id]: status }));
+            completePendingConnection(id, status);
+          } catch {
+            setStatuses((current) => ({ ...current, [id]: null }));
+          }
+        }),
+        appInvoke<LocalLlmStatus>("local_llm_status").then(setLocal).catch(() => setLocal(null)),
+        appInvoke<TranscriptionStatus>("transcription_status").then(setTranscription).catch(() => setTranscription(null)),
+        appInvoke<boolean>("direct_input_status").then(setDirectInputAllowed).catch(() => setDirectInputAllowed(null)),
+        microphonePermission().then(setMicrophonePermissionState).catch(() => setMicrophonePermissionState("unknown")),
+      ]);
+      if (manual) showRefreshToast("状態を更新しました");
+    } finally {
+      refreshingRef.current = false;
+      setRefreshing(false);
+    }
+  }
+
+  async function findAppUpdate() {
+    const update = await check({ timeout: 30_000 });
+    setUpdateCheckedAt(Date.now());
+    setUpdateCheckError("");
+    setLatestAppVersion(update?.version ?? appVersion);
+    return update;
   }
 
   async function updateApp() {
@@ -410,7 +456,7 @@ function MainApp() {
     setUpdatingApp(true);
     setNotice("更新を確認しています");
     try {
-      const update = await check({ timeout: 30_000 });
+      const update = await findAppUpdate();
       if (!update) {
         setNotice("DOON Voiceは最新版です");
         return;
@@ -423,7 +469,9 @@ function MainApp() {
       setNotice(`v${update.version}を適用しました。再起動します`);
       await relaunch();
     } catch (error) {
-      setNotice(errorMessage(error, "更新を確認できませんでした。時間をおいてもう一度試してください"));
+      const message = errorMessage(error, "更新を確認できませんでした。時間をおいてもう一度試してください");
+      setUpdateCheckError(message);
+      setNotice(message);
     } finally {
       setUpdatingApp(false);
     }
@@ -965,7 +1013,7 @@ function MainApp() {
     </aside>
 
     <section className="main-canvas">
-      <header className="main-bar"><span>{view === "home" ? "DOON VOICE" : view === "dictionary" ? "DICTIONARY" : "SETTINGS"}</span><div className="top-status"><span><i className={selectedOutput.ready ? "status-dot is-ready" : "status-dot"} />{selectedOutput.label}</span><span className="top-status-detail">{selectedOutput.detail}</span><button className="icon-button" type="button" onClick={() => void refreshAll()} aria-label="状態を更新"><RefreshCw size={16} strokeWidth={1.9} /></button></div></header>
+      <header className="main-bar"><span>{view === "home" ? "DOON VOICE" : view === "dictionary" ? "DICTIONARY" : "SETTINGS"}</span><div className="top-status"><span><i className={selectedOutput.ready ? "status-dot is-ready" : "status-dot"} />{selectedOutput.label}</span><span className="top-status-detail">{selectedOutput.detail}</span><button className="icon-button" type="button" onClick={() => void refreshAll(true)} disabled={refreshing} aria-label={refreshing ? "状態を更新中" : "状態を更新"}><RefreshCw className={refreshing ? "is-spinning" : undefined} size={16} strokeWidth={1.9} /></button></div></header>
 
       {view === "home" && <section className="home-view" aria-labelledby="home-title">
         <section className={recording ? "voice-stage is-recording" : "voice-stage"} aria-label="音声入力">
@@ -1042,12 +1090,14 @@ function MainApp() {
             <button className={selectionQuestionTarget === "local" ? "is-selected" : ""} type="button" role="radio" aria-checked={selectionQuestionTarget === "local"} disabled={busy} onClick={() => chooseSelectionQuestionTarget("local")}><BrandGlyph name="dx" /><span><strong>このPCのAI</strong><small>Gemma 4 E2Bで答える</small></span>{selectionQuestionTarget === "local" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
           </div>
         </section>
-        <div className="settings-list"><article><span className="setting-icon"><RefreshCw size={22} strokeWidth={1.8} /></span><div><h2>アプリの更新</h2><p>Google Driveにある最新版を確認して、このアプリへ適用します。</p></div><span className="setting-state state-permitted"><Check size={15} strokeWidth={2.3} />設定済み</span><button className="outline-action" type="button" onClick={() => void updateApp()} disabled={updatingApp}>{updatingApp ? "更新中" : "更新を確認"} <RefreshCw size={15} /></button></article></div>
+        <div className="settings-list"><article className="app-update-row"><span className="setting-icon"><RefreshCw size={22} strokeWidth={1.8} /></span><div><h2>アプリの更新</h2><p>現在の版: {appVersion === null ? "確認中" : appVersion === "開発版" || appVersion === "確認できません" ? appVersion : `v${appVersion}`}</p><p>{updateCheckError ? `確認エラー: ${updateCheckError}` : updateCheckedAt === null ? "最新版はまだ確認していません。" : latestAppVersion && latestAppVersion !== appVersion ? `確認した最新版: v${latestAppVersion}` : `確認結果: 現在の版が最新版です（${new Date(updateCheckedAt).toLocaleString("ja-JP")}）`}</p></div><span className={latestAppVersion && latestAppVersion !== appVersion ? "setting-state state-available" : "setting-state state-permitted"}>{latestAppVersion && latestAppVersion !== appVersion ? <Download size={15} strokeWidth={2} /> : <Check size={15} strokeWidth={2.3} />}{latestAppVersion && latestAppVersion !== appVersion ? `v${latestAppVersion}あり` : "自動更新対応"}</span><button className="outline-action" type="button" onClick={() => void updateApp()} disabled={updatingApp}>{updatingApp ? "更新中" : "更新を確認"} <RefreshCw className={updatingApp ? "is-spinning" : undefined} size={15} /></button></article></div>
         <div className="settings-list direct-input-settings"><article><span className="setting-icon"><BrandGlyph name="move" /></span><div><h2>カーソル位置へ入力</h2><p>{directInputAllowed ? "ほかのアプリへ直接入力できます。" : "macOSのアクセシビリティ許可が必要です。"}</p></div><span className={directInputAllowed ? "setting-state state-permitted" : "setting-state state-unavailable"}>{directInputAllowed ? <Check size={15} strokeWidth={2.3} /> : <CircleAlert size={15} strokeWidth={2} />}{directInputAllowed ? "許可済み" : "未許可"}</span>{isMac ? <button className="outline-action" type="button" onClick={() => void (directInputAllowed ? openDirectInputSettings() : requestDirectInputPermission())}>{directInputAllowed ? "設定を開く" : "許可する"} <ExternalLink size={15} /></button> : <span />}</article></div>
         <div className="settings-list microphone-settings"><article><span className="setting-icon"><Mic size={22} strokeWidth={1.8} /></span><div><h2>マイク</h2><p>{microphonePermissionState === "granted" ? "このPCのマイクを使えます。" : microphonePermissionState === "unsupported" ? "この環境ではマイクを使えません。" : "初回にこのボタンからマイクを許可します。"}</p></div><span className={microphonePermissionState === "granted" ? "setting-state state-permitted" : "setting-state state-unavailable"}>{microphonePermissionState === "granted" ? <Check size={15} strokeWidth={2.3} /> : <CircleAlert size={15} strokeWidth={2} />}{microphonePermissionState === "granted" ? "許可済み" : microphonePermissionState === "unsupported" ? "利用不可" : "許可が必要"}</span><button className="outline-action" type="button" onClick={() => void requestMicrophonePermission()} disabled={microphonePermissionState === "granted" || microphonePermissionState === "unsupported"}>{microphonePermissionState === "granted" ? "許可済み" : "マイクを許可する"} <Mic size={15} /></button></article></div>
         <div className="settings-list transcription-settings"><article><span className="setting-icon"><BrandGlyph name="work" /></span><div><h2>音声認識</h2><p>{transcription?.downloaded ? "日本語音声認識をこのPCで行います。" : "話した言葉を文字にする日本語モデルです。"}</p>{progressFor("transcription") && <div className="installation-progress" role="status"><span>{progressFor("transcription")?.phase}</span><strong>{installationProgressLabel(progressFor("transcription")!, installationNow)}</strong><i aria-hidden="true"><b style={{ width: `${progressPercent("transcription") ?? 8}%` }} /></i></div>}</div><span className={transcription?.downloaded ? "setting-state state-installed" : "setting-state state-unavailable"}>{transcription?.downloaded ? <Check size={15} strokeWidth={2.3} /> : <Download size={15} strokeWidth={2} />}{transcription?.downloaded ? "モデル取得済み" : downloadingTranscription ? `${progressPercent("transcription") ?? "…"}%` : transcription?.size || "未取得"}</span>{transcription?.downloaded ? <span /> : <button className="outline-action" type="button" onClick={() => void downloadTranscriptionModel()} disabled={downloadingTranscription}>{downloadingTranscription ? "取得中" : "モデルを取得"} <Download size={15} /></button>}</article></div>
         <div className="settings-list">{providers.map(({ id, label, glyph }) => { const status = providerDisplayState(id, false); const connecting = connectingProviders[id]; const loggedIn = connectedProviders[id] && statuses[id]?.authenticated; const unavailable = statuses[id]?.usability === "unavailable"; const detail = id === "codex" ? "GPT-5.6 Lunaで高速整形" : id === "gemini" ? "Gemini 3.6 Flash (Low)で高速整形" : unavailable ? "現在の契約ではClaude Codeを利用できません" : "Claude Haikuで高速整形"; return <article key={id}><span className="setting-icon"><BrandGlyph name={glyph} /></span><div><h2>{label}</h2><p>{detail}</p></div><span className={`setting-state ${status.className}`}>{connecting ? <span className="state-connecting-mark" aria-hidden="true" /> : unavailable ? <CircleAlert size={15} strokeWidth={2} /> : loggedIn ? <Check size={15} strokeWidth={2.3} /> : statuses[id]?.installed ? <span className="state-ring" aria-hidden="true" /> : <CircleAlert size={15} strokeWidth={2} />}{status.label}</span><button className="outline-action" type="button" onClick={() => void connect(id)} disabled={connecting}>{connecting ? "ログイン中" : loggedIn ? "再ログイン" : "ログインする"} {!connecting && <ExternalLink size={15} strokeWidth={1.9} />}</button></article>; })}<article><span className="setting-icon"><BrandGlyph name="dx" /></span><div><h2>ローカルAI</h2><p>{localReady ? "Gemma 4 E2BがこのPCで稼働中です。" : "Gemma 4 E2BをDOON Voice用に取得します。"}</p>{(progressFor("ollama") || progressFor("local_model")) && <div className="installation-progress" role="status"><span>{(progressFor("ollama") || progressFor("local_model"))?.phase}</span><strong>{installationProgressLabel((progressFor("ollama") || progressFor("local_model"))!, installationNow)}</strong><i aria-hidden="true"><b style={{ width: `${progressPercent("ollama") ?? progressPercent("local_model") ?? 8}%` }} /></i></div>}</div><span className={localReady ? "setting-state state-running" : "setting-state state-unavailable"}>{localReady ? <span className="state-live-dot" aria-hidden="true" /> : <WifiOff size={15} strokeWidth={2} />}{localReady ? "稼働中" : installingOllama || pullingLocalModel ? `${progressPercent("ollama") ?? progressPercent("local_model") ?? "…"}%` : "未準備"}</span>{!local?.installed ? <button className="outline-action" type="button" onClick={() => void installOllama()} disabled={installingOllama}>{installingOllama ? "Ollamaを取得中" : "Ollamaを自動インストール"} <Download size={15} /></button> : !localModel?.installed ? <button className="outline-action" type="button" onClick={() => void pullModel()} disabled={pullingLocalModel}>{pullingLocalModel ? "取得中" : "Gemmaを取得"} <Download size={15} /></button> : <span />}</article><article className="shortcut-row"><span className="setting-icon"><BrandGlyph name="speed" /></span><div><h2>開始・停止キー</h2><p>{capturingShortcut ? "押した組み合わせを登録します。Escで取り消せます。" : "通常の音声入力の開始と停止"}</p></div><button ref={shortcutButtonRef} className={capturingShortcut ? "shortcut-key is-capturing" : "shortcut-key"} type="button" onClick={() => void beginShortcutCapture()} aria-label="開始・停止キーを変更" aria-pressed={capturingShortcut}>{capturingShortcut ? "キーを押す" : shortcutLabel(shortcut, navigator.userAgent.includes("Mac"))}</button><button className="outline-action" type="button" onClick={() => void applyShortcut(DEFAULT_SHORTCUT)}>標準に戻す</button></article><article className="shortcut-row"><span className="setting-icon"><BrandGlyph name="speed" /></span><div><h2>選択文・画面を質問するキー</h2><p>{capturingSelectionQuestionShortcut ? "押した組み合わせを登録します。Escで取り消せます。" : "選択中の文章、または前面の画面へ音声で質問"}</p></div><button ref={selectionQuestionShortcutButtonRef} className={capturingSelectionQuestionShortcut ? "shortcut-key is-capturing" : "shortcut-key"} type="button" onClick={() => void beginSelectionQuestionShortcutCapture()} aria-label="選択文・画面を質問するキーを変更" aria-pressed={capturingSelectionQuestionShortcut}>{capturingSelectionQuestionShortcut ? "キーを押す" : shortcutLabel(selectionQuestionShortcut, navigator.userAgent.includes("Mac"))}</button><button className="outline-action" type="button" onClick={() => void applySelectionQuestionShortcut(DEFAULT_SELECTION_QUESTION_SHORTCUT)}>標準に戻す</button></article></div>{notice && <p className="notice" role="status">{notice}</p>}</section>}
     </section>
+
+    {refreshToast && <div className="refresh-toast" role="status"><Check size={16} strokeWidth={2.2} />{refreshToast}</div>}
 
     {questionOpen && <div className="question-backdrop" role="presentation">
       <section className="question-dialog" role="dialog" aria-modal="true" aria-labelledby="selection-question-title">

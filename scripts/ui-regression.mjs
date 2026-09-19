@@ -109,6 +109,7 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
         case "retry_voice_processing": f.publish({ state: "processing" }); return;
         case "ack_voice_result": f.publish({ clipboard_saved: true, recovery_pending: false }); return;
         case "clear_voice_result": f.publish(idle); return;
+        case "plugin:app|version": return "0.5.38";
         case "plugin:event|listen": { const id = nextId++; listeners.set(id, args); return id; }
         case "plugin:event|unlisten": listeners.delete(args.eventId); return;
         default: throw new Error(`Unexpected desktop command: ${command}`);
@@ -560,6 +561,26 @@ try {
       await page.close();
     });
   }
+
+  await check("状態更新ボタンは再確認の完了を通知する", async () => {
+    const page = await pageFor();
+    await page.getByRole("button", { name: "状態を更新" }).click();
+    await page.getByRole("status").filter({ hasText: "状態を更新しました" }).waitFor();
+    assert.equal(await page.getByRole("button", { name: "状態を更新" }).isEnabled(), true);
+    await page.close();
+  });
+
+  await check("更新欄に現在の版と確認結果を表示する", async () => {
+    const page = await pageFor();
+    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await page.getByText("現在の版: v0.5.38", { exact: true }).waitFor();
+    await page.getByText("最新版はまだ確認していません。", { exact: true }).waitFor();
+    await page.screenshot({ path: path.join(artifacts, "settings-update-version-desktop.png"), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.screenshot({ path: path.join(artifacts, "settings-update-version-mobile.png"), fullPage: true });
+    await page.close();
+  });
 
   await check("RCS-013: dictionary accepts 100 and rejects 101 with visible reason", async () => {
     const page = await pageFor({ dictionary: Array.from({ length: 99 }, (_, i) => `語${i}`) });

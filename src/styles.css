@@ -50,6 +50,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .top-status > span { display: inline-flex; align-items: center; gap: 7px; }
 .icon-button { display: grid; width: 40px; height: 40px; place-items: center; border: 0; color: var(--muted); background: transparent; }
 .icon-button:hover { color: var(--deep); background: var(--paper-tint); }
+.icon-button .is-spinning { animation: state-spin 800ms linear infinite; }
+.refresh-toast { position: fixed; z-index: 30; right: 24px; bottom: 24px; display: inline-flex; align-items: center; gap: 8px; min-height: 42px; max-width: min(360px, calc(100vw - 32px)); border: 1px solid var(--deep); border-radius: 6px; padding: 0 14px; color: var(--paper); background: var(--deep); box-shadow: 0 12px 30px rgba(8, 31, 27, .22); font-size: 12px; font-weight: 700; }
 
 .home-view, .simple-view { width: min(100%, 980px); margin: 0 auto; padding: clamp(32px, 4vw, 48px) clamp(28px, 6vw, 72px) 64px; }
 .voice-stage { display: grid; justify-items: center; border-bottom: 1px solid var(--line-strong); padding: 0 0 clamp(34px, 4vw, 46px); text-align: center; }
@@ -152,6 +154,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .setting-icon .brand-glyph { width: 32px; height: 32px; }
 .settings-list h2 { margin: 0; color: var(--deep); font-size: 13px; letter-spacing: -.025em; }
 .settings-list p { margin: 3px 0 0; color: var(--muted); font-size: 10px; }
+.app-update-row > div p + p { margin-top: 5px; color: var(--deep); }
 .setting-state { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 10px; font-weight: 600; white-space: nowrap; }
 .setting-state.state-available { color: #416359; }
 .setting-state.state-connected { color: #197456; font-weight: 800; }
@@ -207,6 +210,7 @@ html.is-overlay, html.is-overlay body, html.is-overlay #root { width: 100%; min-
   .local-state { display: none; }
   .main-canvas { min-height: calc(100vh - 64px); grid-template-rows: 48px minmax(0, 1fr); }
   .main-bar { padding-inline: 18px; }
+  .refresh-toast { right: 12px; bottom: 12px; }
   .top-status > span:nth-child(2) { display: none; }
   .home-view, .simple-view { padding: 30px 20px 58px; }
   .voice-stage { padding-bottom: 34px; }
