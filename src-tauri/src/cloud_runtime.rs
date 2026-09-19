@@ -266,7 +266,7 @@ impl JsonLineProcess {
             // already exited. stdin may still hold another sender open.
             // Give stderr a bounded chance to finish; inherited pipes must
             // not keep a failed CLI waiting until the full request deadline.
-            let _ = stderr_done.recv_timeout(Duration::from_millis(100));
+            let _ = stderr_done.recv_timeout(Duration::from_millis(500));
             let _ = sender.send(JsonLineEvent::OutputClosed);
         });
 
