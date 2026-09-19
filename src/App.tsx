@@ -973,7 +973,7 @@ function MainApp() {
           <h1 id="home-title"><em>AIで</em>言語化をイージーに</h1>
           <p>{recording ? `音声入力中 · ${duration(elapsed)}` : starting ? "マイクを準備しています" : processing ? "音声を処理しています" : "どのアプリにも、そのまま入力。"}</p>
           <button className="record-button" type="button" onClick={() => void toggleRecording()} disabled={starting || processing || (!recording && (configSaving > 0 || Boolean(configError) || Boolean(existingDictionaryError)))} aria-label={recording ? "音声入力を停止" : "音声入力を開始"}><span className="record-button-icon"><Mic size={27} strokeWidth={1.8} /></span><strong>{recording ? "停止" : "話す"}</strong><small>{shortcutLabel(shortcut, isMac)}</small></button>
-          <button className="selection-question-button" type="button" onClick={() => void openSelectionQuestion()} disabled={busy} aria-label="選択した文章または画面を質問">選択した文章・画面を質問</button>
+          <button className="selection-question-button" type="button" onClick={() => void openSelectionQuestion()} disabled={busy} aria-label="選択した文章または画面を質問または編集">選択した文章・画面を質問・編集</button>
           {(starting || processing) && <button className="outline-action cancel-processing" type="button" onClick={() => void resultAction("cancel_voice_processing")} disabled={resultActionPending} aria-label="処理を取り消す">取り消す</button>}
           {recoveryPending && !busy && <p className="recovery-state">前回の結果はコピーできます。続けて音声入力できます。</p>}
           {existingDictionaryError && <p className="recovery-state" role="alert">辞書に修正が必要です <button className="outline-action" type="button" onClick={() => navigate("dictionary")}>辞書を確認</button></p>}
@@ -1033,9 +1033,9 @@ function MainApp() {
           {configurationNotice}
         </section>
         <section className="output-settings" aria-labelledby="selection-question-settings-title">
-          <div className="output-settings-heading"><span>SELECTION QUESTION</span><h2 id="selection-question-settings-title">選択文・画面を質問するAI</h2></div>
-          <p className="settings-help">おすすめはChatGPT、Claude、Geminiです。調査や最新情報の確認には、クラウドAIを選びます。</p>
-          <div className="output-choice-list" role="radiogroup" aria-label="選択文・画面を質問するAI">
+          <div className="output-settings-heading"><span>SELECTION ASSIST</span><h2 id="selection-question-settings-title">選択文・画面を質問・編集するAI</h2></div>
+          <p className="settings-help">おすすめはChatGPT、Claude、Geminiです。質問、要約、翻訳、文体調整にはクラウドAIを選びます。</p>
+          <div className="output-choice-list" role="radiogroup" aria-label="選択文・画面を質問・編集するAI">
             <button className={selectionQuestionTarget === "codex" ? "is-selected" : ""} type="button" role="radio" aria-checked={selectionQuestionTarget === "codex"} disabled={busy} onClick={() => chooseSelectionQuestionTarget("codex")}><BrandGlyph name="spark" /><span><strong>ChatGPT</strong><small>クラウドAIで調べて答える</small></span>{selectionQuestionTarget === "codex" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
             <button className={selectionQuestionTarget === "claude" ? "is-selected" : ""} type="button" role="radio" aria-checked={selectionQuestionTarget === "claude"} disabled={busy} onClick={() => chooseSelectionQuestionTarget("claude")}><BrandGlyph name="coach" /><span><strong>Claude</strong><small>Claude Codeで答える</small></span>{selectionQuestionTarget === "claude" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
             <button className={selectionQuestionTarget === "gemini" ? "is-selected" : ""} type="button" role="radio" aria-checked={selectionQuestionTarget === "gemini"} disabled={busy} onClick={() => chooseSelectionQuestionTarget("gemini")}><BrandGlyph name="loop" /><span><strong>Gemini</strong><small>Antigravityで答える</small></span>{selectionQuestionTarget === "gemini" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
@@ -1059,7 +1059,7 @@ function MainApp() {
         {questionError && <p className="question-error" role="alert">{questionError}</p>}
         <div className="question-compose">
           <textarea ref={questionInputRef} value={questionDraft} disabled={questionPhase === "recording" || questionPhase === "transcribing" || questionPhase === "answering"} onChange={(event) => setQuestionDraft(event.target.value)} onCompositionStart={() => { questionComposingRef.current = true; }} onCompositionEnd={() => { questionComposingRef.current = false; }} onKeyDown={questionKeyDown} placeholder="質問を入力" aria-label="選択した文章への質問" />
-          <div className="question-compose-actions"><button className={questionPhase === "recording" ? "outline-action is-recording" : "outline-action"} type="button" onClick={() => void toggleQuestionVoice()} disabled={questionPhase === "transcribing" || questionPhase === "answering"}>{questionPhase === "recording" ? "録音を止める" : "音声で質問"}</button><button className="outline-action question-send" type="button" onClick={() => void askSelectionQuestion()} disabled={!questionDraft.trim() || questionPhase === "recording" || questionPhase === "transcribing" || questionPhase === "answering"}>質問する</button></div>
+          <div className="question-compose-actions"><button className={questionPhase === "recording" ? "outline-action is-recording" : "outline-action"} type="button" onClick={() => void toggleQuestionVoice()} disabled={questionPhase === "transcribing" || questionPhase === "answering"}>{questionPhase === "recording" ? "録音を止める" : "音声で質問"}</button><button className="outline-action question-send" type="button" onClick={() => void askSelectionQuestion()} disabled={!questionDraft.trim() || questionPhase === "recording" || questionPhase === "transcribing" || questionPhase === "answering"}>実行する</button></div>
         </div>
         {questionAnswer && <div className="question-answer-actions"><button className="outline-action" type="button" onClick={() => void copyQuestionAnswer()}>回答をコピー</button><button className="outline-action question-send" type="button" onClick={() => void pasteQuestionAnswer()}>カーソル位置へ入力</button></div>}
       </section>
@@ -1158,12 +1158,12 @@ function SelectionQuestionPopup() {
 
   return <main className="selection-question-popup-shell">
     <section className="selection-question-popup" role="dialog" aria-modal="false" aria-labelledby="selection-question-popup-title">
-      <header className="question-dialog-header"><div><span>{payload?.context_kind === "screen" ? "ASK WITH SCREEN" : "ASK WITH SELECTION"}</span><h2 id="selection-question-popup-title">{payload?.context_kind === "screen" ? "前面の画面を質問" : "選択した文章を質問"}</h2></div><button className="icon-button" type="button" onClick={() => void appInvoke("close_selection_question_popup")} aria-label="質問を閉じる"><X size={19} strokeWidth={2} /></button></header>
+      <header className="question-dialog-header"><div><span>{payload?.context_kind === "screen" ? "ASK WITH SCREEN" : "ASK WITH SELECTION"}</span><h2 id="selection-question-popup-title">{payload?.context_kind === "screen" ? "前面の画面を質問" : "選択した文章を質問・編集"}</h2></div><button className="icon-button" type="button" onClick={() => void appInvoke("close_selection_question_popup")} aria-label="質問を閉じる"><X size={19} strokeWidth={2} /></button></header>
       {!payload && !error && <p className="question-progress" role="status">回答を準備しています</p>}
       {payload && <><p className="question-selection" aria-label={payload.context_kind === "screen" ? "読み取った画面" : "選択した文章"}>{payload.selection}</p>
         {answer && <section className="question-answer" aria-live="polite"><span>ANSWER</span><div>{answer}</div></section>}
         {error && <p className="question-error" role="alert">{error}</p>}
-        <div className="question-compose"><textarea ref={inputRef} value={question} disabled={answering} onChange={(event) => setQuestion(event.target.value)} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={() => { composingRef.current = false; }} onKeyDown={onQuestionKeyDown} placeholder="質問を入力" aria-label={payload.context_kind === "screen" ? "画面への質問" : "選択した文章への質問"} /><div className="question-compose-actions"><button className="outline-action question-send" type="button" onClick={() => void ask()} disabled={!question.trim() || answering}>{answering ? "回答を作成中" : "質問する"}</button></div></div>
+        <div className="question-compose"><textarea ref={inputRef} value={question} disabled={answering} onChange={(event) => setQuestion(event.target.value)} onCompositionStart={() => { composingRef.current = true; }} onCompositionEnd={() => { composingRef.current = false; }} onKeyDown={onQuestionKeyDown} placeholder="質問または編集指示を入力" aria-label={payload.context_kind === "screen" ? "画面への質問" : "選択した文章への質問または編集指示"} /><div className="question-compose-actions"><button className="outline-action question-send" type="button" onClick={() => void ask()} disabled={!question.trim() || answering}>{answering ? "処理中" : "実行する"}</button></div></div>
         {answer && <div className="question-answer-actions"><button className="outline-action" type="button" onClick={() => void copyAnswer()}>回答をコピー</button></div>}
       </>}
       {notice && <p className="notice" role="status">{notice}</p>}

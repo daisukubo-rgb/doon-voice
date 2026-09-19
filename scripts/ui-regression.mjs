@@ -188,21 +188,21 @@ try {
     const page = await pageFor({ local: { installed: true, running: true, models: [{ id: "gemma4_e2b", name: "Gemma 4 E2B", size: "7.2 GB", installed: true }] } });
     await page.getByRole("button", { name: "接続と設定", exact: true }).click();
     await page.getByRole("radiogroup", { name: "文章を整えるAI" }).getByRole("radio", { name: /このPCのAI/ }).click();
-    await page.getByRole("radiogroup", { name: "選択文・画面を質問するAI" }).getByRole("radio", { name: /Gemini/ }).click();
+    await page.getByRole("radiogroup", { name: "選択文・画面を質問・編集するAI" }).getByRole("radio", { name: /Gemini/ }).click();
     await page.waitForFunction(() => window.fixture.activeTarget === "local" && window.fixture.activeSelectionQuestionTarget === "gemini");
     const settingsCall = await page.evaluate(() => window.fixture.calls.filter(({ command }) => command === "configure_background_voice").at(-1));
     assert.equal(settingsCall.args.target, "local");
     assert.equal(settingsCall.args.selectionQuestionTarget, "gemini");
     await page.getByRole("button", { name: "ホーム", exact: true }).click();
-    await page.getByRole("button", { name: "選択した文章または画面を質問", exact: true }).click();
+    await page.getByRole("button", { name: "選択した文章または画面を質問または編集", exact: true }).click();
     await page.getByRole("textbox", { name: "選択した文章への質問" }).fill("これは何ですか");
-    await page.getByRole("button", { name: "質問する", exact: true }).click();
+    await page.getByRole("button", { name: "実行する", exact: true }).click();
     await page.waitForFunction(() => window.fixture.calls.some(({ command, args }) => command === "answer_selection_question" && args.target === "gemini"));
     await page.close();
   });
 
   async function openSelectionQuestion(page) {
-    await page.getByRole("button", { name: "選択した文章または画面を質問", exact: true }).click();
+    await page.getByRole("button", { name: "選択した文章または画面を質問または編集", exact: true }).click();
     await page.getByRole("dialog", { name: "選択した文章を質問" }).waitFor();
     return page.getByRole("textbox", { name: "選択した文章への質問" });
   }
@@ -243,7 +243,7 @@ try {
     const page = await pageFor();
     const input = await openSelectionQuestion(page);
     await input.fill("これは何ですか");
-    await page.getByRole("button", { name: "質問する", exact: true }).click();
+    await page.getByRole("button", { name: "実行する", exact: true }).click();
     await page.getByText("選択文を根拠にした回答です。", { exact: true }).waitFor();
     await page.getByRole("button", { name: "回答をコピー", exact: true }).click();
     assert.equal(await page.evaluate(() => window.fixture.clipboard), "選択文を根拠にした回答です。");
@@ -289,7 +289,7 @@ try {
     await page.getByRole("dialog", { name: "前面の画面を質問" }).waitFor();
     const input = page.getByRole("textbox", { name: "画面への質問" });
     await input.fill("この画面の要点は何ですか");
-    await page.getByRole("button", { name: "質問する", exact: true }).click();
+    await page.getByRole("button", { name: "実行する", exact: true }).click();
     await page.waitForFunction(() => window.fixture.calls.some(({ command }) => command === "answer_open_question"));
     await page.close();
   });
@@ -325,7 +325,7 @@ try {
   await check("recovery keeps voice input usable without discarding", async () => {
     const page = await pageFor({ snapshot: recovery });
     assert.equal(await page.getByRole("button", { name: "音声入力を開始" }).isEnabled(), true);
-    assert.equal(await page.getByRole("button", { name: "選択した文章または画面を質問" }).isEnabled(), true);
+    assert.equal(await page.getByRole("button", { name: "選択した文章または画面を質問または編集" }).isEnabled(), true);
     await page.getByRole("button", { name: "音声入力を開始" }).click();
     await page.waitForFunction(() => window.fixture.calls.some(({ command }) => command === "toggle_background_voice"));
     assert.equal(await page.evaluate(() => window.fixture.snapshot.recovery_pending), true);
@@ -657,7 +657,7 @@ try {
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${label}-${view}: horizontal overflow`);
       }
       await page.getByRole("button", { name: "ホーム", exact: true }).click();
-      await page.getByRole("button", { name: "選択した文章または画面を質問", exact: true }).click();
+      await page.getByRole("button", { name: "選択した文章または画面を質問または編集", exact: true }).click();
       await page.screenshot({ path: path.join(artifacts, `${label}-selection-question.png`), fullPage: true });
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${label}-selection-question: horizontal overflow`);
       await page.getByRole("button", { name: "質問を閉じる", exact: true }).click();
