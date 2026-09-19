@@ -27,8 +27,10 @@ export function createUpdateManifest({ artifactsDirectory, outputPath, repositor
     if (asset.length !== 1) throw new Error(`${filename}は1件必要です。検出: ${asset.length}件`);
     const signature = `${asset[0]}.sig`;
     if (!existsSync(signature)) throw new Error(`署名がありません: ${signature}`);
+    // GitHub Release replaces spaces in uploaded asset names with periods.
+    const releaseFilename = filename.replaceAll(" ", ".");
     platforms[platform] = {
-      url: `https://github.com/${repository}/releases/download/${tag}/${encodeURIComponent(filename)}`,
+      url: `https://github.com/${repository}/releases/download/${tag}/${encodeURIComponent(releaseFilename)}`,
       signature: readFileSync(signature, "utf8").trim(),
     };
   }

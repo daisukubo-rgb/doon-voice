@@ -193,6 +193,7 @@ test("最新版マニフェストは3機種の署名付きGitHub Releaseを参�
   assert.deepEqual(Object.keys(manifest.platforms).sort(), ["darwin-aarch64", "darwin-x86_64", "windows-x86_64"]);
   for (const entry of Object.values(manifest.platforms)) {
     assert.match(entry.url, new RegExp(`/releases/download/v${version.replaceAll(".", "\\.")}/`));
+    assert.match(entry.url, /\/DOON\.Voice-update-/);
     assert.match(entry.signature, /^signature-/);
   }
   assert.deepEqual(JSON.parse(readFileSync(outputPath, "utf8")), manifest);
