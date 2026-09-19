@@ -33,6 +33,7 @@ pub(crate) struct CloudSpec {
     pub timeout: Duration,
     pub cancelled: Arc<AtomicBool>,
     pub question_mode: bool,
+    pub image_data_url: Option<String>,
 }
 
 #[derive(Default)]
@@ -63,7 +64,12 @@ impl CloudRuntime {
             spec.timeout = remaining_cloud_time(deadline)?;
             let client = ensure_client(&mut slot, &spec)?;
             client.set_cancellation(Arc::clone(&spec.cancelled));
-            client.rewrite(prompt, remaining_cloud_time(deadline)?, spec.question_mode)
+            client.rewrite(
+                prompt,
+                remaining_cloud_time(deadline)?,
+                spec.question_mode,
+                spec.image_data_url.as_deref(),
+            )
         })();
         // A stream-json process is one conversation. Only Codex supports a
         // fresh ephemeral thread while keeping the same process alive.
@@ -170,15 +176,20 @@ impl CloudClient {
         prompt: &str,
         timeout: Duration,
         question_mode: bool,
+        image_data_url: Option<&str>,
     ) -> Result<String, String> {
         match self {
-            Self::Codex(client) => client.rewrite(prompt, timeout, question_mode),
-            Self::Claude(client) => {
-                client.rewrite(prompt, timeout, claude_input, claude_final_result)
-            }
-            Self::Gemini(client) => {
-                client.rewrite(prompt, timeout, gemini_input, gemini_final_result)
-            }
+            Self::Codex(client) => client.rewrite(prompt, timeout, question_mode, image_data_url),
+            Self::Claude(client) => client.rewrite_value(
+                claude_input_with_image(prompt, image_data_url),
+                timeout,
+                claude_final_result,
+            ),
+            Self::Gemini(client) => client.rewrite_value(
+                gemini_input_with_image(prompt, image_data_url),
+                timeout,
+                gemini_final_result,
+            ),
         }
     }
 
@@ -396,6 +407,7 @@ impl CodexClient {
         prompt: &str,
         timeout: Duration,
         question_mode: bool,
+        image_data_url: Option<&str>,
     ) -> Result<String, String> {
         let thread_request_id = self.take_id();
         self.process.send(&codex_thread_start_request(
@@ -416,12 +428,16 @@ impl CodexClient {
             .ok_or_else(|| "Codexの一時スレッドを開始できませんでした。".to_string())?;
 
         let turn_request_id = self.take_id();
+        let mut input = vec![json!({"type": "text", "text": prompt})];
+        if let Some(url) = image_data_url {
+            input.push(json!({"type": "image", "url": url}));
+        }
         self.process.send(&json!({
             "method": "turn/start",
             "id": turn_request_id,
             "params": {
                 "threadId": thread_id,
-                "input": [{"type": "text", "text": prompt}],
+                "input": input,
                 "effort": "low"
             }
         }))?;
@@ -535,6 +551,7 @@ struct StreamClient {
     process: JsonLineProcess,
 }
 
+#[cfg(test)]
 type InputBuilder = fn(&str) -> Value;
 type ResultParser = for<'a> fn(&'a Value) -> Result<Option<&'a str>, String>;
 
@@ -582,6 +599,7 @@ impl StreamClient {
         })
     }
 
+    #[cfg(test)]
     fn rewrite(
         &mut self,
         prompt: &str,
@@ -589,7 +607,16 @@ impl StreamClient {
         input: InputBuilder,
         parser: ResultParser,
     ) -> Result<String, String> {
-        self.process.send(&input(prompt))?;
+        self.rewrite_value(input(prompt), timeout, parser)
+    }
+
+    fn rewrite_value(
+        &mut self,
+        input: Value,
+        timeout: Duration,
+        parser: ResultParser,
+    ) -> Result<String, String> {
+        self.process.send(&input)?;
         let deadline = Instant::now() + timeout;
         loop {
             let message = self.process.receive(deadline)?;
@@ -684,6 +711,22 @@ pub(crate) fn claude_input(prompt: &str) -> Value {
     })
 }
 
+fn claude_input_with_image(prompt: &str, image_data_url: Option<&str>) -> Value {
+    let Some(image_data_url) = image_data_url else {
+        return claude_input(prompt);
+    };
+    let data = image_data_url
+        .strip_prefix("data:image/jpeg;base64,")
+        .unwrap_or(image_data_url);
+    json!({
+        "type": "user",
+        "message": {"role": "user", "content": [
+            {"type": "text", "text": prompt},
+            {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": data}}
+        ]}
+    })
+}
+
 pub(crate) fn claude_final_result(message: &Value) -> Result<Option<&str>, String> {
     if message.get("type").and_then(Value::as_str) != Some("result") {
         return Ok(None);
@@ -702,6 +745,19 @@ pub(crate) fn claude_final_result(message: &Value) -> Result<Option<&str>, Strin
 
 pub(crate) fn gemini_input(prompt: &str) -> Value {
     json!({"event": "user", "message": {"content": prompt}})
+}
+
+fn gemini_input_with_image(prompt: &str, image_data_url: Option<&str>) -> Value {
+    let Some(image_data_url) = image_data_url else {
+        return gemini_input(prompt);
+    };
+    let data = image_data_url
+        .strip_prefix("data:image/jpeg;base64,")
+        .unwrap_or(image_data_url);
+    json!({"event": "user", "message": {"content": [
+        {"text": prompt},
+        {"inlineData": {"mimeType": "image/jpeg", "data": data}}
+    ]}})
 }
 
 pub(crate) fn gemini_final_result(message: &Value) -> Result<Option<&str>, String> {
@@ -992,7 +1048,7 @@ mod tests {
                 cwd: std::env::temp_dir().to_string_lossy().into_owned(),
                 model: "fixture".into(),
             };
-            let result = client.rewrite("人工的なテスト文", Duration::from_secs(5), false);
+            let result = client.rewrite("人工的なテスト文", Duration::from_secs(5), false, None);
             if mode == "completed" {
                 assert_eq!(result.unwrap(), "明日は会議です。");
             } else {
@@ -1023,7 +1079,7 @@ mod tests {
         let mut client = fake_codex("completion-before-ack");
         assert_eq!(
             client
-                .rewrite("人工的なテスト文", Duration::from_millis(500), false)
+                .rewrite("人工的なテスト文", Duration::from_millis(500), false, None)
                 .unwrap(),
             "明日は会議です。"
         );
@@ -1034,7 +1090,7 @@ mod tests {
         let mut client = fake_codex("unrelated-rpc-error");
         assert_eq!(
             client
-                .rewrite("人工的なテスト文", Duration::from_secs(2), false)
+                .rewrite("人工的なテスト文", Duration::from_secs(2), false, None)
                 .unwrap(),
             "明日は会議です。"
         );
@@ -1045,7 +1101,7 @@ mod tests {
         let mut client = fake_codex("large-stderr");
         assert_eq!(
             client
-                .rewrite("人工的なテスト文", Duration::from_secs(2), false)
+                .rewrite("人工的なテスト文", Duration::from_secs(2), false, None)
                 .unwrap(),
             "明日は会議です。"
         );
@@ -1055,7 +1111,7 @@ mod tests {
     fn empty_final_is_an_error_even_when_commentary_exists() {
         let mut client = fake_codex("empty-final");
         assert!(client
-            .rewrite("人工的なテスト文", Duration::from_secs(2), false)
+            .rewrite("人工的なテスト文", Duration::from_secs(2), false, None)
             .is_err());
     }
 
@@ -1082,6 +1138,7 @@ mod tests {
                 timeout: Duration::from_secs(1),
                 cancelled: Arc::new(AtomicBool::new(true)),
                 question_mode: false,
+                image_data_url: None,
             },
             "人工的なテスト文",
         );
@@ -1098,6 +1155,7 @@ mod tests {
             timeout: Duration::from_secs(2),
             cancelled: Arc::new(AtomicBool::new(false)),
             question_mode: false,
+            image_data_url: None,
         }
     }
 
@@ -1315,6 +1373,27 @@ mod tests {
     }
 
     #[test]
+    fn 画面画像を質問用のclaudeとgemini入力へ含める() {
+        let image = "data:image/jpeg;base64,AA==";
+        let claude = claude_input_with_image("画面について教えて", Some(image));
+        assert_eq!(
+            claude["message"]["content"][0]["text"],
+            "画面について教えて"
+        );
+        assert_eq!(claude["message"]["content"][1]["source"]["data"], "AA==");
+
+        let gemini = gemini_input_with_image("画面について教えて", Some(image));
+        assert_eq!(
+            gemini["message"]["content"][0]["text"],
+            "画面について教えて"
+        );
+        assert_eq!(
+            gemini["message"]["content"][1]["inlineData"]["data"],
+            "AA=="
+        );
+    }
+
+    #[test]
     #[ignore = "端末にインストール済みの公式CLIを使う実機テスト"]
     fn 公式cliプロセスを再利用する() {
         let cwd = std::env::temp_dir().join("doon-voice-cloud-runtime-test");
@@ -1341,6 +1420,7 @@ mod tests {
                 timeout: Duration::from_secs(timeout),
                 cancelled: Arc::new(AtomicBool::new(false)),
                 question_mode: false,
+                image_data_url: None,
             };
             runtime.warm(make_spec()).expect("常駐接続を開始できる");
             let first = runtime.process_id(kind).expect("プロセスIDを取得できる");
@@ -1374,6 +1454,7 @@ mod tests {
                 timeout: Duration::from_secs(90),
                 cancelled: Arc::new(AtomicBool::new(false)),
                 question_mode: false,
+                image_data_url: None,
             };
             let first = runtime
                 .rewrite(make_spec(), prompt)

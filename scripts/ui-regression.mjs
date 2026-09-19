@@ -16,7 +16,7 @@ const browser = await chromium.launch({ headless: true });
 let failures = 0;
 const browserErrors = [];
 
-function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authenticated = {}, transcription = { downloaded: true, name: "音声認識", size: "574 MB" }, local = { installed: false, running: false, models: [] } } = {}) {
+function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authenticated = {}, transcription = { downloaded: true, name: "音声認識", size: "574 MB" }, local = { installed: false, running: false, models: [] }, selectionQuestionPopup } = {}) {
   localStorage.clear();
   localStorage.setItem("doon-voice-dictionary", dictionaryRaw ?? JSON.stringify(dictionary));
   localStorage.setItem("doon-voice-provider-connections", JSON.stringify({ codex: false, claude: false, gemini: false }));
@@ -27,7 +27,7 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
   window.fixture = {
     calls: [], errors: [], authenticated, clipboard: "", clipboardFails: false,
     selection: "この文章は選択された文脈です。", questionAnswer: "選択文を根拠にした回答です。", pastedAnswer: "",
-    selectionQuestionPopup: { selection: "選択された説明文です。", question: "これは何ですか", answer: "選択文への自動回答です。", target: "codex" },
+    selectionQuestionPopup: selectionQuestionPopup || { selection: "選択された説明文です。", context_kind: "selection", question: "これは何ですか", answer: "選択文への自動回答です。", target: "codex" },
     registeredShortcut: null, registeredQuestionShortcut: null, snapshot: { ...idle, ...snapshot },
     deferClipboard: false, pendingClipboard: null, deferConfigs: false, rejectConfigs: false,
     pendingConfigs: [], activeTarget: "codex", activeSelectionQuestionTarget: "codex", activeDictionary: dictionary,
@@ -86,6 +86,8 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
         case "capture_selected_text": return f.selection;
         case "transcribe_voice": return "これは何ですか";
         case "answer_selection_question": return f.questionAnswer;
+        case "answer_open_question": return f.questionAnswer;
+        case "open_frontmost_screen_question": return;
         case "paste_question_answer": f.pastedAnswer = args.text; return;
         case "selection_question_popup_payload": return f.selectionQuestionPopup;
         case "close_selection_question_popup": return;
@@ -186,13 +188,13 @@ try {
     const page = await pageFor({ local: { installed: true, running: true, models: [{ id: "gemma4_e2b", name: "Gemma 4 E2B", size: "7.2 GB", installed: true }] } });
     await page.getByRole("button", { name: "接続と設定", exact: true }).click();
     await page.getByRole("radiogroup", { name: "文章を整えるAI" }).getByRole("radio", { name: /このPCのAI/ }).click();
-    await page.getByRole("radiogroup", { name: "選択文を質問するAI" }).getByRole("radio", { name: /Gemini/ }).click();
+    await page.getByRole("radiogroup", { name: "選択文・画面を質問するAI" }).getByRole("radio", { name: /Gemini/ }).click();
     await page.waitForFunction(() => window.fixture.activeTarget === "local" && window.fixture.activeSelectionQuestionTarget === "gemini");
     const settingsCall = await page.evaluate(() => window.fixture.calls.filter(({ command }) => command === "configure_background_voice").at(-1));
     assert.equal(settingsCall.args.target, "local");
     assert.equal(settingsCall.args.selectionQuestionTarget, "gemini");
     await page.getByRole("button", { name: "ホーム", exact: true }).click();
-    await page.getByRole("button", { name: "選択した文章を質問", exact: true }).click();
+    await page.getByRole("button", { name: "選択した文章または画面を質問", exact: true }).click();
     await page.getByRole("textbox", { name: "選択した文章への質問" }).fill("これは何ですか");
     await page.getByRole("button", { name: "質問する", exact: true }).click();
     await page.waitForFunction(() => window.fixture.calls.some(({ command, args }) => command === "answer_selection_question" && args.target === "gemini"));
@@ -200,7 +202,7 @@ try {
   });
 
   async function openSelectionQuestion(page) {
-    await page.getByRole("button", { name: "選択した文章を質問", exact: true }).click();
+    await page.getByRole("button", { name: "選択した文章または画面を質問", exact: true }).click();
     await page.getByRole("dialog", { name: "選択した文章を質問" }).waitFor();
     return page.getByRole("textbox", { name: "選択した文章への質問" });
   }
@@ -282,6 +284,16 @@ try {
     await page.close();
   });
 
+  await check("前面の画面を質問するポップアップは画面用の文脈で再質問できる", async () => {
+    const page = await pageFor({ selectionQuestionPopup: { selection: "前面の画面を読み取りました。内容について質問できます。", context_kind: "screen", question: "", target: "codex" } }, "?selection-question-popup");
+    await page.getByRole("dialog", { name: "前面の画面を質問" }).waitFor();
+    const input = page.getByRole("textbox", { name: "画面への質問" });
+    await input.fill("この画面の要点は何ですか");
+    await page.getByRole("button", { name: "質問する", exact: true }).click();
+    await page.waitForFunction(() => window.fixture.calls.some(({ command }) => command === "answer_open_question"));
+    await page.close();
+  });
+
   await check("選択中の音声質問が失敗しても質問ポップアップに理由を表示する", async () => {
     const page = await pageFor();
     await page.evaluate(() => window.fixture.emit("selection-question-error", {
@@ -313,7 +325,7 @@ try {
   await check("recovery keeps voice input usable without discarding", async () => {
     const page = await pageFor({ snapshot: recovery });
     assert.equal(await page.getByRole("button", { name: "音声入力を開始" }).isEnabled(), true);
-    assert.equal(await page.getByRole("button", { name: "選択した文章を質問" }).isEnabled(), true);
+    assert.equal(await page.getByRole("button", { name: "選択した文章または画面を質問" }).isEnabled(), true);
     await page.getByRole("button", { name: "音声入力を開始" }).click();
     await page.waitForFunction(() => window.fixture.calls.some(({ command }) => command === "toggle_background_voice"));
     assert.equal(await page.evaluate(() => window.fixture.snapshot.recovery_pending), true);
@@ -484,10 +496,10 @@ try {
     await page.close();
   });
 
-  await check("選択文を質問するキーは音声入力キーと別に登録できる", async () => {
+  await check("選択文・画面を質問するキーは音声入力キーと別に登録できる", async () => {
     const page = await pageFor();
     await page.getByRole("button", { name: "接続と設定", exact: true }).click();
-    await page.getByRole("button", { name: "選択文を質問するキーを変更" }).click();
+    await page.getByRole("button", { name: "選択文・画面を質問するキーを変更" }).click();
     await page.waitForFunction(() => window.fixture.calls.some(({ command }) => command === "clear_selection_question_shortcut"));
     await page.keyboard.press("Control+Shift+Q");
     await page.waitForFunction(() => window.fixture.calls.some(({ command, args }) => command === "set_selection_question_shortcut" && args.shortcut === "Ctrl+Shift+Q"));
@@ -645,7 +657,7 @@ try {
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${label}-${view}: horizontal overflow`);
       }
       await page.getByRole("button", { name: "ホーム", exact: true }).click();
-      await page.getByRole("button", { name: "選択した文章を質問", exact: true }).click();
+      await page.getByRole("button", { name: "選択した文章または画面を質問", exact: true }).click();
       await page.screenshot({ path: path.join(artifacts, `${label}-selection-question.png`), fullPage: true });
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${label}-selection-question: horizontal overflow`);
       await page.getByRole("button", { name: "質問を閉じる", exact: true }).click();

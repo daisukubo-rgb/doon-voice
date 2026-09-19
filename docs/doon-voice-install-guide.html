@@ -52,7 +52,7 @@
             <h3>Windows 10 / 11（64ビット）</h3>
             <ol class="steps">
               <li><code>DOON Voice-Windows.zip</code> を右クリックし、<strong>すべて展開</strong>を選びます。</li>
-              <li>展開したフォルダ内の <code>DOON Voice_0.5.33_x64_en-US.msi</code> をダブルクリックします。</li>
+              <li>展開したフォルダ内の <code>DOON Voice_0.5.35_x64_en-US.msi</code> をダブルクリックします。</li>
               <li>画面の案内に沿ってインストールします。</li>
               <li>スタートメニューからDOON Voiceを開きます。</li>
             </ol>
@@ -88,14 +88,14 @@
 
       <section class="section" id="ai-choice">
         <h2>4. AIを用途別に選ぶ</h2>
-        <p><strong>接続と設定</strong>では、文章を整えるAIと、選択した文章を質問するAIを別々に選べます。</p>
+        <p><strong>接続と設定</strong>では、文章を整えるAIと、選択文・画面を質問するAIを別々に選べます。</p>
         <table>
           <tbody>
             <tr><th>文章を整えるAI</th><td><strong>このPCのAI</strong>がおすすめです。Gemma 4 E2BがPC内で文章を整えるため、本文をクラウドへ送らずに使えます。初回だけOllamaとGemmaの取得が必要です。</td></tr>
-            <tr><th>選択文を質問するAI</th><td><strong>ChatGPT、Claude、Gemini</strong>がおすすめです。会社名・用語・最新情報を調べたいときはクラウドAIを選びます。各サービスへのログインが必要です。</td></tr>
+            <tr><th>選択文・画面を質問するAI</th><td><strong>ChatGPT、Claude、Gemini</strong>がおすすめです。会社名・用語・最新情報を調べたいときはクラウドAIを選びます。各サービスへのログインが必要です。</td></tr>
           </tbody>
         </table>
-        <p>選択文を質問するキーで呼び出した場合も、ここで選んだ質問用AIが回答します。回答は専用の小さな画面に出るので、<strong>回答をコピー</strong>で使ってください。</p>
+        <p>選択文・画面を質問するキーで呼び出した場合も、ここで選んだ質問用AIが回答します。選択中の文章があれば文章を、なければ前面の画面を読み取ります。画面を読む初回だけはOSの画面収録許可が必要です。回答は専用の小さな画面に出るので、<strong>回答をコピー</strong>で使ってください。</p>
       </section>
 
       <section class="section" id="trouble">
@@ -106,6 +106,7 @@
             <tr><th>文字は出るが入力欄へ入らない</th><td>MacはアクセシビリティでDOON Voiceがオンか確認します。Windowsは入力先アプリをクリックしてカーソルを置いてから試します。原文をコピーして貼り付ける方法も使えます。</td></tr>
             <tr><th>アプリが開かない</th><td>警告やエラーの文言を控えて、配布元へ知らせてください。ZIP内のファイルを直接開かず、展開したフォルダから開いているかも確認します。</td></tr>
             <tr><th>AIの設定ができない</th><td>AIなしなら設定不要です。ChatGPT、Claude、Geminiを使う場合は、それぞれのCLIをPCへ入れてログインします。</td></tr>
+            <tr><th>画面について質問できない</th><td>選択中の文章がなければ、前面の画面を使って質問できます。初回はOSの画面収録を許可してください。Macは「システム設定」→「プライバシーとセキュリティ」→「画面収録」、Windowsは「設定」→「プライバシーとセキュリティ」→「画面のキャプチャ」でDOON Voiceを許可してから、アプリを開き直します。</td></tr>
           </tbody>
         </table>
       </section>

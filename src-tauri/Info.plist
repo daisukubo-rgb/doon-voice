@@ -4,5 +4,7 @@
 <dict>
   <key>NSMicrophoneUsageDescription</key>
   <string>DOON Voiceは、話した内容を音声入力として受け取るためにマイクを使用します。</string>
+  <key>NSScreenCaptureUsageDescription</key>
+  <string>DOON Voiceは、前面の画面について質問に答えるため、質問時だけ画面を読み取ります。</string>
 </dict>
 </plist>
