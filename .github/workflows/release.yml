@@ -80,12 +80,12 @@ jobs:
           - name: macOS Intel
             runner: macos-14
             target: x86_64-apple-darwin
-            bundle: dmg
+            bundle: app,dmg
             packageSuffix: macOS-Intel
           - name: macOS Apple Silicon
             runner: macos-14
             target: aarch64-apple-darwin
-            bundle: dmg
+            bundle: app,dmg
             packageSuffix: macOS
           - name: Windows
             runner: windows-latest
@@ -108,6 +108,9 @@ jobs:
       - run: node scripts/check-licenses.mjs
       - name: Build installer without publishing
         run: npm run dist -- --target ${{ matrix.target }} --bundles ${{ matrix.bundle }}
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
       - name: Verify licenses inside built installer
         run: node scripts/verify-installer-licenses.mjs
         env:
@@ -123,7 +126,10 @@ jobs:
           if-no-files-found: error
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/macos/*.tar.gz
             src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
+            src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.zip
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.sig
             dist/DOON Voice-*.zip
 
   publish:

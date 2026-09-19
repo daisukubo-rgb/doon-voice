@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check } from "@tauri-apps/plugin-updater";
 import { Check, CircleAlert, Download, ExternalLink, Mic, Plus, RefreshCw, WifiOff, X } from "lucide-react";
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
 import { AudioRecorder, requestMicrophoneAccess, startAudioRecorder } from "./audio-recorder";
@@ -176,6 +178,7 @@ function MainApp() {
   const [installationNow, setInstallationNow] = useState(() => Date.now());
   const [microphonePermissionState, setMicrophonePermissionState] = useState<MicrophonePermission>("unknown");
   const [notice, setNotice] = useState("");
+  const [updatingApp, setUpdatingApp] = useState(false);
   const [recording, setRecording] = useState(false);
   const [elapsed, setElapsed] = useState(0);
   const [terms, setTerms] = useState<unknown[]>(initialDictionary.terms);
@@ -396,6 +399,34 @@ function MainApp() {
       appInvoke<TranscriptionStatus>("transcription_status").then(setTranscription).catch(() => setTranscription(null)),
       appInvoke<boolean>("direct_input_status").then(setDirectInputAllowed).catch(() => setDirectInputAllowed(null)),
     ]);
+  }
+
+  async function updateApp() {
+    if (updatingApp) return;
+    if (!isTauriApp()) {
+      setNotice("更新の確認はインストール済みのアプリ版で使えます");
+      return;
+    }
+    setUpdatingApp(true);
+    setNotice("更新を確認しています");
+    try {
+      const update = await check({ timeout: 30_000 });
+      if (!update) {
+        setNotice("DOON Voiceは最新版です");
+        return;
+      }
+      setNotice(`v${update.version}を取得しています`);
+      await update.downloadAndInstall((event) => {
+        if (event.event === "Started") setNotice(`v${update.version}を取得しています`);
+        if (event.event === "Finished") setNotice(`v${update.version}を適用しています`);
+      }, { timeout: 120_000, restartAfterInstall: true });
+      setNotice(`v${update.version}を適用しました。再起動します`);
+      await relaunch();
+    } catch (error) {
+      setNotice(errorMessage(error, "更新を確認できませんでした。時間をおいてもう一度試してください"));
+    } finally {
+      setUpdatingApp(false);
+    }
   }
 
   function setPendingConnection(provider: ProviderId, pending: boolean) {
@@ -1011,6 +1042,7 @@ function MainApp() {
             <button className={selectionQuestionTarget === "local" ? "is-selected" : ""} type="button" role="radio" aria-checked={selectionQuestionTarget === "local"} disabled={busy} onClick={() => chooseSelectionQuestionTarget("local")}><BrandGlyph name="dx" /><span><strong>このPCのAI</strong><small>Gemma 4 E2Bで答える</small></span>{selectionQuestionTarget === "local" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
           </div>
         </section>
+        <div className="settings-list"><article><span className="setting-icon"><RefreshCw size={22} strokeWidth={1.8} /></span><div><h2>アプリの更新</h2><p>Google Driveにある最新版を確認して、このアプリへ適用します。</p></div><span className="setting-state state-permitted"><Check size={15} strokeWidth={2.3} />設定済み</span><button className="outline-action" type="button" onClick={() => void updateApp()} disabled={updatingApp}>{updatingApp ? "更新中" : "更新を確認"} <RefreshCw size={15} /></button></article></div>
         <div className="settings-list direct-input-settings"><article><span className="setting-icon"><BrandGlyph name="move" /></span><div><h2>カーソル位置へ入力</h2><p>{directInputAllowed ? "ほかのアプリへ直接入力できます。" : "macOSのアクセシビリティ許可が必要です。"}</p></div><span className={directInputAllowed ? "setting-state state-permitted" : "setting-state state-unavailable"}>{directInputAllowed ? <Check size={15} strokeWidth={2.3} /> : <CircleAlert size={15} strokeWidth={2} />}{directInputAllowed ? "許可済み" : "未許可"}</span>{isMac ? <button className="outline-action" type="button" onClick={() => void (directInputAllowed ? openDirectInputSettings() : requestDirectInputPermission())}>{directInputAllowed ? "設定を開く" : "許可する"} <ExternalLink size={15} /></button> : <span />}</article></div>
         <div className="settings-list microphone-settings"><article><span className="setting-icon"><Mic size={22} strokeWidth={1.8} /></span><div><h2>マイク</h2><p>{microphonePermissionState === "granted" ? "このPCのマイクを使えます。" : microphonePermissionState === "unsupported" ? "この環境ではマイクを使えません。" : "初回にこのボタンからマイクを許可します。"}</p></div><span className={microphonePermissionState === "granted" ? "setting-state state-permitted" : "setting-state state-unavailable"}>{microphonePermissionState === "granted" ? <Check size={15} strokeWidth={2.3} /> : <CircleAlert size={15} strokeWidth={2} />}{microphonePermissionState === "granted" ? "許可済み" : microphonePermissionState === "unsupported" ? "利用不可" : "許可が必要"}</span><button className="outline-action" type="button" onClick={() => void requestMicrophonePermission()} disabled={microphonePermissionState === "granted" || microphonePermissionState === "unsupported"}>{microphonePermissionState === "granted" ? "許可済み" : "マイクを許可する"} <Mic size={15} /></button></article></div>
         <div className="settings-list transcription-settings"><article><span className="setting-icon"><BrandGlyph name="work" /></span><div><h2>音声認識</h2><p>{transcription?.downloaded ? "日本語音声認識をこのPCで行います。" : "話した言葉を文字にする日本語モデルです。"}</p>{progressFor("transcription") && <div className="installation-progress" role="status"><span>{progressFor("transcription")?.phase}</span><strong>{installationProgressLabel(progressFor("transcription")!, installationNow)}</strong><i aria-hidden="true"><b style={{ width: `${progressPercent("transcription") ?? 8}%` }} /></i></div>}</div><span className={transcription?.downloaded ? "setting-state state-installed" : "setting-state state-unavailable"}>{transcription?.downloaded ? <Check size={15} strokeWidth={2.3} /> : <Download size={15} strokeWidth={2} />}{transcription?.downloaded ? "モデル取得済み" : downloadingTranscription ? `${progressPercent("transcription") ?? "…"}%` : transcription?.size || "未取得"}</span>{transcription?.downloaded ? <span /> : <button className="outline-action" type="button" onClick={() => void downloadTranscriptionModel()} disabled={downloadingTranscription}>{downloadingTranscription ? "取得中" : "モデルを取得"} <Download size={15} /></button>}</article></div>
