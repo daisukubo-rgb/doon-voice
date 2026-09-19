@@ -10,6 +10,7 @@ import { createCapsuleDocument, renderStandaloneGuide } from "../scripts/capsule
 import { npmInvocation, runNpm } from "../scripts/npm-runner.mjs";
 import { stageUpdaterAssets } from "../scripts/stage-updater-assets.mjs";
 import { createUpdateManifest } from "../scripts/create-update-manifest.mjs";
+import { publishDriveRelease } from "../scripts/publish-drive-release.mjs";
 import { verifyLicenses } from "../scripts/check-licenses.mjs";
 import { isLicenseDocument } from "../scripts/license-files.mjs";
 
@@ -195,6 +196,32 @@ test("最新版マニフェストは3機種の署名付きGitHub Releaseを参�
     assert.match(entry.signature, /^signature-/);
   }
   assert.deepEqual(JSON.parse(readFileSync(outputPath, "utf8")), manifest);
+});
+
+test("Drive配布は最新版・過去版・自動更新用を混在させない", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "doon drive publish "));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const source = join(root, "release");
+  const drive = join(root, "drive");
+  mkdirSync(source);
+  mkdirSync(join(drive, "01_最新版（v0.5.39）"), { recursive: true });
+  writeFileSync(join(drive, "01_最新版（v0.5.39）", "old.zip"), "old");
+  mkdirSync(join(drive, "03_自動更新用", "最新版（v0.5.39）"), { recursive: true });
+  writeFileSync(join(drive, "03_自動更新用", "最新版（v0.5.39）", "old.sig"), "old");
+  for (const name of ["DOON Voice-macOS.zip", "DOON Voice-macOS-Intel.zip", "DOON Voice-Windows.zip"]) writeFileSync(join(source, name), name);
+  for (const name of [
+    `DOON Voice-update-${version}-macos-aarch64.tar.gz`,
+    `DOON Voice-update-${version}-macos-aarch64.tar.gz.sig`,
+    `DOON Voice-update-${version}-macos-x86_64.tar.gz`,
+    `DOON Voice-update-${version}-macos-x86_64.tar.gz.sig`,
+    `DOON Voice-update-${version}-windows-x86_64.msi`,
+    `DOON Voice-update-${version}-windows-x86_64.msi.sig`,
+  ]) writeFileSync(join(source, name), name);
+  publishDriveRelease({ sourceDirectory: source, driveRoot: drive, version });
+  assert.ok(existsSync(join(drive, `01_最新版（v${version}）`, `DOON Voice-Windows-v${version}.zip`)));
+  assert.ok(existsSync(join(drive, "02_過去バージョン", "v0.5.39", "old.zip")));
+  assert.ok(existsSync(join(drive, "03_自動更新用", `最新版（v${version}）`, `DOON Voice-update-${version}-windows-x86_64.msi.sig`)));
+  assert.ok(existsSync(join(drive, "03_自動更新用", "過去", "v0.5.39", "old.sig")));
 });
 
 test("現version/archの候補がなければ旧版を代用せず失敗する", { skip: !supported }, (t) => {

@@ -17,6 +17,7 @@
     "dist": "tauri build",
     "package:zip": "node scripts/package-installer-zip.mjs",
     "stage:updater": "node scripts/stage-updater-assets.mjs",
+    "publish:drive": "node scripts/publish-drive-release.mjs",
     "setup": "node scripts/setup.mjs",
     "doctor": "node scripts/setup.mjs --check-only"
   },
