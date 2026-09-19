@@ -1,6 +1,7 @@
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     Device, FromSample, Sample, SampleFormat, SizedSample, Stream, StreamConfig,
+    SupportedStreamConfig,
 };
 use std::{
     sync::{
@@ -183,6 +184,14 @@ impl NativeAudioRecorder {
         finish_recording(&self.recording)
     }
 
+    /// Opens the same native audio path used by dictation, then closes it
+    /// immediately. The WebView permission state alone cannot tell whether a
+    /// selected USB/Bluetooth/internal microphone can actually be opened by
+    /// the desktop recorder.
+    pub fn check_input() -> Result<(), String> {
+        Self::start()?.finish().map(|_| ())
+    }
+
     fn join_completed_worker(&mut self) {
         if self.worker.as_ref().is_some_and(JoinHandle::is_finished) {
             if let Some(worker) = self.worker.take() {
@@ -202,6 +211,7 @@ impl Drop for NativeAudioRecorder {
     }
 }
 
+#[cfg(test)]
 fn preferred_or_fallback_config<T, E>(
     preferred: Result<T, E>,
     fallback: impl IntoIterator<Item = T>,
@@ -212,9 +222,6 @@ fn preferred_or_fallback_config<T, E>(
 fn initialize_stream(recording: &Arc<Mutex<RecordingBuffer>>) -> Result<Stream, String> {
     let host = cpal::default_host();
     let default_device = host.default_input_device();
-    let fallback_devices = host
-        .input_devices()
-        .map_err(|error| format!("マイク一覧を読み取れませんでした: {error}"))?;
     let mut attempted_names = Vec::new();
     let mut last_error = None;
 
@@ -226,45 +233,90 @@ fn initialize_stream(recording: &Arc<Mutex<RecordingBuffer>>) -> Result<Stream, 
         }
     }
 
-    for device in fallback_devices {
-        let name = device.name().unwrap_or_else(|_| "別のマイク".into());
-        if attempted_names.iter().any(|attempted| attempted == &name) {
-            continue;
+    // Some CoreAudio drivers fail while enumerating every input even though
+    // the already-selected default microphone is usable. Do not let a failed
+    // fallback scan prevent that default device from recording.
+    match host.input_devices() {
+        Ok(fallback_devices) => {
+            for device in fallback_devices {
+                let name = device.name().unwrap_or_else(|_| "別のマイク".into());
+                if attempted_names.iter().any(|attempted| attempted == &name) {
+                    continue;
+                }
+                attempted_names.push(name);
+                match initialize_stream_for_device(&device, recording) {
+                    Ok(stream) => return Ok(stream),
+                    Err(error) => last_error = Some(error),
+                }
+            }
         }
-        attempted_names.push(name);
-        match initialize_stream_for_device(&device, recording) {
-            Ok(stream) => return Ok(stream),
-            Err(error) => last_error = Some(error),
+        Err(error) => {
+            last_error =
+                last_error.or_else(|| Some(format!("マイク一覧を読み取れませんでした: {error}")))
         }
     }
 
-    let device_hint = if attempted_names.is_empty() {
-        "使用できるマイクが見つかりません。".to_string()
-    } else {
-        "選択中のマイクの設定を読み取れませんでした。マイクを一度つなぎ直すか、macOSの「システム設定」→「サウンド」→「入力」で「MacBookのマイク」など別の入力を選び、もう一度試してください。".to_string()
-    };
-    let _ = last_error;
-    Err(device_hint)
+    Err(microphone_unavailable_message(
+        attempted_names.len(),
+        last_error.as_deref(),
+    ))
 }
 
 fn initialize_stream_for_device(
     device: &Device,
     recording: &Arc<Mutex<RecordingBuffer>>,
 ) -> Result<Stream, String> {
-    let fallback_configs = device
-        .supported_input_configs()
-        .map(|configs| {
-            configs
-                .map(|config| {
-                    config
-                        .try_with_sample_rate(cpal::SampleRate(48_000))
-                        .unwrap_or_else(|| config.with_max_sample_rate())
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let supported = preferred_or_fallback_config(device.default_input_config(), fallback_configs)
-        .map_err(|error| format!("マイクの設定を読み取れませんでした: {error}"))?;
+    let configs = input_config_candidates(device)?;
+    let mut last_error = None;
+    for supported in configs {
+        match initialize_stream_with_config(device, &supported, recording) {
+            Ok(stream) => return Ok(stream),
+            Err(error) => last_error = Some(error),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "このマイクで使える音声設定が見つかりませんでした。".into()))
+}
+
+fn input_config_candidates(device: &Device) -> Result<Vec<SupportedStreamConfig>, String> {
+    let mut candidates = Vec::new();
+    if let Ok(config) = device.default_input_config() {
+        candidates.push(config);
+    }
+
+    let configs = match device.supported_input_configs() {
+        Ok(configs) => configs,
+        // A default stream can be opened on some CoreAudio devices even when
+        // querying every supported format fails. Keep that valid default
+        // candidate instead of rejecting the device before trying it.
+        Err(_error) if !candidates.is_empty() => return Ok(candidates),
+        Err(error) => return Err(format!("マイクの設定を読み取れませんでした: {error}")),
+    };
+    for config in configs {
+        let minimum_rate = config.min_sample_rate();
+        let preferred = config
+            .try_with_sample_rate(cpal::SampleRate(48_000))
+            .unwrap_or_else(|| config.with_max_sample_rate());
+        let preferred_rate = preferred.sample_rate();
+        candidates.push(preferred);
+        // Bluetooth and USB microphones sometimes reject their advertised
+        // preferred rate. Retrying the lowest rate gives those devices a
+        // second native path without changing the user's system setting.
+        let minimum = config.with_sample_rate(minimum_rate);
+        if minimum.sample_rate() != preferred_rate {
+            candidates.push(minimum);
+        }
+    }
+    if candidates.is_empty() {
+        return Err("このマイクで使える音声設定が見つかりませんでした。".into());
+    }
+    Ok(candidates)
+}
+
+fn initialize_stream_with_config(
+    device: &Device,
+    supported: &SupportedStreamConfig,
+    recording: &Arc<Mutex<RecordingBuffer>>,
+) -> Result<Stream, String> {
     let sample_rate = supported.sample_rate().0;
     let sample_format = supported.sample_format();
     let config = supported.config();
@@ -274,12 +326,16 @@ fn initialize_stream_for_device(
         .configure(sample_rate);
 
     let stream = match sample_format {
+        SampleFormat::I8 => build_stream::<i8>(device, &config, recording),
         SampleFormat::F32 => build_stream::<f32>(device, &config, recording),
         SampleFormat::F64 => build_stream::<f64>(device, &config, recording),
         SampleFormat::I16 => build_stream::<i16>(device, &config, recording),
         SampleFormat::I32 => build_stream::<i32>(device, &config, recording),
+        SampleFormat::I64 => build_stream::<i64>(device, &config, recording),
+        SampleFormat::U8 => build_stream::<u8>(device, &config, recording),
         SampleFormat::U16 => build_stream::<u16>(device, &config, recording),
         SampleFormat::U32 => build_stream::<u32>(device, &config, recording),
+        SampleFormat::U64 => build_stream::<u64>(device, &config, recording),
         _ => Err(format!(
             "このマイクの音声形式には対応していません: {sample_format}"
         )),
@@ -292,6 +348,19 @@ fn initialize_stream_for_device(
         .map_err(|error| format!("マイクを開始できませんでした: {error}"))?;
 
     Ok(stream)
+}
+
+fn microphone_unavailable_message(attempted_count: usize, detail: Option<&str>) -> String {
+    if attempted_count == 0 {
+        return "使用できるマイクが見つかりません。マイクを接続し、OSの入力設定で選択してから「マイクを許可・確認」を押してください。".into();
+    }
+    let mut message = "選択中のマイクを開始できませんでした。マイクを一度つなぎ直すか、OSのサウンド設定で別の入力を選び、「マイクを許可・確認」をもう一度押してください。Windowsでは設定の「マイク」で「デスクトップ アプリにマイクへのアクセスを許可する」もオンにしてください。".to_string();
+    if detail.is_some_and(|error| error.contains("時間内")) {
+        message.push_str(
+            " 他の通話アプリがマイクを使っている場合は、そちらを閉じてから試してください。",
+        );
+    }
+    message
 }
 
 fn finish_recording(recording: &Arc<Mutex<RecordingBuffer>>) -> Result<RecordingResult, String> {
@@ -392,6 +461,17 @@ mod tests {
         let result = result.unwrap();
         assert_eq!(result.audio, encode_pcm_wav(&[0.25, -0.25, 0.0], 48_000));
         assert!(result.warning.unwrap().contains("マイクが停止"));
+    }
+
+    #[test]
+    fn microphone_error_explains_connection_and_windows_privacy_setting() {
+        let no_device = microphone_unavailable_message(0, None);
+        assert!(no_device.contains("使用できるマイクが見つかりません"));
+
+        let unavailable =
+            microphone_unavailable_message(1, Some("準備が時間内に完了しませんでした"));
+        assert!(unavailable.contains("デスクトップ アプリ"));
+        assert!(unavailable.contains("通話アプリ"));
     }
 
     #[test]

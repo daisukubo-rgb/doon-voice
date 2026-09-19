@@ -52,5 +52,7 @@ assert(app.includes("Gemini 3.6 Flash (Low)"), "Geminiの文章整形はFlash Lo
 assert(app.includes("現在の版:"), "更新欄に現在のアプリ版を表示する");
 assert(app.includes("確認した最新版:"), "更新欄に確認した最新版を表示する");
 assert(app.includes("showRefreshToast"), "右上の状態更新は完了通知を表示する");
+assert(app.includes('appInvoke("check_microphone")'), "許可表示だけでなくネイティブ録音の接続確認を行う");
+assert(app.includes("接続確認済み"), "実際に使えるマイクを許可済みと区別して表示する");
 
 console.info("PASS: UI制作規約v1.1の静的契約を検証しました");

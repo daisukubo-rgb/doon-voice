@@ -61,7 +61,7 @@ try {
 
   stopped = false;
   await requestMicrophoneAccess();
-  assert(stopped, "マイクを許可する操作は、許可確認後にマイクをすぐ解放する");
+  assert(stopped, "マイクを許可・確認する操作は、許可確認後にマイクをすぐ解放する");
 } finally {
   if (originalNavigator) Object.defineProperty(globalThis, "navigator", originalNavigator);
   else delete (globalThis as { navigator?: Navigator }).navigator;

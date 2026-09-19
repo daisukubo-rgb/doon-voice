@@ -46,7 +46,7 @@ export type AudioRecorder = {
 
 function microphoneAccessError(error: unknown): Error {
   if (error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "SecurityError")) {
-    return new Error("マイクの使用が許可されていません。接続と設定で「マイクを許可する」を押してください。");
+    return new Error("マイクの使用が許可されていません。接続と設定で「マイクを許可・確認」を押してください。");
   }
   return error instanceof Error ? error : new Error("マイクを開始できませんでした。");
 }

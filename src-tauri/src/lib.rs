@@ -670,6 +670,14 @@ fn background_voice_status(
         .map_err(|_| "音声入力の状態を読み取れませんでした。".to_string())
 }
 
+/// Verifies the native recorder rather than only the WebView permission.
+/// This catches unavailable USB/Bluetooth devices and desktop-app privacy
+/// restrictions before the user starts dictating.
+#[tauri::command]
+fn check_microphone() -> Result<(), String> {
+    NativeAudioRecorder::check_input()
+}
+
 #[tauri::command]
 fn toggle_background_voice(app: AppHandle) -> Result<(), String> {
     handle_background_voice_toggle(&app, false)
@@ -3668,6 +3676,11 @@ pub fn run() {
                 let state = handle.state::<BackgroundVoiceState>();
                 if let Ok(mut runtime) = state.0.lock() {
                     runtime.config = config.clone();
+                    // A fresh installation has valid defaults even before the
+                    // WebView gets its first chance to persist a setting. The
+                    // global shortcut must therefore work immediately after
+                    // launch, including while the main window is hidden.
+                    runtime.configuration_ready = true;
                 };
             }
             let registration_result = (|| {
@@ -3734,6 +3747,7 @@ pub fn run() {
             clear_selection_question_shortcut,
             configure_background_voice,
             background_voice_status,
+            check_microphone,
             ack_voice_result,
             clear_voice_result,
             retry_voice_processing,

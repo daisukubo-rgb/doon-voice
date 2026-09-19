@@ -68,6 +68,9 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
     if (window.fixture.deferClipboard) await new Promise((resolve) => { window.fixture.pendingClipboard = resolve; });
     window.fixture.clipboard = value;
   } } });
+  Object.defineProperty(navigator, "mediaDevices", { value: { async getUserMedia() {
+    return { getTracks: () => [{ stop() {} }] };
+  } } });
   window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} };
   window.__TAURI_INTERNALS__ = {
     transformCallback(callback) { const id = nextId++; callbacks.set(id, callback); return id; },
@@ -82,6 +85,7 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
         case "download_transcription_model": return new Promise((resolve) => { f.pendingTranscriptionDownload = resolve; });
         case "pull_local_model": return new Promise((resolve) => { f.pendingLocalModelPull = resolve; });
         case "direct_input_status": return true;
+        case "check_microphone": return;
         case "background_voice_status": return f.snapshot;
         case "capture_selected_text": return f.selection;
         case "transcribe_voice": return "これは何ですか";
@@ -109,7 +113,7 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
         case "retry_voice_processing": f.publish({ state: "processing" }); return;
         case "ack_voice_result": f.publish({ clipboard_saved: true, recovery_pending: false }); return;
         case "clear_voice_result": f.publish(idle); return;
-        case "plugin:app|version": return "0.5.38";
+        case "plugin:app|version": return "0.5.39";
         case "plugin:event|listen": { const id = nextId++; listeners.set(id, args); return id; }
         case "plugin:event|unlisten": listeners.delete(args.eventId); return;
         default: throw new Error(`Unexpected desktop command: ${command}`);
@@ -178,10 +182,24 @@ try {
     await page.close();
   });
 
-  await check("初回設定でマイク許可の入口を常に表示する", async () => {
+  await check("初回設定でマイク許可・接続確認の入口を常に表示する", async () => {
     const page = await pageFor();
     await page.getByRole("button", { name: "接続と設定", exact: true }).click();
-    await page.getByRole("button", { name: "マイクを許可する", exact: true }).waitFor();
+    await page.getByRole("button", { name: "マイクを許可・確認", exact: true }).waitFor();
+    await page.close();
+  });
+
+  await check("マイク許可後にネイティブ録音経路まで確認する", async () => {
+    const page = await pageFor();
+    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await page.getByRole("button", { name: "マイクを許可・確認", exact: true }).click();
+    await page.waitForFunction(() => window.fixture.calls.some(({ command }) => command === "check_microphone"));
+    await page.getByText("接続確認済み", { exact: true }).waitFor();
+    await mkdir(artifacts, { recursive: true });
+    await page.screenshot({ path: path.join(artifacts, "settings-microphone-check-desktop.png"), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.screenshot({ path: path.join(artifacts, "settings-microphone-check-mobile.png"), fullPage: true });
     await page.close();
   });
 
@@ -573,7 +591,7 @@ try {
   await check("更新欄に現在の版と確認結果を表示する", async () => {
     const page = await pageFor();
     await page.getByRole("button", { name: "接続と設定", exact: true }).click();
-    await page.getByText("現在の版: v0.5.38", { exact: true }).waitFor();
+    await page.getByText("現在の版: v0.5.39", { exact: true }).waitFor();
     await page.getByText("最新版はまだ確認していません。", { exact: true }).waitFor();
     await page.screenshot({ path: path.join(artifacts, "settings-update-version-desktop.png"), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
