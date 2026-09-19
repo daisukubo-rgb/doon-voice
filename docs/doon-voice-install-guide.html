@@ -8,20 +8,26 @@
     <title>DOON Voice インストール手順</title>
   </head>
   <body>
+    <a class="skip-link" href="#main-content">本文へ移動</a>
     <header>
       <div class="shell topline">
         <div class="brand"><img src="install-guide-assets/doon-logo.png" alt="DOON" /><span>VOICE GUIDE</span></div>
-        <time datetime="2026-09-19">2026年9月19日</time>
+        <span class="version">Version {{VERSION}}</span>
       </div>
     </header>
-    <main class="shell">
-      <p class="eyebrow">FIRST SETUP GUIDE</p>
-      <h1>DOON Voice<br />インストール手順</h1>
-      <p class="lead">話した内容を文字にして、いまカーソルがある入力欄へ入れるアプリです。最初は「AIなし」で動作を確かめてください。</p>
+    <main class="shell" id="main-content">
+      <div class="hero">
+        <div>
+          <p class="eyebrow">FIRST SETUP GUIDE</p>
+          <h1>DOON Voice<br />インストール手順</h1>
+          <p class="lead">話した内容を文字にして、いまカーソルがある入力欄へ入れるアプリです。最初は「AIなし」で動作を確かめてください。</p>
+        </div>
+        <img class="app-icon" src="install-guide-assets/app-icon.png" alt="DOON Voiceのアプリアイコン" />
+      </div>
 
       <section class="quick">
         <strong>はじめる前に</strong>
-        <p>配布フォルダから、ご利用のOSに合うZIPをダウンロードします。ZIPの中身をすべて展開してから、MacはDMG、WindowsはMSIを開いてください。</p>
+        <p>配布フォルダから、ご利用のOSに合うZIPをダウンロードします。ZIPの中身をすべて展開してから、MacはDMG、WindowsはMSIを開いてください。取扱説明書は <code>README.capsule</code> です。Capsuleが入っていないPCでは、予備の <code>README.html</code> をブラウザで開けます。</p>
       </section>
 
       <nav class="toc" aria-label="目次">
@@ -52,7 +58,7 @@
             <h3>Windows 10 / 11（64ビット）</h3>
             <ol class="steps">
               <li><code>DOON Voice-Windows.zip</code> を右クリックし、<strong>すべて展開</strong>を選びます。</li>
-              <li>展開したフォルダ内の <code>DOON Voice_0.5.37_x64_en-US.msi</code> をダブルクリックします。</li>
+              <li>展開したフォルダ内の <code>DOON Voice_{{VERSION}}_x64_en-US.msi</code> をダブルクリックします。</li>
               <li>画面の案内に沿ってインストールします。</li>
               <li>スタートメニューからDOON Voiceを開きます。</li>
             </ol>
@@ -63,7 +69,7 @@
 
       <section class="section" id="update">
         <h2>更新するとき</h2>
-        <p>v0.5.37以降は、アプリを削除して入れ直す必要はありません。<strong>接続と設定</strong>の<strong>アプリの更新</strong>で<strong>更新を確認</strong>を押すと、Google Driveにある最新版を取得して適用します。</p>
+        <p>v0.5.37以降は、アプリを削除して入れ直す必要はありません。<strong>接続と設定</strong>の<strong>アプリの更新</strong>で<strong>更新を確認</strong>を押すと、公開済みの最新版を取得して適用します。</p>
         <p>通常はマイクやアクセシビリティの許可も維持されます。OSが再確認を求めた場合だけ、表示された画面でDOON Voiceを許可してください。</p>
         <div class="note"><strong>今回だけ手動更新が必要です</strong>v0.5.35以前には更新機能がないため、最初だけv0.5.37を配布ZIPから入れてください。次回以降はアプリ内から更新できます。</div>
       </section>
@@ -89,7 +95,7 @@
           <div><b>03</b><span>もう一度同じキーで停止</span></div>
           <div><b>04</b><span>文章が入力欄とクリップボードへ入る</span></div>
         </div>
-        <p style="margin-top:18px">開始・停止キーは <strong>接続と設定</strong> で変更できます。画面を閉じたあとも、Macはメニューバー、Windowsは通知領域のDOON Voiceアイコンからもう一度開けます。</p>
+        <p class="flow-note">開始・停止キーは <strong>接続と設定</strong> で変更できます。画面を閉じたあとも、Macはメニューバー、Windowsは通知領域のDOON Voiceアイコンからもう一度開けます。</p>
         <div class="note"><strong>入力されなかったとき</strong>ホーム画面の <strong>原文をコピー</strong> または <strong>文章をコピー</strong> で文章を回収できます。コピーした内容は、入力したいアプリへ手動で貼り付けてください。</div>
       </section>
 
@@ -109,7 +115,7 @@
         <h2>5. うまくいかないとき</h2>
         <table>
           <tbody>
-            <tr><th>話しても録音が始まらない</th><td>接続と設定の「マイクを許可する」を押します。許可画面が出ない、または以前に拒否した場合はOSのマイク設定でDOON Voiceを許可し、音声認識モデルの取得状態も確認してください。Macでマイク設定を読み取れない場合は、アプリを閉じて「システム設定」→「サウンド」→「入力」で「MacBookのマイク」など利用する入力を選び、開き直します。開始・停止キーが他のアプリと重なる場合は、接続と設定で変更します。</td></tr>
+            <tr><th>話しても録音が始まらない</th><td>接続と設定の「マイクを許可・確認」を押します。許可画面が出ない、または以前に拒否した場合はOSのマイク設定でDOON Voiceを許可し、音声認識モデルの取得状態も確認してください。Macでは「システム設定」→「サウンド」→「入力」で、実際に使うマイクを選びます。内蔵マイクで反応しない場合は、イヤホンや外付けマイクを接続して入力先を選び直すと切り分けできます。開始・停止キーが他のアプリと重なる場合は、接続と設定で変更します。</td></tr>
             <tr><th>文字は出るが入力欄へ入らない</th><td>MacはアクセシビリティでDOON Voiceがオンか確認します。Windowsは入力先アプリをクリックしてカーソルを置いてから試します。原文をコピーして貼り付ける方法も使えます。</td></tr>
             <tr><th>アプリが開かない</th><td>警告やエラーの文言を控えて、配布元へ知らせてください。ZIP内のファイルを直接開かず、展開したフォルダから開いているかも確認します。</td></tr>
             <tr><th>AIの設定ができない</th><td>AIなしなら設定不要です。ChatGPT、Claude、Geminiを使う場合は、それぞれのCLIをPCへ入れてログインします。</td></tr>

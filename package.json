@@ -1,10 +1,10 @@
 {
   "name": "doon-voice-desktop",
   "private": true,
-  "version": "0.5.39",
+  "version": "0.5.40",
   "type": "module",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "dev": "vite",
@@ -16,6 +16,7 @@
     "app": "tauri dev",
     "dist": "tauri build",
     "package:zip": "node scripts/package-installer-zip.mjs",
+    "stage:updater": "node scripts/stage-updater-assets.mjs",
     "setup": "node scripts/setup.mjs",
     "doctor": "node scripts/setup.mjs --check-only"
   },

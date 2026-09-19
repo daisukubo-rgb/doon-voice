@@ -111,6 +111,10 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      - name: Stage uniquely named updater artifacts
+        run: npm run stage:updater
+        env:
+          TAURI_TARGET: ${{ matrix.target }}
       - name: Verify licenses inside built installer
         run: node scripts/verify-installer-licenses.mjs
         env:
@@ -131,6 +135,7 @@ jobs:
             src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.zip
             src-tauri/target/${{ matrix.target }}/release/bundle/**/*.sig
             dist/DOON Voice-*.zip
+            dist/updater/*
 
   publish:
     needs: [resolve, package]
@@ -138,10 +143,21 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.commit }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: actions/download-artifact@v4
         with:
           pattern: installer-*
           path: installers
+      - name: Create updater manifest
+        run: node scripts/create-update-manifest.mjs installers latest.json
+        env:
+          RELEASE_TAG: ${{ env.RELEASE_TAG }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
       - name: Publish only after every platform passed
         uses: softprops/action-gh-release@v2
         with:
@@ -160,6 +176,9 @@ jobs:
             installers/**/*.dmg
             installers/**/*.msi
             installers/**/*.zip
+            installers/**/updater/*.tar.gz
+            installers/**/updater/*.sig
+            latest.json
           fail_on_unmatched_files: true
           draft: false
           prerelease: false

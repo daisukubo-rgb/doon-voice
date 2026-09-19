@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, realpath
 import { tmpdir } from "node:os";
 import { join, basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createCapsuleDocument, renderStandaloneGuide } from "./capsule-document.mjs";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const tauriTarget = process.env.TAURI_TARGET;
@@ -13,38 +14,20 @@ const outputRoot = join(root, "dist");
 const packageSuffix = process.env.DOON_VOICE_PACKAGE_SUFFIX || (process.platform === "darwin" ? "macOS" : "Windows");
 const configuration = JSON.parse(readFileSync(join(root, "src-tauri", "tauri.conf.json"), "utf8"));
 const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
-const quickStart = `DOON Voice — インストールと使い方
+function renderReadme() {
+  return readFileSync(join(root, "docs", "doon-voice-install-guide.html"), "utf8")
+    .replaceAll("{{VERSION}}", version);
+}
 
-【インストール】
-macOS: DMGを開き、DOON VoiceをApplicationsへ移動してください。
-Windows: MSIをダブルクリックしてインストールしてください。
-Windows版は10/11の64ビット（x64）向けです。CPUに合わせて高速エンジンを自動選択します。古いCPUでは認識に時間がかかり、5分の制限で終了する場合があります。
-
-【初回設定】
-1. DOON Voiceを起動します。
-2. マイクを許可します。macOSでは「接続と設定」から進めます。
-3. macOSは「カーソル位置へ入力」の許可を開き、アクセシビリティでDOON Voiceをオンにします。
-   Windowsは「設定」で「マイク」を検索し、マイクとデスクトップアプリのアクセスを許可します。
-   「接続と設定」で音声認識モデル（約574MB）を取得してください。初回はインターネット接続が必要です。
-4. 最初の動作確認は「文章の仕上げ」で「AIなし」を選びます。ChatGPT/Claude/Geminiも使う場合は対応CLIを準備してログインしてください。
-5. ローカルAIを使う場合は「Ollamaを自動インストール」「Gemmaを取得」を実行してください。
-6. 「接続と設定」→「アプリの更新」では現在の版と確認結果を確認できます。「更新を確認」でGoogle Driveの最新版を適用できます。次回以降、アプリを削除して入れ直す必要はありません。
-
-【基本操作】
-1. 文字を入力したいアプリの入力欄へカーソルを置きます。
-2. 開始・停止キー（初期設定はCtrl+Alt+Space）を押して話します。
-3. 同じキーをもう一度押して録音を止めます。「考えています」から「入力しました」へ進み、文章がカーソル位置へ入力されます。
-4. 入力されない場合はホーム画面の原文をコピーして回収できます。ショートカットは「接続と設定」で変更できます。
-5. 終了はメニューバー（macOS）または通知領域（Windows）のDOON Voiceアイコンから選びます。
-
-【テストで知らせてほしいこと】
-認識した文章、待ち時間、貼り付け先アプリ、エラーが出た場合は画面の文言と操作手順を配布元へ知らせてください。
-
-【補足】
-音声認識モデルは初回起動後に取得します。録音ファイルは処理終了時に削除し、次回起動時に期限切れファイルを回収します。強制終了などで一時的に残ることがあります。
-「AIなし」ではAIへ送信しません。クラウドAIを選ぶと本文と辞書を対応CLIへ渡します。詳しくはPRIVACY.mdをお読みください。
-未署名アプリはOSの保護機能や組織のポリシーで起動できない場合があります。配布元を確認し、OSの案内に従ってください。
-`;
+function writeCapsuleReadme(outputPath) {
+  const html = renderStandaloneGuide({
+    htmlPath: join(root, "docs", "doon-voice-install-guide.html"),
+    cssPath: join(root, "docs", "doon-voice-install-guide.css"),
+    assetsDirectory: join(root, "docs", "install-guide-assets"),
+    version,
+  });
+  createCapsuleDocument({ outputPath, html, title: "DOON Voice 取扱説明書", version });
+}
 
 export function installerArch(platform, target, hostArch) {
   const architecture = target ? target.split("-")[0] : hostArch;
@@ -84,7 +67,10 @@ function packageInstaller() {
     const packageDir = join(staging, "DOON Voice Installer");
     mkdirSync(packageDir);
     copyFileSync(installer, join(packageDir, basename(installer)));
-    writeFileSync(join(packageDir, "README.txt"), quickStart, "utf8");
+    writeCapsuleReadme(join(packageDir, "README.capsule"));
+    writeFileSync(join(packageDir, "README.html"), renderReadme(), "utf8");
+    copyFileSync(join(root, "docs", "doon-voice-install-guide.css"), join(packageDir, "doon-voice-install-guide.css"));
+    cpSync(join(root, "docs", "install-guide-assets"), join(packageDir, "install-guide-assets"), { recursive: true });
     for (const name of ["OSS-NOTICES.md", "PRIVACY.md"]) copyFileSync(join(root, "docs", name), join(packageDir, name));
     cpSync(join(root, "docs", "licenses"), join(packageDir, "licenses"), { recursive: true });
     const temporaryZip = join(staging, "installer.zip");

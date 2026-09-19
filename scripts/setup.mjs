@@ -63,7 +63,7 @@ function webView2RuntimeAvailable() {
 
 const nodeVersion = version(process.execPath);
 const checks = [
-  ["Node.js", majorVersion(nodeVersion) >= 20, nodeVersion],
+  ["Node.js", majorVersion(nodeVersion) >= 22, nodeVersion],
   ["Rust cargo", available("cargo"), version("cargo")],
   ["Rust rustc", available("rustc"), version("rustc")],
 ];

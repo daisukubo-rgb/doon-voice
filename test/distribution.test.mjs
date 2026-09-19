@@ -6,7 +6,10 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { installerArch, selectInstaller } from "../scripts/package-installer-zip.mjs";
+import { createCapsuleDocument, renderStandaloneGuide } from "../scripts/capsule-document.mjs";
 import { npmInvocation, runNpm } from "../scripts/npm-runner.mjs";
+import { stageUpdaterAssets } from "../scripts/stage-updater-assets.mjs";
+import { createUpdateManifest } from "../scripts/create-update-manifest.mjs";
 import { verifyLicenses } from "../scripts/check-licenses.mjs";
 import { isLicenseDocument } from "../scripts/license-files.mjs";
 
@@ -122,8 +125,76 @@ test("旧版と別archが残っていても現version/archだけを梱包する"
     : spawnSync("powershell.exe", ["-NoProfile", "-Command", "Add-Type -AssemblyName System.IO.Compression.FileSystem; [IO.Compression.ZipFile]::OpenRead($env:TEST_ZIP).Entries.FullName"], { encoding: "utf8", env: { ...process.env, TEST_ZIP: zip } });
   assert.equal(listing.status, 0, listing.stderr);
   assert.ok(listing.stdout.includes(current), listing.stdout);
+  assert.ok(listing.stdout.includes("README.html"), listing.stdout);
+  assert.ok(listing.stdout.includes("README.capsule"), listing.stdout);
+  assert.ok(listing.stdout.includes("doon-voice-install-guide.css"), listing.stdout);
+  assert.ok(listing.stdout.includes("install-guide-assets/doon-logo.png"), listing.stdout);
+  assert.ok(listing.stdout.includes("install-guide-assets/app-icon.png"), listing.stdout);
+  assert.ok(!listing.stdout.includes("README.txt"), listing.stdout);
   assert.ok(!listing.stdout.includes(old), listing.stdout);
   assert.ok(!listing.stdout.includes(other), listing.stdout);
+});
+
+test("Capsule版の取扱説明書は画像とCSSを内蔵し、単体で開ける", (t) => {
+  const root = fixture(t);
+  const html = renderStandaloneGuide({
+    htmlPath: join(root, "docs", "doon-voice-install-guide.html"),
+    cssPath: join(root, "docs", "doon-voice-install-guide.css"),
+    assetsDirectory: join(root, "docs", "install-guide-assets"),
+    version,
+  });
+  assert.match(html, new RegExp(`Version ${version.replaceAll(".", "\\.")}`));
+  assert.match(html, /<style>/);
+  assert.match(html, /data:image\/png;base64,/);
+  assert.ok(!html.includes("install-guide-assets/"));
+  assert.ok(!html.includes("{{VERSION}}"));
+  const outputPath = join(root, "README.capsule");
+  createCapsuleDocument({ outputPath, html, title: "DOON Voice 取扱説明書", version });
+  const header = readFileSync(outputPath).subarray(0, 16).toString("utf8");
+  assert.equal(header, "SQLite format 3\0");
+});
+
+test("自動更新ファイルはOSとCPUが分かる固有名で署名と一緒に準備する", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "doon updater staging "));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  writeFileSync(join(root, "package.json"), JSON.stringify({ version }));
+  const target = "aarch64-apple-darwin";
+  const bundle = join(root, "src-tauri", "target", target, "release", "bundle", "macos");
+  mkdirSync(bundle, { recursive: true });
+  writeFileSync(join(bundle, "DOON Voice.app.tar.gz"), "archive");
+  writeFileSync(join(bundle, "DOON Voice.app.tar.gz.sig"), "signature");
+  const [archive, signature] = stageUpdaterAssets({ root, target });
+  assert.equal(archive, join(root, "dist", "updater", `DOON Voice-update-${version}-macos-aarch64.tar.gz`));
+  assert.equal(readFileSync(archive, "utf8"), "archive");
+  assert.equal(readFileSync(signature, "utf8"), "signature");
+});
+
+test("最新版マニフェストは3機種の署名付きGitHub Releaseを参照する", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "doon update manifest "));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  for (const name of [
+    `DOON Voice-update-${version}-macos-aarch64.tar.gz`,
+    `DOON Voice-update-${version}-macos-x86_64.tar.gz`,
+    `DOON Voice-update-${version}-windows-x86_64.msi`,
+  ]) {
+    writeFileSync(join(root, name), "asset");
+    writeFileSync(join(root, `${name}.sig`), `signature-${name}`);
+  }
+  const outputPath = join(root, "latest.json");
+  const manifest = createUpdateManifest({
+    artifactsDirectory: root,
+    outputPath,
+    repository: "daisukubo-rgb/doon-voice",
+    tag: `v${version}`,
+    publishedAt: "2026-09-19T12:00:00.000Z",
+  });
+  assert.equal(manifest.version, version);
+  assert.deepEqual(Object.keys(manifest.platforms).sort(), ["darwin-aarch64", "darwin-x86_64", "windows-x86_64"]);
+  for (const entry of Object.values(manifest.platforms)) {
+    assert.match(entry.url, new RegExp(`/releases/download/v${version.replaceAll(".", "\\.")}/`));
+    assert.match(entry.signature, /^signature-/);
+  }
+  assert.deepEqual(JSON.parse(readFileSync(outputPath, "utf8")), manifest);
 });
 
 test("現version/archの候補がなければ旧版を代用せず失敗する", { skip: !supported }, (t) => {
