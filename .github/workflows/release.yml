@@ -107,7 +107,21 @@ jobs:
       - run: npm ci
       - run: node scripts/check-licenses.mjs
       - name: Build installer without publishing
-        run: npm run dist -- --target ${{ matrix.target }} --bundles ${{ matrix.bundle }}
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if npm run dist -- --target "${{ matrix.target }}" --bundles "${{ matrix.bundle }}"; then
+              exit 0
+            fi
+
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Installer build failed after 3 attempts."
+              exit 1
+            fi
+
+            echo "::warning::Installer build attempt $attempt failed. Retrying in 15 seconds."
+            sleep 15
+          done
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
