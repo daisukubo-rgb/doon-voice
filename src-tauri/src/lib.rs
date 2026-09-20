@@ -4345,6 +4345,16 @@ mod tests {
         assert!(message.contains("macOSがCodex CLIの起動をブロックしました"));
     }
 
+    #[test]
+    fn windowsのサインアップ不要なollamaはdoon_voice専用フォルダへ置く() {
+        assert_eq!(
+            windows_standalone_ollama_dir(std::path::Path::new(r"C:\\Users\\DOON\\AppData\\Local")),
+            std::path::PathBuf::from(r"C:\\Users\\DOON\\AppData\\Local")
+                .join("DOON Voice")
+                .join("Ollama")
+        );
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn macosのアクセシビリティ許可要求を公開する() {

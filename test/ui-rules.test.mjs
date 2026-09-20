@@ -54,5 +54,8 @@ assert(app.includes("確認した最新版:"), "更新欄に確認した最新�
 assert(app.includes("showRefreshToast"), "右上の状態更新は完了通知を表示する");
 assert(app.includes('appInvoke("check_microphone")'), "許可表示だけでなくネイティブ録音の接続確認を行う");
 assert(app.includes("接続確認済み"), "実際に使えるマイクを許可済みと区別して表示する");
+assert(app.includes("Ollamaアカウントは不要"), "Gemmaのローカル利用にアカウント登録が不要なことを明記する");
+assert(app.includes("サインアップ不要でローカルAIを準備"), "Windowsで登録画面を開かないローカルAI準備導線を表示する");
+assert(!app.includes("Ollamaを自動インストール"), "外部Ollamaアプリの登録導線を自動起動しない");
 
 console.info("PASS: UI制作規約v1.1の静的契約を検証しました");
