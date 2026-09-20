@@ -7,6 +7,7 @@ function assert(condition, message) {
 const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 const main = readFileSync(new URL("../src/main.tsx", import.meta.url), "utf8");
 const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+const backend = readFileSync(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
 const ossNotices = readFileSync(new URL("../docs/OSS-NOTICES.md", import.meta.url), "utf8");
 const tauriConfig = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
 
@@ -57,5 +58,12 @@ assert(app.includes("接続確認済み"), "実際に使えるマイクを許可
 assert(app.includes("Ollamaアカウントは不要"), "Gemmaのローカル利用にアカウント登録が不要なことを明記する");
 assert(app.includes("サインアップ不要でローカルAIを準備"), "Windowsで登録画面を開かないローカルAI準備導線を表示する");
 assert(!app.includes("Ollamaを自動インストール"), "外部Ollamaアプリの登録導線を自動起動しない");
+assert(app.includes("waitForLocalLlmStart"), "ローカルAIの起動確認後にGemma取得を案内する");
+assert(app.includes("!local.running"), "未起動のローカルAIではGemma取得を開始しない");
+assert(backend.includes("ollama-windows-amd64.zip"), "WindowsはOllama公式のスタンドアロンZIPを使う");
+assert(!backend.includes("OllamaSetup.exe"), "WindowsでOllamaのGUIインストーラーを起動しない");
+assert(backend.includes('Command::new("tar.exe")'), "WindowsのスタンドアロンZIPを展開する");
+assert(backend.includes('serve.arg("serve")'), "展開したローカルAIをバックグラウンドで起動する");
+assert(backend.includes("verify_sha256"), "取得したローカルAIを公式SHA-256と照合する");
 
 console.info("PASS: UI制作規約v1.1の静的契約を検証しました");

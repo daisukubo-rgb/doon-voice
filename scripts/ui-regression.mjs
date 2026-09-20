@@ -189,6 +189,19 @@ try {
     await page.close();
   });
 
+  await check("未起動のローカルAIではGemma取得より先に起動を案内する", async () => {
+    const page = await pageFor({ local: { installed: true, running: false, models: [{ id: "gemma4_e2b", name: "Gemma 4 E2B", size: "7.2 GB", installed: false }] } });
+    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await page.getByRole("button", { name: "ローカルAIを起動", exact: true }).waitFor();
+    assert.equal(await page.getByRole("button", { name: "Gemmaを取得", exact: true }).count(), 0);
+    await mkdir(artifacts, { recursive: true });
+    await page.screenshot({ path: path.join(artifacts, "settings-local-ai-wait-desktop.png"), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.screenshot({ path: path.join(artifacts, "settings-local-ai-wait-mobile.png"), fullPage: true });
+    await page.close();
+  });
+
   await check("マイク許可後にネイティブ録音経路まで確認する", async () => {
     const page = await pageFor();
     await page.getByRole("button", { name: "接続と設定", exact: true }).click();

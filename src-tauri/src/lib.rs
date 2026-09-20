@@ -22,6 +22,8 @@ use core_graphics::{
     event_source::{CGEventSource, CGEventSourceStateID},
 };
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "windows")]
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     ffi::OsString,
@@ -68,14 +70,17 @@ const CLAUDE_SUBSCRIPTION_UNAVAILABLE: &str =
 const LOCAL_MODEL: &str = "gemma4:e2b";
 #[cfg(target_os = "macos")]
 const OLLAMA_MAC_URL: &str = "https://ollama.com/download/Ollama-darwin.zip";
-#[cfg(target_os = "windows")]
-const OLLAMA_WINDOWS_URL: &str = "https://ollama.com/download/OllamaSetup.exe";
+#[cfg(any(target_os = "windows", test))]
+const OLLAMA_WINDOWS_STANDALONE_URL: &str = "https://ollama.com/download/ollama-windows-amd64.zip";
+#[cfg(any(target_os = "windows", test))]
+const OLLAMA_WINDOWS_CHECKSUM_URL: &str = "https://ollama.com/download/sha256sum.txt";
 const JAPANESE_TRANSCRIPTION_PROMPT: &str =
     "日本語の音声入力です。句読点を自然に入れ、固有名詞や専門用語を正確に認識してください。";
 const CODEX_FAST_MODEL: &str = "gpt-5.6-luna";
 const CLAUDE_FAST_MODEL: &str = "haiku";
 const ANTIGRAVITY_FLASH_MODEL: &str = "Gemini 3.6 Flash (Low)";
 static TRANSCRIPTION_DOWNLOAD_RUNNING: AtomicBool = AtomicBool::new(false);
+static LOCAL_RUNTIME_INSTALL_RUNNING: AtomicBool = AtomicBool::new(false);
 static LOCAL_MODEL_PULL_RUNNING: AtomicBool = AtomicBool::new(false);
 
 struct ExclusiveOperation<'a>(&'a AtomicBool);
@@ -104,6 +109,30 @@ fn user_npm_cli_path(home: &Path, name: &str) -> PathBuf {
 #[cfg(target_os = "macos")]
 fn user_local_cli_path(home: &Path, name: &str) -> PathBuf {
     home.join(".local").join("bin").join(name)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_standalone_ollama_dir(local_app_data: &Path) -> PathBuf {
+    local_app_data.join("DOON Voice").join("Ollama")
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn checksum_for_named_file(checksums: &str, filename: &str) -> Result<String, String> {
+    let checksum = checksums
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let checksum = fields.next()?;
+            let candidate = fields.next()?;
+            (fields.next().is_none()
+                && candidate.trim_start_matches('*').trim_start_matches("./") == filename)
+                .then_some(checksum)
+        })
+        .find(|checksum| {
+            checksum.len() == 64 && checksum.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+        .ok_or_else(|| "Ollama公式の検証情報を確認できませんでした。".to_string())?;
+    Ok(checksum.to_ascii_lowercase())
 }
 
 fn cli_path_environment() -> OsString {
@@ -141,7 +170,9 @@ fn cli_path_environment() -> OsString {
             paths.push(PathBuf::from(home).join(".local").join("bin"));
         }
         if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-            paths.push(PathBuf::from(local).join("Programs").join("Ollama"));
+            let local = PathBuf::from(local);
+            paths.push(windows_standalone_ollama_dir(&local));
+            paths.push(local.join("Programs").join("Ollama"));
         }
     }
 
@@ -194,12 +225,9 @@ fn command_path(name: &str) -> PathBuf {
         if name == "ollama" {
             let mut candidates = Vec::new();
             if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-                candidates.push(
-                    PathBuf::from(local)
-                        .join("Programs")
-                        .join("Ollama")
-                        .join("ollama.exe"),
-                );
+                let local = PathBuf::from(local);
+                candidates.push(windows_standalone_ollama_dir(&local).join("ollama.exe"));
+                candidates.push(local.join("Programs").join("Ollama").join("ollama.exe"));
             }
             if let Some(programs) = std::env::var_os("PROGRAMFILES") {
                 candidates.push(PathBuf::from(programs).join("Ollama").join("ollama.exe"));
@@ -1600,8 +1628,59 @@ async fn download_to_path(
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
+async fn verified_windows_ollama_checksum() -> Result<String, String> {
+    let response = download_client()?
+        .get(OLLAMA_WINDOWS_CHECKSUM_URL)
+        .send()
+        .await
+        .map_err(|_| "Ollama公式の検証情報を取得できませんでした。".to_string())?;
+    if !response.status().is_success() {
+        return Err("Ollama公式の検証情報を確認できませんでした。".into());
+    }
+    let checksums = response
+        .text()
+        .await
+        .map_err(|_| "Ollama公式の検証情報を読み取れませんでした。".to_string())?;
+    checksum_for_named_file(&checksums, "ollama-windows-amd64.zip")
+}
+
+#[cfg(target_os = "windows")]
+async fn verify_sha256(path: PathBuf, expected: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::Read;
+
+        let mut file = std::fs::File::open(&path)
+            .map_err(|_| "ローカルAIの取得内容を確認できませんでした。".to_string())?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; 1024 * 1024];
+        loop {
+            let count = file
+                .read(&mut buffer)
+                .map_err(|_| "ローカルAIの取得内容を確認できませんでした。".to_string())?;
+            if count == 0 {
+                break;
+            }
+            hasher.update(&buffer[..count]);
+        }
+        let actual = format!("{:x}", hasher.finalize());
+        if actual == expected {
+            Ok(())
+        } else {
+            Err("ローカルAIの取得内容を検証できませんでした。もう一度試してください。".into())
+        }
+    })
+    .await
+    .map_err(|_| "ローカルAIの取得内容を確認できませんでした。".to_string())?
+}
+
 #[tauri::command]
 async fn open_local_llm_install(app: AppHandle) -> Result<(), String> {
+    let _operation = begin_exclusive_operation(
+        &LOCAL_RUNTIME_INSTALL_RUNNING,
+        "ローカルAIの準備中です。完了までお待ちください。",
+    )?;
+    #[cfg(target_os = "macos")]
     let work = std::env::temp_dir().join(format!(
         "doon-voice-ollama-{}",
         SystemTime::now()
@@ -1609,6 +1688,7 @@ async fn open_local_llm_install(app: AppHandle) -> Result<(), String> {
             .unwrap_or_default()
             .as_nanos()
     ));
+    #[cfg(target_os = "macos")]
     std::fs::create_dir_all(&work)
         .map_err(|_| "インストーラーの保存先を作成できませんでした。".to_string())?;
     #[cfg(target_os = "macos")]
@@ -1638,13 +1718,49 @@ async fn open_local_llm_install(app: AppHandle) -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
-        let installer = work.join("OllamaSetup.exe");
-        download_to_path(&app, "ollama", OLLAMA_WINDOWS_URL, &installer).await?;
-        publish_installation_progress(&app, "ollama", "インストーラーを開いています", 0, 0);
-        Command::new(&installer)
+        let local_app_data = std::env::var_os("LOCALAPPDATA")
+            .map(PathBuf::from)
+            .ok_or_else(|| "Windowsのローカル保存先を確認できませんでした。".to_string())?;
+        let runtime_dir = windows_standalone_ollama_dir(&local_app_data);
+        std::fs::create_dir_all(&runtime_dir)
+            .map_err(|_| "ローカルAIの保存先を作成できませんでした。".to_string())?;
+        let executable = runtime_dir.join("ollama.exe");
+        if !executable.is_file() {
+            let archive = runtime_dir.join("ollama-windows-amd64.zip");
+            if archive.exists() {
+                std::fs::remove_file(&archive)
+                    .map_err(|_| "前回のローカルAI取得を片付けられませんでした。".to_string())?;
+            }
+            let checksum = verified_windows_ollama_checksum().await?;
+            download_to_path(&app, "ollama", OLLAMA_WINDOWS_STANDALONE_URL, &archive).await?;
+            publish_installation_progress(&app, "ollama", "ダウンロードを検証しています", 0, 0);
+            verify_sha256(archive.clone(), checksum).await?;
+            publish_installation_progress(&app, "ollama", "ローカルAIを展開しています", 0, 0);
+            let mut extract = Command::new("tar.exe");
+            extract
+                .args(["-xf"])
+                .arg(&archive)
+                .args(["-C"])
+                .arg(&runtime_dir);
+            cli_command::hide_console(&mut extract);
+            let extracted = extract
+                .status()
+                .map_err(|_| "ローカルAIを展開できませんでした。".to_string())?;
+            if !extracted.success() {
+                return Err("ローカルAIを展開できませんでした。".into());
+            }
+            if !executable.is_file() {
+                return Err("ローカルAIの実行ファイルが見つかりませんでした。".into());
+            }
+        }
+        publish_installation_progress(&app, "ollama", "ローカルAIを起動しています", 0, 0);
+        let mut serve = Command::new(&executable);
+        serve.arg("serve");
+        cli_command::hide_console(&mut serve);
+        serve
             .spawn()
             .map(|_| ())
-            .map_err(|_| "Ollamaのインストーラーを起動できませんでした。".into())
+            .map_err(|_| "ローカルAIを起動できませんでした。".into())
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -1654,7 +1770,7 @@ async fn open_local_llm_install(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 async fn pull_local_model(app: AppHandle) -> Result<(), String> {
     if !ollama_installed() {
-        return Err("先にOllamaをインストールしてください。".into());
+        return Err("先にローカルAIを準備してください。".into());
     }
     let operation = begin_exclusive_operation(
         &LOCAL_MODEL_PULL_RUNNING,
@@ -1668,12 +1784,12 @@ async fn pull_local_model(app: AppHandle) -> Result<(), String> {
         .send()
         .await
         .map_err(|_| {
-            "高速ローカルAIの取得を開始できませんでした。Ollamaが起動しているか確認してください。"
+            "高速ローカルAIの取得を開始できませんでした。ローカルAIが起動しているか確認してください。"
                 .to_string()
         })?;
     if !response.status().is_success() {
         return Err(
-            "高速ローカルAIの取得を開始できませんでした。Ollamaを更新して再試行してください。"
+            "高速ローカルAIの取得を開始できませんでした。ローカルAIを準備し直して再試行してください。"
                 .into(),
         );
     }
@@ -2474,7 +2590,7 @@ fn local_connection_error(error: &reqwest::Error) -> String {
             .into();
     }
     if error.is_connect() {
-        return "Ollamaが起動していません。Ollamaを開いてから、もう一度試してください。".into();
+        return "ローカルAIが起動していません。接続と設定から「ローカルAIを起動」を選んで、もう一度試してください。".into();
     }
     "ローカルAIと通信できませんでした。接続と設定から状態を確認してください。".into()
 }
@@ -4353,6 +4469,27 @@ mod tests {
                 .join("DOON Voice")
                 .join("Ollama")
         );
+        assert_eq!(
+            OLLAMA_WINDOWS_STANDALONE_URL,
+            "https://ollama.com/download/ollama-windows-amd64.zip"
+        );
+        assert_eq!(
+            OLLAMA_WINDOWS_CHECKSUM_URL,
+            "https://ollama.com/download/sha256sum.txt"
+        );
+        assert_eq!(
+            checksum_for_named_file(
+                "bad\n8f3fd071a2a2f9497b562f43502c77c2b701a99d1ee5dfda28da8c786373063b  ./ollama-windows-amd64.zip\n",
+                "ollama-windows-amd64.zip"
+            )
+            .unwrap(),
+            "8f3fd071a2a2f9497b562f43502c77c2b701a99d1ee5dfda28da8c786373063b"
+        );
+        assert!(checksum_for_named_file(
+            "not-a-checksum  ./ollama-windows-amd64.zip",
+            "ollama-windows-amd64.zip"
+        )
+        .is_err());
     }
 
     #[cfg(target_os = "macos")]

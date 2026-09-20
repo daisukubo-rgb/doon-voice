@@ -1,6 +1,6 @@
 # DOON Voice プライバシーの扱い
 
-最終更新日: 2026年9月5日
+最終更新日: 2026年9月20日
 
 DOON Voiceは、話した内容を端末内で文字にするデスクトップアプリです。「AIなし」で原文を使うか、選んだAIで文章を整えるかを選べます。
 
@@ -26,7 +26,7 @@ ChatGPT（Codex CLI）、Claude（Claude Code）、Gemini（Antigravityの `agy`
 
 発話を前の会話へ追加しないよう、ChatGPTは発話ごとに一時スレッドを作り、ClaudeとGeminiは発話ごとにCLIプロセスを終了します。これはDOON Voiceからの会話の使い回しを防ぐもので、外部CLIや提供者の保存設定を変更する機能ではありません。
 
-「このPCのAI」を選んだ場合、OllamaのローカルAPI（`127.0.0.1`）へ本文と辞書、または選択文・画面画像と質問文を渡します。モデルの初回取得にはネット接続を使います。
+「このPCのAI」を選んだ場合、OllamaのローカルAPI（`127.0.0.1`）へ本文と辞書、または選択文・画面画像と質問文を渡します。WindowsではOllama公式のスタンドアロンCLIを `%LOCALAPPDATA%\DOON Voice\Ollama\` に保存して起動し、GUIのサインアップ画面は開きません。モデルの初回取得にはネット接続を使います。
 
 AI処理の失敗時に、別のクラウドサービスへ自動で本文を送り直すことはありません。`再試行` は利用者が選択しているAIへの送信を伴います。
 
@@ -44,4 +44,4 @@ DOON VoiceはChatGPT、Claude、Geminiのパスワード・セッショントー
 
 端末内の設定と辞書をすべて消去する場合は、DOON Voiceを終了し、WebViewのローカル保存領域とアプリデータ内の `voice-runtime.json` の両方を削除してください。WebViewの保存領域だけを消しても、実行用設定ファイルが残ります。macOSのアプリデータは `~/Library/Application Support/com.doon.voice.desktop/`、Windowsは `%APPDATA%\com.doon.voice.desktop\` が対象です。アプリ本体のアンインストールだけでは関連データが残る場合があります。
 
-取得したモデルは別途削除が必要です。Ollamaのモデルと各CLIの設定・認証情報・履歴は、それぞれのアプリの削除手順に従ってください。
+取得したモデルは別途削除が必要です。WindowsのローカルAI実行環境を削除する場合は、DOON Voiceを終了してから `%LOCALAPPDATA%\DOON Voice\Ollama\` を削除してください。Ollamaのモデルと各CLIの設定・認証情報・履歴は、それぞれのアプリの削除手順に従ってください。
