@@ -233,6 +233,15 @@ try {
     await page.close();
   });
 
+  await check("選択文を取得できない質問は前面の画面を勝手に読まない", async () => {
+    const page = await pageFor();
+    await page.evaluate(() => { window.fixture.selection = ""; });
+    await page.getByRole("button", { name: "選択した文章または画面を質問または編集", exact: true }).click();
+    await page.getByText("質問したい文章を選択してコピーしてから、もう一度試してください", { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => window.fixture.calls.some(({ command }) => command === "open_frontmost_screen_question")), false);
+    await page.close();
+  });
+
   async function openSelectionQuestion(page) {
     await page.getByRole("button", { name: "選択した文章または画面を質問または編集", exact: true }).click();
     await page.getByRole("dialog", { name: "選択した文章を質問" }).waitFor();
