@@ -37,7 +37,7 @@ WindowsではRustの導入後に、Visual Studio Installerで「Desktop developm
 
 ## 完成版インストーラーを使う
 
-### Windowsテスト版 0.5.43
+### Windowsテスト版 0.5.44
 
 配布用の `DOON Voice-Windows.zip` をすべて展開し、中の `.msi` を実行してください。対象はWindows 10/11の64ビット（x64）です。アプリの利用にNode.jsやRustの開発環境は不要です。
 
