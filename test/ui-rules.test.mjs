@@ -11,6 +11,10 @@ const backend = readFileSync(new URL("../src-tauri/src/lib.rs", import.meta.url)
 const ossNotices = readFileSync(new URL("../docs/OSS-NOTICES.md", import.meta.url), "utf8");
 const tauriConfig = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
 const desktopCapability = JSON.parse(readFileSync(new URL("../src-tauri/capabilities/desktop.json", import.meta.url), "utf8"));
+const backgroundRecording = backend.slice(
+  backend.indexOf("fn start_background_recording"),
+  backend.indexOf("fn cancel_background_recording_start"),
+);
 
 for (const font of ["Inter", "Roboto"]) {
   assert(!styles.includes(`\"${font}\"`), `${font}をUIフォントに使わない`);
@@ -36,6 +40,10 @@ assert(
 assert(
   desktopCapability.permissions.includes("process:allow-restart"),
   "更新を適用した後のアプリ再起動を許可する",
+);
+assert(
+  backgroundRecording.indexOf("std::thread::spawn") < backgroundRecording.indexOf('set_voice_overlay(app.clone(), "listening"'),
+  "ショートカットを押したら状態表示の初期化を待たずにマイクを開始する",
 );
 assert(!app.includes('listen("doon-voice-shortcut"'), "グローバルショートカットの実処理をWebViewに依存させない");
 assert(app.includes('appInvoke("toggle_background_voice")'), "本体の録音ボタンも常駐ランタイムを使う");

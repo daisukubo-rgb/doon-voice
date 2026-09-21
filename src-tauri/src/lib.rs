@@ -4028,6 +4028,27 @@ mod tests {
     }
 
     #[test]
+    fn 音声認識は利用可能なcpuを使い切りつつ上限を守る() {
+        assert_eq!(whisper_thread_count(1), 1);
+        assert_eq!(whisper_thread_count(4), 4);
+        assert_eq!(whisper_thread_count(16), 8);
+
+        let arguments = whisper_arguments(
+            std::path::Path::new("model.bin"),
+            std::path::Path::new("recording.wav"),
+            "登録語: DOON Voice",
+            8,
+        );
+        let threads = arguments
+            .windows(2)
+            .find(|pair| pair[0] == "-t")
+            .map(|pair| pair[1].as_str());
+        assert_eq!(threads, Some("8"));
+        assert!(arguments.contains(&"-nt".to_string()));
+        assert!(arguments.contains(&"-nth".to_string()));
+    }
+
+    #[test]
     fn 辞書の語を音声認識の初期文へ渡す() {
         let prompt = transcription_prompt(&["DOON Voice".into(), "要約".into(), " ".into()]);
         assert!(prompt.contains("DOON Voice、要約"));
