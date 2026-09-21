@@ -16,9 +16,12 @@ function moveContents(source, destination) {
 }
 
 function requireFile(directory, name) {
-  const path = join(directory, name);
-  if (!existsSync(path) || !statSync(path).isFile()) throw new Error(`配布ファイルがありません: ${path}`);
-  return path;
+  const names = [name, name.replace("DOON Voice", "DOON.Voice")];
+  for (const candidate of names) {
+    const path = join(directory, candidate);
+    if (existsSync(path) && statSync(path).isFile()) return path;
+  }
+  throw new Error(`配布ファイルがありません: ${join(directory, name)}`);
 }
 
 export function publishDriveRelease({ sourceDirectory, driveRoot, version }) {
@@ -57,8 +60,8 @@ export function publishDriveRelease({ sourceDirectory, driveRoot, version }) {
   const latestUpdater = join(updaterRoot, `最新版（v${version}）`);
   mkdirSync(latest, { recursive: true });
   mkdirSync(latestUpdater, { recursive: true });
-  for (const [source, destination] of packages) copyFileSync(join(sourceDirectory, source), join(latest, destination));
-  for (const name of updates) copyFileSync(join(sourceDirectory, name), join(latestUpdater, name));
+  for (const [source, destination] of packages) copyFileSync(requireFile(sourceDirectory, source), join(latest, destination));
+  for (const name of updates) copyFileSync(requireFile(sourceDirectory, name), join(latestUpdater, name));
   return { latest, latestUpdater };
 }
 

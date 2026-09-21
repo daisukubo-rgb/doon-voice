@@ -138,7 +138,7 @@ Google Driveの配布フォルダは、ルート直下を次の3フォルダだ�
 - `03_自動更新用/最新版（vX.Y.Z）`: 現行版の署名付き更新ファイル
 - `03_自動更新用/過去/vX.Y.Z`: 以前の更新ファイル
 
-Releaseのファイルを1つの作業フォルダへ取得した後、`DOON_VOICE_DRIVE_ROOT`へDOON VOICEフォルダの場所を指定して `npm run publish:drive -- <作業フォルダ> <version>` を実行します。この処理が直前の最新版を過去へ移し、新しい配布ZIPと署名付き更新ファイルを所定の場所へ保存します。
+GitHub Releaseの公開だけではGoogle Driveは更新されません。Releaseのファイルを1つの作業フォルダへ取得した後、`DOON_VOICE_DRIVE_ROOT`へDOON VOICEフォルダの場所を指定して `npm run publish:drive -- <作業フォルダ> <version>` を実行します。この処理が直前の最新版を過去へ移し、新しい配布ZIPと署名付き更新ファイルを所定の場所へ保存します。GitHub Releaseの `DOON.Voice-...` というファイル名は、そのまま指定できます。
 
 依存を更新した場合は `node scripts/collect-licenses.mjs` で原文と一覧を再収録し、[OSS表示](docs/OSS-NOTICES.md) の確認事項も見直してください。公開前には各OSで実マイク、直接入力、AI接続を確認してください。
 
