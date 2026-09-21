@@ -113,7 +113,7 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
         case "retry_voice_processing": f.publish({ state: "processing" }); return;
         case "ack_voice_result": f.publish({ clipboard_saved: true, recovery_pending: false }); return;
         case "clear_voice_result": f.publish(idle); return;
-        case "plugin:app|version": return "0.5.42";
+        case "plugin:app|version": return "0.5.43";
         case "plugin:event|listen": { const id = nextId++; listeners.set(id, args); return id; }
         case "plugin:event|unlisten": listeners.delete(args.eventId); return;
         default: throw new Error(`Unexpected desktop command: ${command}`);
@@ -604,7 +604,7 @@ try {
   await check("更新欄に現在の版と確認結果を表示する", async () => {
     const page = await pageFor();
     await page.getByRole("button", { name: "接続と設定", exact: true }).click();
-    await page.getByText("現在の版: v0.5.42", { exact: true }).waitFor();
+    await page.getByText("現在の版: v0.5.43", { exact: true }).waitFor();
     await page.getByText("最新版はまだ確認していません。", { exact: true }).waitFor();
     await page.screenshot({ path: path.join(artifacts, "settings-update-version-desktop.png"), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });

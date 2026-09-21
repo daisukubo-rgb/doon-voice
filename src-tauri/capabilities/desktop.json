@@ -11,6 +11,7 @@
   "permissions": [
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",
-    "updater:default"
+    "updater:default",
+    "process:allow-restart"
   ]
 }
