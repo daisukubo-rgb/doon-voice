@@ -10,6 +10,7 @@ const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8
 const backend = readFileSync(new URL("../src-tauri/src/lib.rs", import.meta.url), "utf8");
 const ossNotices = readFileSync(new URL("../docs/OSS-NOTICES.md", import.meta.url), "utf8");
 const tauriConfig = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
+const desktopCapability = JSON.parse(readFileSync(new URL("../src-tauri/capabilities/desktop.json", import.meta.url), "utf8"));
 
 for (const font of ["Inter", "Roboto"]) {
   assert(!styles.includes(`\"${font}\"`), `${font}をUIフォントに使わない`);
@@ -31,6 +32,10 @@ assert(ossNotices.includes("SIL OPEN FONT LICENSE Version 1.1"), "同梱フォ�
 assert(
   tauriConfig.app.windows[0]?.backgroundThrottling === "disabled",
   "本体が背面・最小化中でもショートカット後の録音とAI処理を止めない",
+);
+assert(
+  desktopCapability.permissions.includes("process:allow-restart"),
+  "更新を適用した後のアプリ再起動を許可する",
 );
 assert(!app.includes('listen("doon-voice-shortcut"'), "グローバルショートカットの実処理をWebViewに依存させない");
 assert(app.includes('appInvoke("toggle_background_voice")'), "本体の録音ボタンも常駐ランタイムを使う");
