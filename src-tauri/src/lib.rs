@@ -2120,6 +2120,44 @@ fn whisper_command(app: &AppHandle) -> Result<ShellCommand, String> {
         .map_err(|_| "音声認識を起動できませんでした。".to_string())
 }
 
+fn whisper_thread_count(available: usize) -> usize {
+    available.clamp(1, 8)
+}
+
+fn available_whisper_thread_count() -> usize {
+    std::thread::available_parallelism()
+        .map(|available| whisper_thread_count(available.get()))
+        .unwrap_or(4)
+}
+
+fn whisper_arguments(
+    model: &Path,
+    wav: &Path,
+    initial_prompt: &str,
+    threads: usize,
+) -> Vec<String> {
+    vec![
+        "-m".into(),
+        model.to_string_lossy().into_owned(),
+        "-f".into(),
+        wav.to_string_lossy().into_owned(),
+        "-l".into(),
+        "ja".into(),
+        "-t".into(),
+        threads.to_string(),
+        "-nt".into(),
+        "-np".into(),
+        "-mc".into(),
+        "0".into(),
+        "-nth".into(),
+        "0.9".into(),
+        "-nf".into(),
+        "-sns".into(),
+        "--prompt".into(),
+        initial_prompt.into(),
+    ]
+}
+
 async fn whisper(
     app: &AppHandle,
     wav: &Path,
@@ -2131,24 +2169,12 @@ async fn whisper(
         return Err("音声認識モデルを取得してから話してください。".into());
     }
     let mut c = whisper_command(app)?
-        .args([
-            "-m",
-            &m.to_string_lossy(),
-            "-f",
-            &wav.to_string_lossy(),
-            "-l",
-            "ja",
-            "-nt",
-            "-np",
-            "-mc",
-            "0",
-            "-nth",
-            "0.9",
-            "-nf",
-            "-sns",
-            "--prompt",
+        .args(whisper_arguments(
+            &m,
+            wav,
             initial_prompt,
-        ])
+            available_whisper_thread_count(),
+        ))
         .envs(whisper_env(app));
     if let Ok(r) = app.path().resource_dir() {
         let d = r.join("engine").join(platform()).join("whisper");
@@ -3107,14 +3133,13 @@ fn start_background_recording(
         runtime.message = "マイクを準備しています".into();
         (runtime.generation, runtime.snapshot())
     };
-    let _ = set_voice_overlay(app.clone(), "listening".into());
     publish_background_voice(app, &snapshot);
 
-    let app = app.clone();
+    let recording_app = app.clone();
     std::thread::spawn(move || match NativeAudioRecorder::start() {
         Ok(recorder) => {
             let snapshot = {
-                let state = app.state::<BackgroundVoiceState>();
+                let state = recording_app.state::<BackgroundVoiceState>();
                 let mut runtime = match state.0.lock() {
                     Ok(runtime) => runtime,
                     Err(_) => return,
@@ -3129,13 +3154,13 @@ fn start_background_recording(
                 runtime.message = "音声を受け取っています".into();
                 runtime.snapshot()
             };
-            publish_background_voice(&app, &snapshot);
+            publish_background_voice(&recording_app, &snapshot);
             // Device loss and size limits finalize the captured prefix without
             // requiring another shortcut press or discarding valid samples.
             loop {
                 std::thread::sleep(Duration::from_millis(100));
                 let should_stop = {
-                    let state = app.state::<BackgroundVoiceState>();
+                    let state = recording_app.state::<BackgroundVoiceState>();
                     let runtime = match state.0.lock() {
                         Ok(runtime) => runtime,
                         Err(_) => return,
@@ -3152,16 +3177,17 @@ fn start_background_recording(
                         .is_some()
                 };
                 if should_stop {
-                    let state = app.state::<BackgroundVoiceState>();
-                    let _ = stop_and_process_background_recording(&app, &state);
+                    let state = recording_app.state::<BackgroundVoiceState>();
+                    let _ = stop_and_process_background_recording(&recording_app, &state);
                     return;
                 }
             }
         }
         Err(error) => {
-            finish_background_processing(&app, generation, Err(error));
+            finish_background_processing(&recording_app, generation, Err(error));
         }
     });
+    let _ = set_voice_overlay(app.clone(), "listening".into());
     Ok(())
 }
 
