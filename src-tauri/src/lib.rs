@@ -1070,10 +1070,14 @@ $graphics.Dispose(); $bitmap.Dispose()
 }
 
 fn capture_question_context_for_voice(app: &AppHandle) -> Result<QuestionContext, String> {
-    if let Some(selection) = capture_active_selection_for_voice_question(app) {
-        return Ok(QuestionContext::Selection(selection));
-    }
-    capture_frontmost_screen_question(app)
+    selection_question_context(capture_active_selection_for_voice_question(app))
+}
+
+fn selection_question_context(selection: Option<String>) -> Result<QuestionContext, String> {
+    selection.map(QuestionContext::Selection).ok_or_else(|| {
+        "選択した文章を取得できませんでした。質問したい文章を選択してから、もう一度試してください。"
+            .to_string()
+    })
 }
 
 #[tauri::command]
@@ -4271,8 +4275,10 @@ mod tests {
             Ok(QuestionContext::Selection(selection)) if selection == "選択した文章"
         ));
 
-        let error = selection_question_context(None).expect_err("画面全体には切り替えない");
-        assert!(error.contains("選択した文章を取得できませんでした"));
+        assert!(matches!(
+            selection_question_context(None),
+            Err(error) if error.contains("選択した文章を取得できませんでした")
+        ));
     }
 
     #[test]
