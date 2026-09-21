@@ -226,7 +226,7 @@ try {
     assert.equal(settingsCall.args.target, "local");
     assert.equal(settingsCall.args.selectionQuestionTarget, "gemini");
     await page.getByRole("button", { name: "ホーム", exact: true }).click();
-    await page.getByRole("button", { name: "選択した文章または画面を質問または編集", exact: true }).click();
+    await page.getByRole("button", { name: "選択した文章を質問または編集", exact: true }).click();
     await page.getByRole("textbox", { name: "選択した文章への質問" }).fill("これは何ですか");
     await page.getByRole("button", { name: "実行する", exact: true }).click();
     await page.waitForFunction(() => window.fixture.calls.some(({ command, args }) => command === "answer_selection_question" && args.target === "gemini"));
@@ -236,14 +236,21 @@ try {
   await check("選択文を取得できない質問は前面の画面を勝手に読まない", async () => {
     const page = await pageFor();
     await page.evaluate(() => { window.fixture.selection = ""; });
-    await page.getByRole("button", { name: "選択した文章または画面を質問または編集", exact: true }).click();
+    await page.getByRole("button", { name: "選択した文章を質問または編集", exact: true }).click();
     await page.getByText("質問したい文章を選択してコピーしてから、もう一度試してください", { exact: true }).waitFor();
     assert.equal(await page.evaluate(() => window.fixture.calls.some(({ command }) => command === "open_frontmost_screen_question")), false);
     await page.close();
   });
 
+  await check("前面の画面を質問する操作だけが画面の読み取りを開始する", async () => {
+    const page = await pageFor();
+    await page.getByRole("button", { name: "前面の画面を質問または編集", exact: true }).click();
+    await page.waitForFunction(() => window.fixture.calls.some(({ command }) => command === "open_frontmost_screen_question"));
+    await page.close();
+  });
+
   async function openSelectionQuestion(page) {
-    await page.getByRole("button", { name: "選択した文章または画面を質問または編集", exact: true }).click();
+    await page.getByRole("button", { name: "選択した文章を質問または編集", exact: true }).click();
     await page.getByRole("dialog", { name: "選択した文章を質問" }).waitFor();
     return page.getByRole("textbox", { name: "選択した文章への質問" });
   }
@@ -366,7 +373,7 @@ try {
   await check("recovery keeps voice input usable without discarding", async () => {
     const page = await pageFor({ snapshot: recovery });
     assert.equal(await page.getByRole("button", { name: "音声入力を開始" }).isEnabled(), true);
-    assert.equal(await page.getByRole("button", { name: "選択した文章または画面を質問または編集" }).isEnabled(), true);
+    assert.equal(await page.getByRole("button", { name: "選択した文章を質問または編集" }).isEnabled(), true);
     await page.getByRole("button", { name: "音声入力を開始" }).click();
     await page.waitForFunction(() => window.fixture.calls.some(({ command }) => command === "toggle_background_voice"));
     assert.equal(await page.evaluate(() => window.fixture.snapshot.recovery_pending), true);
@@ -537,10 +544,10 @@ try {
     await page.close();
   });
 
-  await check("選択文・画面を質問するキーは音声入力キーと別に登録できる", async () => {
+  await check("選択した文章を質問するキーは音声入力キーと別に登録できる", async () => {
     const page = await pageFor();
     await page.getByRole("button", { name: "接続と設定", exact: true }).click();
-    await page.getByRole("button", { name: "選択文・画面を質問するキーを変更" }).click();
+    await page.getByRole("button", { name: "選択した文章を質問するキーを変更" }).click();
     await page.waitForFunction(() => window.fixture.calls.some(({ command }) => command === "clear_selection_question_shortcut"));
     await page.keyboard.press("Control+Shift+Q");
     await page.waitForFunction(() => window.fixture.calls.some(({ command, args }) => command === "set_selection_question_shortcut" && args.shortcut === "Ctrl+Shift+Q"));
@@ -718,7 +725,7 @@ try {
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${label}-${view}: horizontal overflow`);
       }
       await page.getByRole("button", { name: "ホーム", exact: true }).click();
-      await page.getByRole("button", { name: "選択した文章または画面を質問または編集", exact: true }).click();
+      await page.getByRole("button", { name: "選択した文章を質問または編集", exact: true }).click();
       await page.screenshot({ path: path.join(artifacts, `${label}-selection-question.png`), fullPage: true });
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${label}-selection-question: horizontal overflow`);
       await page.getByRole("button", { name: "質問を閉じる", exact: true }).click();
