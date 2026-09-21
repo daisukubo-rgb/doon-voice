@@ -4115,6 +4115,21 @@ mod tests {
     }
 
     #[test]
+    fn 連番で話した内容を箇条書きに整える() {
+        let text = "生成AIには3点、とても良いところがございます。1点目はとても便利であること。2点目は安いこと。3点目は思ったことを言ったら結構何でもしてくれます。そのように便利なことが多いものです。";
+        let expected = "生成AIには3点、とても良いところがございます。\n- 1点目はとても便利であること。\n- 2点目は安いこと。\n- 3点目は思ったことを言ったら結構何でもしてくれます。そのように便利なことが多いものです。";
+
+        assert_eq!(format_spoken_enumeration(text), expected);
+    }
+
+    #[test]
+    fn 連続しない話し言葉には箇条書きを加えない() {
+        let text = "1点目だけを確認します。結論を先にお伝えします。";
+
+        assert_eq!(format_spoken_enumeration(text), text);
+    }
+
+    #[test]
     fn 内容に応じて段落と箇条書きを使い分けるよう指示する() {
         let instruction = editor_instruction(&[]);
         assert!(instruction.contains("内容に最も合う読みやすい形を選ぶ"));
