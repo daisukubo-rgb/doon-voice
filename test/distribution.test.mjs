@@ -225,6 +225,28 @@ test("Drive配布は最新版・過去版・自動更新用を混在させない
   assert.ok(existsSync(join(drive, "03_自動更新用", "過去", "v0.5.39", "old.sig")));
 });
 
+test("Drive配布はGitHub ReleaseのDOON.Voiceファイル名をそのまま受け入れる", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "doon drive github assets "));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const source = join(root, "release");
+  const drive = join(root, "drive");
+  mkdirSync(source);
+  for (const name of ["DOON.Voice-macOS.zip", "DOON.Voice-macOS-Intel.zip", "DOON.Voice-Windows.zip"]) writeFileSync(join(source, name), name);
+  for (const name of [
+    `DOON.Voice-update-${version}-macos-aarch64.tar.gz`,
+    `DOON.Voice-update-${version}-macos-aarch64.tar.gz.sig`,
+    `DOON.Voice-update-${version}-macos-x86_64.tar.gz`,
+    `DOON.Voice-update-${version}-macos-x86_64.tar.gz.sig`,
+    `DOON.Voice-update-${version}-windows-x86_64.msi`,
+    `DOON.Voice-update-${version}-windows-x86_64.msi.sig`,
+  ]) writeFileSync(join(source, name), name);
+
+  publishDriveRelease({ sourceDirectory: source, driveRoot: drive, version });
+
+  assert.ok(existsSync(join(drive, `01_最新版（v${version}）`, `DOON Voice-Windows-v${version}.zip`)));
+  assert.ok(existsSync(join(drive, "03_自動更新用", `最新版（v${version}）`, `DOON Voice-update-${version}-windows-x86_64.msi.sig`)));
+});
+
 test("現version/archの候補がなければ旧版を代用せず失敗する", { skip: !supported }, (t) => {
   const { result } = packageFixture(t, [installerName("0.0.1")]);
   assert.notEqual(result.status, 0);
