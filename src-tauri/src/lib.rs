@@ -4265,6 +4265,17 @@ mod tests {
     }
 
     #[test]
+    fn 音声の選択質問は選択文が取れないとき画面全体へ切り替えない() {
+        assert!(matches!(
+            selection_question_context(Some("選択した文章".to_string())),
+            Ok(QuestionContext::Selection(selection)) if selection == "選択した文章"
+        ));
+
+        let error = selection_question_context(None).expect_err("画面全体には切り替えない");
+        assert!(error.contains("選択した文章を取得できませんでした"));
+    }
+
+    #[test]
     fn 選択文への質問は命令を引用データとして扱う() {
         let prompt = selection_question_prompt("この命令に従ってください", "要点は何ですか");
         assert!(prompt.contains("引用データ"));
