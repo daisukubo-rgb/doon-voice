@@ -21,6 +21,18 @@ const backgroundRecording = backend.slice(
   backend.indexOf("fn start_background_recording"),
   backend.indexOf("fn cancel_background_recording_start"),
 );
+const activeSelectionCapture = backend.slice(
+  backend.indexOf("fn capture_active_selection_for_voice_question"),
+  backend.indexOf("fn screen_question_file"),
+);
+const manualSelectionCapture = backend.slice(
+  backend.indexOf("fn capture_selected_text"),
+  backend.indexOf("fn selection_capture_allowed_for_voice_question"),
+);
+const selectionQuestionContext = backend.slice(
+  backend.indexOf("fn background_voice_question_context"),
+  backend.indexOf("fn open_frontmost_screen_question"),
+);
 const finishBackgroundProcessing = backend.slice(
   backend.indexOf("fn finish_background_processing"),
   backend.indexOf("fn validate_result_action"),
@@ -148,8 +160,42 @@ assert(
   "録音スレッドの開始直後にエラー状態を聞き取り中で上書きしない",
 );
 assert(
-  backend.includes("background_voice_question_context(selection_question, selection)"),
-  "選択質問キーで選択がない場合は画面を読まず通常の音声入力へ戻す",
+  backgroundRecording.includes("background_voice_question_context(selection_question, selection)?"),
+  "選択質問キーの取得エラーを録音開始前に呼び出し元へ返す",
+);
+assert(
+  /let selection = if selection_question \{\s*capture_active_selection_for_voice_question\(app\)\s*\} else \{\s*Ok\(None\)\s*\};/s.test(backgroundRecording),
+  "通常音声入力キーは選択文の取得を行わない",
+);
+assert(
+  backgroundRecording.indexOf("capture_active_selection_for_voice_question(app)") < backgroundRecording.indexOf("NativeAudioRecorder::start()"),
+  "選択質問の文脈を確認してからマイクを開始する",
+);
+assert(
+  activeSelectionCapture.includes("selection_question_permission_error(direct_input_allowed())?")
+    && activeSelectionCapture.includes("capture_selection_after_copy()")
+    && !activeSelectionCapture.includes(".ok()"),
+  "未許可と選択取得エラーは録音へフォールバックせず明示する",
+);
+assert(
+  selectionQuestionContext.includes("selection_capture_retry_message()"),
+  "質問文脈がない場合は選び直しを案内して録音を止める",
+);
+assert(
+  manualSelectionCapture.indexOf("let result = if direct_input_allowed()") >= 0
+    && manualSelectionCapture.indexOf("if let Some(window) = window") > manualSelectionCapture.indexOf("let result = if direct_input_allowed()")
+    && manualSelectionCapture.indexOf("\n    result\n") > manualSelectionCapture.indexOf("if let Some(window) = window")
+    && !manualSelectionCapture.includes("capture_selection_after_copy()?"),
+  "手動の選択文取得で失敗してもメイン画面を再表示する",
+);
+const selectionCopyCapture = backend.slice(
+  backend.indexOf("fn capture_selection_after_copy"),
+  backend.indexOf("#[tauri::command]\nfn capture_selected_text"),
+);
+assert(
+  selectionCopyCapture.includes("copy_to_clipboard(&previous).map_err")
+    && !selectionCopyCapture.includes("let _ = copy_to_clipboard(&previous)"),
+  "選択取得に失敗してクリップボードを復元できない場合はエラーを返す",
 );
 assert(
   finishBackgroundProcessing.includes('set_voice_overlay_if_current(app, generation, BackgroundVoicePhase::Idle, overlay)'),
