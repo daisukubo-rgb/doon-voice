@@ -387,6 +387,402 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Enables the ack_voice_result command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-ack-voice-result",
+          "markdownDescription": "Enables the ack_voice_result command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the answer_open_question command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-answer-open-question",
+          "markdownDescription": "Enables the answer_open_question command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the answer_selection_question command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-answer-selection-question",
+          "markdownDescription": "Enables the answer_selection_question command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the background_voice_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-background-voice-status",
+          "markdownDescription": "Enables the background_voice_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cancel_voice_processing command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-cancel-voice-processing",
+          "markdownDescription": "Enables the cancel_voice_processing command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the capture_selected_text command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-capture-selected-text",
+          "markdownDescription": "Enables the capture_selected_text command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the check_microphone command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-check-microphone",
+          "markdownDescription": "Enables the check_microphone command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the clear_selection_question_shortcut command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-clear-selection-question-shortcut",
+          "markdownDescription": "Enables the clear_selection_question_shortcut command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the clear_voice_result command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-clear-voice-result",
+          "markdownDescription": "Enables the clear_voice_result command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the clear_voice_shortcut command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-clear-voice-shortcut",
+          "markdownDescription": "Enables the clear_voice_shortcut command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the close_selection_question_popup command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-close-selection-question-popup",
+          "markdownDescription": "Enables the close_selection_question_popup command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the configure_background_voice command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-configure-background-voice",
+          "markdownDescription": "Enables the configure_background_voice command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the direct_input_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-direct-input-status",
+          "markdownDescription": "Enables the direct_input_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the download_transcription_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-download-transcription-model",
+          "markdownDescription": "Enables the download_transcription_model command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the local_llm_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-local-llm-status",
+          "markdownDescription": "Enables the local_llm_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_direct_input_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-direct-input-settings",
+          "markdownDescription": "Enables the open_direct_input_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_frontmost_screen_question command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-frontmost-screen-question",
+          "markdownDescription": "Enables the open_frontmost_screen_question command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the open_local_llm_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-open-local-llm-install",
+          "markdownDescription": "Enables the open_local_llm_install command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the paste_question_answer command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-paste-question-answer",
+          "markdownDescription": "Enables the paste_question_answer command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the paste_to_active_app command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-paste-to-active-app",
+          "markdownDescription": "Enables the paste_to_active_app command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the process_voice_text command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-process-voice-text",
+          "markdownDescription": "Enables the process_voice_text command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the provider_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-provider-status",
+          "markdownDescription": "Enables the provider_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the pull_local_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-pull-local-model",
+          "markdownDescription": "Enables the pull_local_model command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the request_direct_input_permission command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-request-direct-input-permission",
+          "markdownDescription": "Enables the request_direct_input_permission command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the retry_voice_processing command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-retry-voice-processing",
+          "markdownDescription": "Enables the retry_voice_processing command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the selection_question_popup_payload command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-selection-question-popup-payload",
+          "markdownDescription": "Enables the selection_question_popup_payload command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_selection_question_shortcut command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-selection-question-shortcut",
+          "markdownDescription": "Enables the set_selection_question_shortcut command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the set_voice_shortcut command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-voice-shortcut",
+          "markdownDescription": "Enables the set_voice_shortcut command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the start_official_login command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-start-official-login",
+          "markdownDescription": "Enables the start_official_login command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the toggle_background_voice command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-toggle-background-voice",
+          "markdownDescription": "Enables the toggle_background_voice command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the transcribe_voice command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-transcribe-voice",
+          "markdownDescription": "Enables the transcribe_voice command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the transcription_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-transcription-status",
+          "markdownDescription": "Enables the transcription_status command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the voice_overlay_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-voice-overlay-status",
+          "markdownDescription": "Enables the voice_overlay_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the ack_voice_result command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-ack-voice-result",
+          "markdownDescription": "Denies the ack_voice_result command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the answer_open_question command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-answer-open-question",
+          "markdownDescription": "Denies the answer_open_question command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the answer_selection_question command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-answer-selection-question",
+          "markdownDescription": "Denies the answer_selection_question command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the background_voice_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-background-voice-status",
+          "markdownDescription": "Denies the background_voice_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancel_voice_processing command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-cancel-voice-processing",
+          "markdownDescription": "Denies the cancel_voice_processing command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the capture_selected_text command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-capture-selected-text",
+          "markdownDescription": "Denies the capture_selected_text command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the check_microphone command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-check-microphone",
+          "markdownDescription": "Denies the check_microphone command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the clear_selection_question_shortcut command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-clear-selection-question-shortcut",
+          "markdownDescription": "Denies the clear_selection_question_shortcut command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the clear_voice_result command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-clear-voice-result",
+          "markdownDescription": "Denies the clear_voice_result command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the clear_voice_shortcut command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-clear-voice-shortcut",
+          "markdownDescription": "Denies the clear_voice_shortcut command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the close_selection_question_popup command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-close-selection-question-popup",
+          "markdownDescription": "Denies the close_selection_question_popup command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the configure_background_voice command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-configure-background-voice",
+          "markdownDescription": "Denies the configure_background_voice command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the direct_input_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-direct-input-status",
+          "markdownDescription": "Denies the direct_input_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the download_transcription_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-download-transcription-model",
+          "markdownDescription": "Denies the download_transcription_model command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the local_llm_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-local-llm-status",
+          "markdownDescription": "Denies the local_llm_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_direct_input_settings command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-direct-input-settings",
+          "markdownDescription": "Denies the open_direct_input_settings command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_frontmost_screen_question command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-frontmost-screen-question",
+          "markdownDescription": "Denies the open_frontmost_screen_question command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the open_local_llm_install command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-open-local-llm-install",
+          "markdownDescription": "Denies the open_local_llm_install command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the paste_question_answer command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-paste-question-answer",
+          "markdownDescription": "Denies the paste_question_answer command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the paste_to_active_app command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-paste-to-active-app",
+          "markdownDescription": "Denies the paste_to_active_app command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the process_voice_text command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-process-voice-text",
+          "markdownDescription": "Denies the process_voice_text command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the provider_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-provider-status",
+          "markdownDescription": "Denies the provider_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the pull_local_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-pull-local-model",
+          "markdownDescription": "Denies the pull_local_model command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the request_direct_input_permission command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-request-direct-input-permission",
+          "markdownDescription": "Denies the request_direct_input_permission command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the retry_voice_processing command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-retry-voice-processing",
+          "markdownDescription": "Denies the retry_voice_processing command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the selection_question_popup_payload command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-selection-question-popup-payload",
+          "markdownDescription": "Denies the selection_question_popup_payload command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_selection_question_shortcut command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-selection-question-shortcut",
+          "markdownDescription": "Denies the set_selection_question_shortcut command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_voice_shortcut command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-voice-shortcut",
+          "markdownDescription": "Denies the set_voice_shortcut command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the start_official_login command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-start-official-login",
+          "markdownDescription": "Denies the start_official_login command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the toggle_background_voice command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-toggle-background-voice",
+          "markdownDescription": "Denies the toggle_background_voice command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the transcribe_voice command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-transcribe-voice",
+          "markdownDescription": "Denies the transcribe_voice command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the transcription_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-transcription-status",
+          "markdownDescription": "Denies the transcription_status command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the voice_overlay_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-voice-overlay-status",
+          "markdownDescription": "Denies the voice_overlay_status command without any pre-configured scope."
+        },
+        {
           "description": "Default core plugins set.\n#### This default permission set includes:\n\n- `core:path:default`\n- `core:event:default`\n- `core:window:default`\n- `core:webview:default`\n- `core:app:default`\n- `core:image:default`\n- `core:resources:default`\n- `core:menu:default`\n- `core:tray:default`",
           "type": "string",
           "const": "core:default",

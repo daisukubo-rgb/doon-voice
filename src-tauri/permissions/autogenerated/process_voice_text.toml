@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-process-voice-text"
+description = "Enables the process_voice_text command without any pre-configured scope."
+commands.allow = ["process_voice_text"]
+
+[[permission]]
+identifier = "deny-process-voice-text"
+description = "Denies the process_voice_text command without any pre-configured scope."
+commands.deny = ["process_voice_text"]

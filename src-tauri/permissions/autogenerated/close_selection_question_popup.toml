@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-close-selection-question-popup"
+description = "Enables the close_selection_question_popup command without any pre-configured scope."
+commands.allow = ["close_selection_question_popup"]
+
+[[permission]]
+identifier = "deny-close-selection-question-popup"
+description = "Denies the close_selection_question_popup command without any pre-configured scope."
+commands.deny = ["close_selection_question_popup"]

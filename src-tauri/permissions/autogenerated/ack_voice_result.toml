@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-ack-voice-result"
+description = "Enables the ack_voice_result command without any pre-configured scope."
+commands.allow = ["ack_voice_result"]
+
+[[permission]]
+identifier = "deny-ack-voice-result"
+description = "Denies the ack_voice_result command without any pre-configured scope."
+commands.deny = ["ack_voice_result"]

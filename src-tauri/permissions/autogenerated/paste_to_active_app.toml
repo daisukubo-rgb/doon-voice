@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-paste-to-active-app"
+description = "Enables the paste_to_active_app command without any pre-configured scope."
+commands.allow = ["paste_to_active_app"]
+
+[[permission]]
+identifier = "deny-paste-to-active-app"
+description = "Denies the paste_to_active_app command without any pre-configured scope."
+commands.deny = ["paste_to_active_app"]

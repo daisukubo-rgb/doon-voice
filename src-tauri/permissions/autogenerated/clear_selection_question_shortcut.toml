@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-clear-selection-question-shortcut"
+description = "Enables the clear_selection_question_shortcut command without any pre-configured scope."
+commands.allow = ["clear_selection_question_shortcut"]
+
+[[permission]]
+identifier = "deny-clear-selection-question-shortcut"
+description = "Denies the clear_selection_question_shortcut command without any pre-configured scope."
+commands.deny = ["clear_selection_question_shortcut"]

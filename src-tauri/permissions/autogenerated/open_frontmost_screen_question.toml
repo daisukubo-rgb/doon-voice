@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-open-frontmost-screen-question"
+description = "Enables the open_frontmost_screen_question command without any pre-configured scope."
+commands.allow = ["open_frontmost_screen_question"]
+
+[[permission]]
+identifier = "deny-open-frontmost-screen-question"
+description = "Denies the open_frontmost_screen_question command without any pre-configured scope."
+commands.deny = ["open_frontmost_screen_question"]

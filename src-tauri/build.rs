@@ -1,3 +1,40 @@
 fn main() {
-    tauri_build::build()
+    tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
+        tauri_build::AppManifest::new().commands(&[
+            "provider_status",
+            "start_official_login",
+            "local_llm_status",
+            "open_local_llm_install",
+            "pull_local_model",
+            "transcription_status",
+            "download_transcription_model",
+            "transcribe_voice",
+            "process_voice_text",
+            "answer_selection_question",
+            "answer_open_question",
+            "open_frontmost_screen_question",
+            "selection_question_popup_payload",
+            "close_selection_question_popup",
+            "paste_to_active_app",
+            "paste_question_answer",
+            "capture_selected_text",
+            "direct_input_status",
+            "request_direct_input_permission",
+            "open_direct_input_settings",
+            "set_voice_shortcut",
+            "set_selection_question_shortcut",
+            "clear_voice_shortcut",
+            "clear_selection_question_shortcut",
+            "configure_background_voice",
+            "background_voice_status",
+            "check_microphone",
+            "ack_voice_result",
+            "clear_voice_result",
+            "retry_voice_processing",
+            "cancel_voice_processing",
+            "toggle_background_voice",
+            "voice_overlay_status",
+        ]),
+    ))
+    .expect("DOON Voiceのコマンド権限を生成できませんでした");
 }

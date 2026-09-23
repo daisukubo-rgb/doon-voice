@@ -1,6 +1,8 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
+import { LogicalPosition, LogicalSize } from "@tauri-apps/api/dpi";
 import { listen } from "@tauri-apps/api/event";
+import { currentMonitor, getCurrentWindow, primaryMonitor } from "@tauri-apps/api/window";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check } from "@tauri-apps/plugin-updater";
 import { Check, CircleAlert, Download, ExternalLink, Mic, Plus, RefreshCw, WifiOff, X } from "lucide-react";
@@ -8,6 +10,7 @@ import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useS
 import { AudioRecorder, requestMicrophoneAccess, startAudioRecorder } from "./audio-recorder";
 import { DEFAULT_OUTPUT_TARGET, DEFAULT_SELECTION_QUESTION_TARGET, isOutputTarget, isSelectionQuestionTarget, OutputTarget, outputTargetLabel, SelectionQuestionTarget } from "./output-target";
 import { DEFAULT_SELECTION_QUESTION_SHORTCUT, DEFAULT_SHORTCUT, shortcutCaptureResult, shortcutLabel } from "./shortcut";
+import { fitWindowPositionToWorkArea, fitWindowSizeToWorkArea } from "./window-fit";
 
 type ProviderId = "codex" | "claude" | "gemini";
 type ProviderConnections = Record<ProviderId, boolean>;
@@ -83,6 +86,47 @@ function errorMessage(error: unknown, fallback: string) {
 
 function isTauriApp() {
   return "__TAURI_INTERNALS__" in window;
+}
+
+async function fitMainWindowToWorkArea() {
+  if (!isTauriApp()) return;
+  try {
+    const monitor = await currentMonitor() ?? await primaryMonitor();
+    if (!monitor) return;
+    const appWindow = getCurrentWindow();
+    const scale = monitor.scaleFactor;
+    const workArea = monitor.workArea.size.toLogical(scale);
+    const currentSize = (await appWindow.innerSize()).toLogical(scale);
+    const currentOuterSize = (await appWindow.outerSize()).toLogical(scale);
+    const frameSize = {
+      width: Math.max(0, currentOuterSize.width - currentSize.width),
+      height: Math.max(0, currentOuterSize.height - currentSize.height),
+    };
+    const availableInnerSize = {
+      width: Math.max(1, workArea.width - frameSize.width),
+      height: Math.max(1, workArea.height - frameSize.height),
+    };
+    const fittedSize = fitWindowSizeToWorkArea(currentSize, availableInnerSize);
+    const workAreaPosition = monitor.workArea.position.toLogical(scale);
+    const resized = fittedSize.width !== currentSize.width || fittedSize.height !== currentSize.height;
+    if (resized) await appWindow.setSize(new LogicalSize(fittedSize.width, fittedSize.height));
+    const fittedOuterSize = resized
+      ? (await appWindow.outerSize()).toLogical(scale)
+      : currentOuterSize;
+    const currentOuterPosition = (await appWindow.outerPosition()).toLogical(scale);
+    const preferredPosition = resized
+      ? {
+          x: workAreaPosition.x + (workArea.width - fittedOuterSize.width) / 2,
+          y: workAreaPosition.y + (workArea.height - fittedOuterSize.height) / 2,
+        }
+      : currentOuterPosition;
+    const fittedPosition = fitWindowPositionToWorkArea(preferredPosition, fittedOuterSize, { position: workAreaPosition, size: workArea });
+    if (fittedPosition.x !== currentOuterPosition.x || fittedPosition.y !== currentOuterPosition.y) {
+      await appWindow.setPosition(new LogicalPosition(fittedPosition.x, fittedPosition.y));
+    }
+  } catch {
+    console.warn("DOON Voiceの表示サイズを画面に合わせられませんでした");
+  }
 }
 
 function savedShortcut() {
@@ -244,7 +288,7 @@ function MainApp() {
   const questionOperationRef = useRef(0);
   const questionComposingRef = useRef(false);
 
-  useEffect(() => { void refreshAll(); }, []);
+  useEffect(() => { void refreshAll(); void fitMainWindowToWorkArea(); }, []);
   useEffect(() => {
     if (!isTauriApp()) {
       setAppVersion("開発版");
@@ -1158,27 +1202,26 @@ function MainApp() {
 
 function VoiceOverlay() {
   const initial = new URLSearchParams(window.location.search).get("overlay");
-  const [state, setState] = useState<OverlayState>(
+  const [state] = useState<OverlayState>(
     initial === "starting" || initial === "thinking" || initial === "done" || initial === "error" ? initial : "listening",
   );
+  const [failureDetail, setFailureDetail] = useState("");
   useEffect(() => {
     document.documentElement.classList.add("is-overlay");
     if (!isTauriApp()) {
       return () => document.documentElement.classList.remove("is-overlay");
     }
-    let stopListening: (() => void) | undefined;
-    void listen<string>("voice-overlay-state", (event) => {
-      if (event.payload === "starting" || event.payload === "listening" || event.payload === "thinking" || event.payload === "done" || event.payload === "error") {
-        setState(event.payload);
-      }
-    }).then((unlisten) => { stopListening = unlisten; });
+    void appInvoke<string>("voice_overlay_status")
+      .then((detail) => {
+        if (detail) setFailureDetail(detail);
+      })
+      .catch(() => undefined);
     return () => {
-      stopListening?.();
       document.documentElement.classList.remove("is-overlay");
     };
   }, []);
   const label = state === "starting" ? "準備しています" : state === "listening" ? "聞いています" : state === "thinking" ? "処理しています" : state === "done" ? "入力しました" : "入力できませんでした";
-  const detail = state === "starting" ? "マイクを準備しています" : state === "listening" ? "音声を受け取っています" : state === "thinking" ? "音声を処理しています" : state === "done" ? "カーソル位置へ入力しました" : "DOON Voiceで内容を確認してください";
+  const detail = state === "starting" ? "マイクを準備しています" : state === "listening" ? "音声を受け取っています" : state === "thinking" ? "音声を処理しています" : state === "done" ? "カーソル位置へ入力しました" : failureDetail || "DOON Voiceで内容を確認してください";
   return <main className={`voice-overlay is-${state}`} aria-live="assertive">
     <span className="voice-overlay-icon"><Mic size={25} strokeWidth={1.9} /></span>
     <span className="voice-overlay-copy"><small>DOON VOICE</small><strong>{label}</strong><em>{detail}</em></span>

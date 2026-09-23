@@ -12,6 +12,7 @@
     "src/audio-recorder.ts",
     "src/output-target.ts",
     "src/shortcut.ts",
+    "src/window-fit.ts",
     "test/**/*.mts"
   ]
 }

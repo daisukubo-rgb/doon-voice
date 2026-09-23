@@ -16,7 +16,7 @@ const browser = await chromium.launch({ headless: true });
 let failures = 0;
 const browserErrors = [];
 
-function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authenticated = {}, transcription = { downloaded: true, name: "音声認識", size: "574 MB" }, local = { installed: false, running: false, models: [] }, selectionQuestionPopup } = {}) {
+function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, overlayStatus = "", authenticated = {}, transcription = { downloaded: true, name: "音声認識", size: "574 MB" }, local = { installed: false, running: false, models: [] }, selectionQuestionPopup, monitorSize = { width: 1440, height: 900 }, monitorPosition = { x: 0, y: 0 }, currentMonitorAvailable = true, primaryMonitorAvailable = true, primaryMonitorSize = monitorSize, primaryMonitorPosition = monitorPosition, initialWindowSize = { width: 1440, height: 900 }, initialWindowPosition = { x: 0, y: 0 }, windowFrame = { width: 0, height: 0 } } = {}) {
   localStorage.clear();
   localStorage.setItem("doon-voice-dictionary", dictionaryRaw ?? JSON.stringify(dictionary));
   localStorage.setItem("doon-voice-provider-connections", JSON.stringify({ codex: false, claude: false, gemini: false }));
@@ -26,6 +26,7 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
   const idle = { state: "idle", generation: 1, transcript: "", output: "", message: "", clipboard_saved: false, recovery_pending: false };
   window.fixture = {
     calls: [], errors: [], authenticated, clipboard: "", clipboardFails: false,
+    windowSize: null, windowPosition: null, initialWindowPosition,
     selection: "この文章は選択された文脈です。", questionAnswer: "選択文を根拠にした回答です。", pastedAnswer: "",
     selectionQuestionPopup: selectionQuestionPopup || { selection: "選択された説明文です。", context_kind: "selection", question: "これは何ですか", answer: "選択文への自動回答です。", target: "codex" },
     registeredShortcut: null, registeredQuestionShortcut: null, snapshot: { ...idle, ...snapshot },
@@ -73,12 +74,20 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
   } } });
   window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} };
   window.__TAURI_INTERNALS__ = {
+    metadata: { currentWindow: { label: "main" } },
     transformCallback(callback) { const id = nextId++; callbacks.set(id, callback); return id; },
     async invoke(command, args) {
       const f = window.fixture;
       f.calls.push({ command, args });
       if (["ack_voice_result", "clear_voice_result", "retry_voice_processing", "cancel_voice_processing"].includes(command) && args?.generation !== f.snapshot.generation) throw new Error("結果が更新されています");
       switch (command) {
+        case "plugin:window|current_monitor": return currentMonitorAvailable ? { name: "test", scaleFactor: 1, position: monitorPosition, size: monitorSize, workArea: { position: monitorPosition, size: monitorSize } } : null;
+        case "plugin:window|primary_monitor": return primaryMonitorAvailable ? { name: "primary", scaleFactor: 1, position: primaryMonitorPosition, size: primaryMonitorSize, workArea: { position: primaryMonitorPosition, size: primaryMonitorSize } } : null;
+        case "plugin:window|outer_position": return initialWindowPosition;
+        case "plugin:window|inner_size": return f.windowSize || initialWindowSize;
+        case "plugin:window|outer_size": { const size = f.windowSize || initialWindowSize; return { width: size.width + windowFrame.width, height: size.height + windowFrame.height }; }
+        case "plugin:window|set_size": { const size = args.value.size; f.windowSize = { width: size.width, height: size.height }; return; }
+        case "plugin:window|set_position": f.windowPosition = { x: args.value.position.x, y: args.value.position.y }; return;
         case "provider_status": return { provider: args.provider, installed: true, authenticated: Boolean(f.authenticated[args.provider]), usability: "unknown" };
         case "local_llm_status": return f.local;
         case "transcription_status": return f.transcription;
@@ -87,6 +96,7 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
         case "direct_input_status": return true;
         case "check_microphone": return;
         case "background_voice_status": return f.snapshot;
+        case "voice_overlay_status": return overlayStatus;
         case "capture_selected_text": return f.selection;
         case "transcribe_voice": return "これは何ですか";
         case "answer_selection_question": return f.questionAnswer;
@@ -113,7 +123,7 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
         case "retry_voice_processing": f.publish({ state: "processing" }); return;
         case "ack_voice_result": f.publish({ clipboard_saved: true, recovery_pending: false }); return;
         case "clear_voice_result": f.publish(idle); return;
-        case "plugin:app|version": return "0.5.44";
+        case "plugin:app|version": return "0.5.45";
         case "plugin:event|listen": { const id = nextId++; listeners.set(id, args); return id; }
         case "plugin:event|unlisten": listeners.delete(args.eventId); return;
         default: throw new Error(`Unexpected desktop command: ${command}`);
@@ -122,8 +132,8 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, authentica
   };
 }
 
-async function pageFor(options = {}, query = "") {
-  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+async function pageFor(options = {}, query = "", viewport = { width: 1440, height: 900 }) {
+  const page = await browser.newPage({ viewport });
   page.on("pageerror", (error) => browserErrors.push(error.message));
   page.setDefaultTimeout(2500);
   await page.addInitScript(mockDesktop, options);
@@ -143,9 +153,73 @@ const recovery = { transcript: "明日は行きません。", output: "", recove
 const formattedLongOutput = "明日の営業会議では、各担当が今週の進捗と次週までに決める事項を順番に共有します。\n\n資料の数字に変更があった担当は、会議前に最新版へ差し替えてください。\n\n終わりに、次回までの担当と期限を確認します。";
 
 try {
+  await check("RCS-006: 小さい画面では本体ウィンドウを縮小して中央へ置く", async () => {
+    const page = await pageFor({ monitorSize: { width: 840, height: 700 }, initialWindowSize: { width: 1180, height: 760 }, windowFrame: { width: 16, height: 40 } }, "", { width: 792, height: 628 });
+    await page.waitForTimeout(100);
+    const state = await page.evaluate(() => ({ calls: window.fixture.calls, size: window.fixture.windowSize, position: window.fixture.windowPosition || window.fixture.initialWindowPosition }));
+    assert.deepEqual(state.size, { width: 792, height: 628 }, JSON.stringify(state));
+    assert.equal(state.position?.x, 16, JSON.stringify(state));
+    assert.equal(state.position?.y, 16, JSON.stringify(state));
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "縮小後の本体画面が横にはみ出さない");
+    await page.close();
+  });
+
+  await check("RCS-006: サイズ変更が不要でも画面外の位置だけを戻す", async () => {
+    const page = await pageFor({
+      monitorSize: { width: 840, height: 700 },
+      initialWindowSize: { width: 780, height: 580 },
+      initialWindowPosition: { x: 600, y: 300 },
+      windowFrame: { width: 16, height: 40 },
+    });
+    await page.waitForTimeout(100);
+    const state = await page.evaluate(() => ({ calls: window.fixture.calls, position: window.fixture.windowPosition || window.fixture.initialWindowPosition }));
+    assert.deepEqual(state.position, { x: 44, y: 80 }, JSON.stringify(state));
+    assert.equal(state.calls.some((call) => call.command === "plugin:window|set_size"), false, JSON.stringify(state));
+    await page.close();
+  });
+
+  await check("RCS-006: 現在の画面が取れない場合はメイン画面へ戻す", async () => {
+    const page = await pageFor({
+      currentMonitorAvailable: false,
+      primaryMonitorSize: { width: 840, height: 700 },
+      primaryMonitorPosition: { x: 0, y: 0 },
+      initialWindowSize: { width: 780, height: 580 },
+      initialWindowPosition: { x: 3000, y: 1500 },
+      windowFrame: { width: 16, height: 40 },
+    });
+    await page.waitForTimeout(100);
+    const state = await page.evaluate(() => ({ calls: window.fixture.calls, position: window.fixture.windowPosition || window.fixture.initialWindowPosition }));
+    assert.deepEqual(state.position, { x: 44, y: 80 }, JSON.stringify(state));
+    assert.equal(state.calls.some((call) => call.command === "plugin:window|primary_monitor"), true, JSON.stringify(state));
+    await page.close();
+  });
+
+  await check("RCS-006: 最小ウィンドウが作業領域に収まらない場合は左上端を画面内に保つ", async () => {
+    const page = await pageFor({
+      monitorSize: { width: 300, height: 220 },
+      initialWindowSize: { width: 200, height: 160 },
+      windowFrame: { width: 16, height: 40 },
+    });
+    await page.waitForTimeout(100);
+    const state = await page.evaluate(() => ({ calls: window.fixture.calls, size: window.fixture.windowSize, position: window.fixture.windowPosition || window.fixture.initialWindowPosition }));
+    assert.deepEqual(state.size, { width: 320, height: 240 }, JSON.stringify(state));
+    assert.deepEqual(state.position, { x: 0, y: 0 }, JSON.stringify(state));
+    await page.close();
+  });
+
   await check("RCS-006: error overlay never claims a successful clipboard write", async () => {
     const page = await pageFor({}, "?overlay=error");
     assert.doesNotMatch(await page.locator("main").innerText(), /クリップボードに保存しました/);
+    await page.close();
+  });
+
+  await check("RCS-006: エラーオーバーレイに原因と対処を表示する", async () => {
+    const failure = "選択した文章を取得できませんでした。質問したい文章を選択してから、もう一度試してください。";
+    const page = await pageFor({ overlayStatus: failure }, "?overlay=error");
+    await page.getByText(failure, { exact: true }).waitFor();
+    assert.equal(await page.locator(".voice-overlay-copy em").innerText(), failure);
+    assert.equal(await page.locator(".voice-overlay-copy em").evaluate((element) => getComputedStyle(element).whiteSpace), "normal");
+    assert.equal(await page.locator(".voice-overlay-copy em").evaluate((element) => getComputedStyle(element).webkitLineClamp), "2");
     await page.close();
   });
 
@@ -244,8 +318,10 @@ try {
 
   await check("前面の画面を質問する操作だけが画面の読み取りを開始する", async () => {
     const page = await pageFor();
+    await page.evaluate(() => { window.fixture.selection = ""; });
     await page.getByRole("button", { name: "前面の画面を質問または編集", exact: true }).click();
     await page.waitForFunction(() => window.fixture.calls.some(({ command }) => command === "open_frontmost_screen_question"));
+    assert.equal(await page.evaluate(() => window.fixture.calls.some(({ command }) => command === "capture_selected_text")), false);
     await page.close();
   });
 
@@ -620,7 +696,7 @@ try {
   await check("更新欄に現在の版と確認結果を表示する", async () => {
     const page = await pageFor();
     await page.getByRole("button", { name: "接続と設定", exact: true }).click();
-    await page.getByText("現在の版: v0.5.44", { exact: true }).waitFor();
+    await page.getByText("現在の版: v0.5.45", { exact: true }).waitFor();
     await page.getByText("最新版はまだ確認していません。", { exact: true }).waitFor();
     await page.screenshot({ path: path.join(artifacts, "settings-update-version-desktop.png"), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
@@ -717,7 +793,7 @@ try {
   if (process.env.UI_SCREENSHOTS) {
     await mkdir(artifacts, { recursive: true });
     const page = await pageFor({ snapshot: { ...recovery, output: formattedLongOutput } });
-    for (const [label, width, height] of [["pc", 1440, 900], ["mobile", 390, 844]]) {
+    for (const [label, width, height] of [["pc", 1440, 900], ["compact", 808, 668], ["mobile", 390, 844]]) {
       await page.setViewportSize({ width, height });
       for (const [view, name] of [["home", "ホーム"], ["settings", "接続と設定"], ["dictionary", "辞書"]]) {
         await page.getByRole("button", { name, exact: true }).click();
@@ -741,6 +817,14 @@ try {
       await page.getByText("設定を保存しています", { exact: true }).waitFor({ state: "detached" });
     }
     await page.close();
+
+    const errorDetail = "選択した文章を取得できませんでした。質問したい文章を選択してから、もう一度試してください。";
+    const overlayPage = await pageFor({ snapshot: { message: errorDetail } }, "?overlay=error");
+    await overlayPage.locator(".voice-overlay-copy em").waitFor();
+    await overlayPage.screenshot({ path: path.join(artifacts, "pc-voice-overlay-error.png") });
+    await overlayPage.setViewportSize({ width: 390, height: 844 });
+    await overlayPage.screenshot({ path: path.join(artifacts, "mobile-voice-overlay-error.png") });
+    await overlayPage.close();
   }
 } finally {
   await browser.close();

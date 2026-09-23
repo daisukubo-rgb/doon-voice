@@ -248,6 +248,7 @@ fn direct_input_permission_message() -> &'static str {
 
 fn overlay_state_label(state: &str) -> Option<&'static str> {
     match state {
+        "starting" => Some("準備しています"),
         "listening" => Some("聞いています"),
         "thinking" => Some("考えています"),
         "done" => Some("入力しました"),
@@ -304,6 +305,15 @@ fn background_voice_action(phase: BackgroundVoicePhase) -> BackgroundVoiceAction
     }
 }
 
+fn voice_overlay_update_is_current(
+    runtime_generation: u64,
+    runtime_phase: BackgroundVoicePhase,
+    expected_generation: u64,
+    expected_phase: BackgroundVoicePhase,
+) -> bool {
+    runtime_generation == expected_generation && runtime_phase == expected_phase
+}
+
 #[derive(Clone, Serialize)]
 struct BackgroundVoiceSnapshot {
     generation: u64,
@@ -322,6 +332,7 @@ struct BackgroundVoiceRuntime {
     transcript: String,
     output: String,
     message: String,
+    overlay_error_message: String,
     generation: u64,
     clipboard_saved: bool,
     recovery_pending: bool,
@@ -342,6 +353,7 @@ impl BackgroundVoiceRuntime {
             transcript: String::new(),
             output: String::new(),
             message: String::new(),
+            overlay_error_message: String::new(),
             generation: 0,
             clipboard_saved: false,
             recovery_pending: false,
@@ -698,6 +710,15 @@ fn background_voice_status(
         .map_err(|_| "音声入力の状態を読み取れませんでした。".to_string())
 }
 
+#[tauri::command]
+fn voice_overlay_status(state: State<'_, BackgroundVoiceState>) -> Result<String, String> {
+    state
+        .0
+        .lock()
+        .map(|runtime| runtime.overlay_error_message.clone())
+        .map_err(|_| "音声状態の詳細を読み取れませんでした。".to_string())
+}
+
 /// Verifies the native recorder rather than only the WebView permission.
 /// This catches unavailable USB/Bluetooth devices and desktop-app privacy
 /// restrictions before the user starts dictating.
@@ -711,7 +732,6 @@ fn toggle_background_voice(app: AppHandle) -> Result<(), String> {
     handle_background_voice_toggle(&app, false)
 }
 
-#[tauri::command]
 fn set_voice_overlay(app: AppHandle, state: String) -> Result<(), String> {
     overlay_state_label(&state).ok_or_else(|| "表示状態が不正です。".to_string())?;
     if state == "hidden" {
@@ -772,10 +792,35 @@ fn set_voice_overlay(app: AppHandle, state: String) -> Result<(), String> {
     window
         .show()
         .map_err(|_| "音声状態を表示できませんでした。".to_string())?;
-    window
-        .emit("voice-overlay-state", &state)
-        .map_err(|_| "音声状態を更新できませんでした。".to_string())?;
     Ok(())
+}
+
+fn set_voice_overlay_if_current(
+    app: &AppHandle,
+    generation: u64,
+    phase: BackgroundVoicePhase,
+    label: &str,
+) {
+    let dispatch_app = app.clone();
+    let state_app = app.clone();
+    let label = label.to_string();
+    let _ = dispatch_app.run_on_main_thread(move || {
+        let state = state_app.state::<BackgroundVoiceState>();
+        let Ok(mut runtime) = state.0.lock() else {
+            return;
+        };
+        if !voice_overlay_update_is_current(runtime.generation, runtime.phase, generation, phase) {
+            return;
+        }
+        runtime.overlay_error_message = if label == "error" {
+            runtime.message.clone()
+        } else {
+            String::new()
+        };
+        // The check and window update run on the main thread, so no other
+        // event-loop state transition can overtake this update.
+        let _ = set_voice_overlay(state_app.clone(), label);
+    });
 }
 #[cfg(target_os = "macos")]
 #[link(name = "ApplicationServices", kind = "framework")]
@@ -1069,15 +1114,15 @@ $graphics.Dispose(); $bitmap.Dispose()
     })
 }
 
-fn capture_question_context_for_voice(app: &AppHandle) -> Result<QuestionContext, String> {
-    selection_question_context(capture_active_selection_for_voice_question(app))
-}
-
-fn selection_question_context(selection: Option<String>) -> Result<QuestionContext, String> {
-    selection.map(QuestionContext::Selection).ok_or_else(|| {
-        "選択した文章を取得できませんでした。質問したい文章を選択してから、もう一度試してください。"
-            .to_string()
-    })
+fn background_voice_question_context(
+    selection_question: bool,
+    selection: Option<String>,
+) -> Option<QuestionContext> {
+    if selection_question {
+        selection.map(QuestionContext::Selection)
+    } else {
+        None
+    }
 }
 
 #[tauri::command]
@@ -2544,6 +2589,95 @@ fn use_ai_output_or_transcript(
     }
 }
 
+fn is_ascii_word_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || character == '_'
+}
+
+fn ascii_case_insensitive_term_matches(text: &str, term: &str) -> Vec<(usize, usize)> {
+    if term.is_empty() {
+        return Vec::new();
+    }
+
+    text.char_indices()
+        .filter_map(|(start, _)| {
+            let end = start.checked_add(term.len())?;
+            if end > text.len() || !text.is_char_boundary(end) {
+                return None;
+            }
+
+            let candidate = &text[start..end];
+            if !candidate.eq_ignore_ascii_case(term)
+                || text[..start]
+                    .chars()
+                    .next_back()
+                    .map(is_ascii_word_character)
+                    .unwrap_or(false)
+                || text[end..]
+                    .chars()
+                    .next()
+                    .map(is_ascii_word_character)
+                    .unwrap_or(false)
+            {
+                return None;
+            }
+
+            Some((start, end))
+        })
+        .collect()
+}
+
+fn normalize_registered_term_spelling(
+    transcript: &str,
+    output: &str,
+    dictionary: &[String],
+) -> String {
+    let mut replacements = Vec::new();
+    const BUILTIN_TERMS: [&str; 1] = ["DOON Voice"];
+    for term in BUILTIN_TERMS
+        .into_iter()
+        .chain(dictionary.iter().map(String::as_str))
+    {
+        if !term.bytes().any(|byte| byte.is_ascii_alphabetic())
+            || ascii_case_insensitive_term_matches(transcript, term).is_empty()
+        {
+            continue;
+        }
+        replacements.extend(
+            ascii_case_insensitive_term_matches(output, term)
+                .into_iter()
+                .map(|(start, end)| (start, end, term)),
+        );
+    }
+
+    replacements.sort_by(|left, right| {
+        left.0
+            .cmp(&right.0)
+            .then_with(|| (right.1 - right.0).cmp(&(left.1 - left.0)))
+    });
+
+    let mut selected = Vec::new();
+    let mut previous_end = 0;
+    for replacement in replacements {
+        if replacement.0 >= previous_end {
+            previous_end = replacement.1;
+            selected.push(replacement);
+        }
+    }
+    if selected.is_empty() {
+        return output.to_string();
+    }
+
+    let mut normalized = String::with_capacity(output.len());
+    let mut cursor = 0;
+    for (start, end, canonical) in selected {
+        normalized.push_str(&output[cursor..start]);
+        normalized.push_str(canonical);
+        cursor = end;
+    }
+    normalized.push_str(&output[cursor..]);
+    normalized
+}
+
 fn format_long_voice_text(text: &str) -> String {
     if text.chars().count() < LONG_TEXT_FORMAT_THRESHOLD || !text.contains('。') {
         return text.to_string();
@@ -2882,8 +3016,10 @@ async fn process_voice_text_cancellable(
             Err(_) => {}
         }
     }
-    use_ai_output_or_transcript(&transcript, polished)
-        .map(|text| format_long_voice_text(&format_spoken_enumeration(&text)))
+    use_ai_output_or_transcript(&transcript, polished).map(|text| {
+        let text = normalize_registered_term_spelling(&transcript, &text, &dictionary);
+        format_long_voice_text(&format_spoken_enumeration(&text))
+    })
 }
 
 #[tauri::command]
@@ -3093,7 +3229,7 @@ fn handle_background_voice_toggle(app: &AppHandle, selection_question: bool) -> 
             runtime.snapshot()
         };
         publish_background_voice(app, &snapshot);
-        let _ = set_voice_overlay(app.clone(), "error".into());
+        set_voice_overlay_if_current(app, snapshot.generation, snapshot.state, "error");
         schedule_overlay_hide(
             app.clone(),
             snapshot.generation,
@@ -3108,11 +3244,13 @@ fn start_background_recording(
     state: &State<'_, BackgroundVoiceState>,
     selection_question: bool,
 ) -> Result<(), String> {
-    let selected_question_context = if selection_question {
-        Some(capture_question_context_for_voice(app)?)
+    let selection = if selection_question {
+        capture_active_selection_for_voice_question(app)
     } else {
         None
     };
+    let selected_question_context =
+        background_voice_question_context(selection_question, selection);
     let (generation, snapshot) = {
         let mut runtime = state
             .0
@@ -3138,6 +3276,7 @@ fn start_background_recording(
         (runtime.generation, runtime.snapshot())
     };
     publish_background_voice(app, &snapshot);
+    set_voice_overlay_if_current(app, generation, BackgroundVoicePhase::Starting, "starting");
 
     let recording_app = app.clone();
     std::thread::spawn(move || match NativeAudioRecorder::start() {
@@ -3159,6 +3298,12 @@ fn start_background_recording(
                 runtime.snapshot()
             };
             publish_background_voice(&recording_app, &snapshot);
+            set_voice_overlay_if_current(
+                &recording_app,
+                generation,
+                BackgroundVoicePhase::Recording,
+                "listening",
+            );
             // Device loss and size limits finalize the captured prefix without
             // requiring another shortcut press or discarding valid samples.
             loop {
@@ -3191,7 +3336,6 @@ fn start_background_recording(
             finish_background_processing(&recording_app, generation, Err(error));
         }
     });
-    let _ = set_voice_overlay(app.clone(), "listening".into());
     Ok(())
 }
 
@@ -3213,7 +3357,12 @@ fn cancel_background_recording_start(
         runtime.message = "音声入力を中止しました".into();
         runtime.snapshot()
     };
-    let _ = set_voice_overlay(app.clone(), "hidden".into());
+    set_voice_overlay_if_current(
+        app,
+        snapshot.generation,
+        BackgroundVoicePhase::Idle,
+        "hidden",
+    );
     publish_background_voice(app, &snapshot);
     Ok(())
 }
@@ -3242,7 +3391,12 @@ fn stop_and_process_background_recording(
             runtime.snapshot(),
         )
     };
-    let _ = set_voice_overlay(app.clone(), "thinking".into());
+    set_voice_overlay_if_current(
+        app,
+        generation,
+        BackgroundVoicePhase::Processing,
+        "thinking",
+    );
     publish_background_voice(app, &snapshot);
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -3446,7 +3600,7 @@ fn finish_background_processing(app: &AppHandle, generation: u64, result: Result
             }
         }
     };
-    let _ = set_voice_overlay(app.clone(), overlay.into());
+    set_voice_overlay_if_current(app, generation, BackgroundVoicePhase::Idle, overlay);
     publish_background_voice(app, &snapshot);
     schedule_overlay_hide(app.clone(), generation, Duration::from_millis(1800));
 }
@@ -3535,7 +3689,12 @@ fn retry_voice_processing(
         )
     };
     publish_background_voice(&app, &snapshot);
-    let _ = set_voice_overlay(app.clone(), "thinking".into());
+    set_voice_overlay_if_current(
+        &app,
+        generation,
+        BackgroundVoicePhase::Processing,
+        "thinking",
+    );
     tauri::async_runtime::spawn(async move {
         let result =
             process_and_deliver_text(&app, generation, config, transcript, cancelled).await;
@@ -3575,17 +3734,7 @@ fn cancel_voice_processing(
 fn schedule_overlay_hide(app: AppHandle, generation: u64, delay: Duration) {
     std::thread::spawn(move || {
         std::thread::sleep(delay);
-        let state = app.state::<BackgroundVoiceState>();
-        let should_hide = state
-            .0
-            .lock()
-            .map(|runtime| {
-                runtime.generation == generation && runtime.phase == BackgroundVoicePhase::Idle
-            })
-            .unwrap_or(false);
-        if should_hide {
-            let _ = set_voice_overlay(app, "hidden".into());
-        }
+        set_voice_overlay_if_current(&app, generation, BackgroundVoicePhase::Idle, "hidden");
     });
 }
 #[cfg(target_os = "macos")]
@@ -3943,7 +4092,6 @@ pub fn run() {
             direct_input_status,
             request_direct_input_permission,
             open_direct_input_settings,
-            set_voice_overlay,
             set_voice_shortcut,
             set_selection_question_shortcut,
             clear_voice_shortcut,
@@ -3955,7 +4103,8 @@ pub fn run() {
             clear_voice_result,
             retry_voice_processing,
             cancel_voice_processing,
-            toggle_background_voice
+            toggle_background_voice,
+            voice_overlay_status
         ])
         .build(tauri::generate_context!())
         .expect("DOON Voiceを起動できませんでした");
@@ -4035,6 +4184,62 @@ mod tests {
             "接続エラー"
         );
     }
+
+    #[test]
+    fn 登録語の英字表記を入力に存在する場合だけ揃える() {
+        let dictionary = vec!["DOON Voice".to_string()];
+
+        assert_eq!(
+            normalize_registered_term_spelling(
+                "来週、Doon Voiceについて話します",
+                "来週、Doon Voiceについて話します。",
+                &dictionary,
+            ),
+            "来週、DOON Voiceについて話します。"
+        );
+        assert_eq!(
+            normalize_registered_term_spelling(
+                "来週、別の製品について話します",
+                "来週、Doon Voiceについて話します。",
+                &dictionary,
+            ),
+            "来週、Doon Voiceについて話します。"
+        );
+        assert_eq!(
+            normalize_registered_term_spelling(
+                "来週、Doon Voiceについて話します",
+                "来週、Doon Voiceについて話します。",
+                &[],
+            ),
+            "来週、DOON Voiceについて話します。"
+        );
+    }
+
+    #[test]
+    fn 登録語の一部だけに一致する英単語は変更しない() {
+        let dictionary = vec!["DOON".to_string()];
+        let text = "Doonish Voice";
+
+        assert_eq!(
+            normalize_registered_term_spelling(text, text, &dictionary),
+            text
+        );
+    }
+
+    #[test]
+    fn ユーザー辞書の英字表記も原文にある語だけ揃える() {
+        let dictionary = vec!["API Gateway".to_string()];
+
+        assert_eq!(
+            normalize_registered_term_spelling(
+                "api gatewayの応答を確認します",
+                "Api Gatewayの応答を確認します。",
+                &dictionary,
+            ),
+            "API Gatewayの応答を確認します。"
+        );
+    }
+
     #[test]
     fn 直接入力の権限案内は送信先を明示する() {
         assert!(direct_input_permission_message().contains("アクセシビリティ"));
@@ -4269,16 +4474,15 @@ mod tests {
     }
 
     #[test]
-    fn 音声の選択質問は選択文が取れないとき画面全体へ切り替えない() {
+    fn 選択質問キーで選択文がないときは画面を読まず通常の音声入力に戻る() {
         assert!(matches!(
-            selection_question_context(Some("選択した文章".to_string())),
-            Ok(QuestionContext::Selection(selection)) if selection == "選択した文章"
+            background_voice_question_context(true, Some("選択した文章".to_string())),
+            Some(QuestionContext::Selection(selection)) if selection == "選択した文章"
         ));
-
-        assert!(matches!(
-            selection_question_context(None),
-            Err(error) if error.contains("選択した文章を取得できませんでした")
-        ));
+        assert!(background_voice_question_context(true, None).is_none());
+        assert!(
+            background_voice_question_context(false, Some("無視する選択文".to_string())).is_none()
+        );
     }
 
     #[test]
@@ -4403,12 +4607,35 @@ mod tests {
 
     #[test]
     fn 音声オーバーレイの状態を限定する() {
+        assert_eq!(overlay_state_label("starting"), Some("準備しています"));
         assert_eq!(overlay_state_label("listening"), Some("聞いています"));
         assert_eq!(overlay_state_label("thinking"), Some("考えています"));
         assert_eq!(overlay_state_label("done"), Some("入力しました"));
         assert_eq!(overlay_state_label("error"), Some("入力できませんでした"));
         assert_eq!(overlay_state_label("hidden"), Some(""));
         assert!(overlay_state_label("unknown").is_none());
+    }
+
+    #[test]
+    fn 録音オーバーレイは現在の世代と状態にだけ反映する() {
+        assert!(voice_overlay_update_is_current(
+            7,
+            BackgroundVoicePhase::Recording,
+            7,
+            BackgroundVoicePhase::Recording,
+        ));
+        assert!(!voice_overlay_update_is_current(
+            8,
+            BackgroundVoicePhase::Starting,
+            7,
+            BackgroundVoicePhase::Recording,
+        ));
+        assert!(!voice_overlay_update_is_current(
+            7,
+            BackgroundVoicePhase::Processing,
+            7,
+            BackgroundVoicePhase::Recording,
+        ));
     }
 
     #[test]

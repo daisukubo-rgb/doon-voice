@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-clear-voice-shortcut"
+description = "Enables the clear_voice_shortcut command without any pre-configured scope."
+commands.allow = ["clear_voice_shortcut"]
+
+[[permission]]
+identifier = "deny-clear-voice-shortcut"
+description = "Denies the clear_voice_shortcut command without any pre-configured scope."
+commands.deny = ["clear_voice_shortcut"]

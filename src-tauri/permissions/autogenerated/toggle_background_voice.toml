@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-toggle-background-voice"
+description = "Enables the toggle_background_voice command without any pre-configured scope."
+commands.allow = ["toggle_background_voice"]
+
+[[permission]]
+identifier = "deny-toggle-background-voice"
+description = "Denies the toggle_background_voice command without any pre-configured scope."
+commands.deny = ["toggle_background_voice"]

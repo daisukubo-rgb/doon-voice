@@ -1,7 +1,7 @@
 {
   "name": "doon-voice-desktop",
   "private": true,
-  "version": "0.5.44",
+  "version": "0.5.45",
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "test": "npm run test:compile && node --test --experimental-test-coverage .test-dist/test/*.test.mjs && node test/ui-rules.test.mjs && node scripts/test-launcher.mjs && node --test test/distribution.test.mjs",
+    "test": "npm run test:compile && node --test --experimental-test-coverage test/window-fit.test.mjs .test-dist/test/*.test.mjs && node test/ui-rules.test.mjs && node scripts/test-launcher.mjs && node --test test/distribution.test.mjs",
     "test:ui": "node scripts/ui-regression.mjs",
     "test:compile": "node -e \"require('node:fs').rmSync('.test-dist',{recursive:true,force:true})\" && tsc -p tsconfig.test.json",
     "tauri": "tauri",

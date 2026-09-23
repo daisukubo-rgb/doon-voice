@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "selection-question-popup-capability",
+  "description": "選択文の質問ポップアップに必要な回答操作だけを許可する",
+  "windows": ["selection-question-popup"],
+  "permissions": [
+    "allow-selection-question-popup-payload",
+    "allow-answer-open-question",
+    "allow-close-selection-question-popup"
+  ]
+}
