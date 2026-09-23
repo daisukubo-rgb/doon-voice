@@ -898,15 +898,15 @@ fn send_paste_shortcut() -> Result<(), String> {
 #[cfg(target_os = "macos")]
 fn send_copy_shortcut() -> Result<(), String> {
     let source = CGEventSource::new(CGEventSourceStateID::CombinedSessionState)
-        .map_err(|_| "選択した文章を取得できませんでした。".to_string())?;
+        .map_err(|_| selection_capture_retry_message().to_string())?;
     let command_down = CGEvent::new_keyboard_event(source.clone(), 55, true)
-        .map_err(|_| "選択した文章を取得できませんでした。".to_string())?;
+        .map_err(|_| selection_capture_retry_message().to_string())?;
     let command_up = CGEvent::new_keyboard_event(source.clone(), 55, false)
-        .map_err(|_| "選択した文章を取得できませんでした。".to_string())?;
+        .map_err(|_| selection_capture_retry_message().to_string())?;
     let down = CGEvent::new_keyboard_event(source.clone(), 8, true)
-        .map_err(|_| "選択した文章を取得できませんでした。".to_string())?;
+        .map_err(|_| selection_capture_retry_message().to_string())?;
     let up = CGEvent::new_keyboard_event(source, 8, false)
-        .map_err(|_| "選択した文章を取得できませんでした。".to_string())?;
+        .map_err(|_| selection_capture_retry_message().to_string())?;
     command_down.post(CGEventTapLocation::Session);
     std::thread::sleep(Duration::from_millis(12));
     down.set_flags(CGEventFlags::CGEventFlagCommand);
@@ -939,11 +939,11 @@ fn send_copy_shortcut() -> Result<(), String> {
     let mut command = Command::new("powershell");
     command.args(["-NoProfile", "-NonInteractive", "-Command", script]);
     let run = run_bounded(command, Duration::from_secs(5), &AtomicBool::new(false))
-        .map_err(|_| "選択した文章を取得できませんでした。".to_string())?;
+        .map_err(|_| selection_capture_retry_message().to_string())?;
     if run.status.success() {
         Ok(())
     } else {
-        Err("選択した文章を取得できませんでした。".into())
+        Err(selection_capture_retry_message().into())
     }
 }
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -952,7 +952,7 @@ fn send_paste_shortcut() -> Result<(), String> {
 }
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn send_copy_shortcut() -> Result<(), String> {
-    Err("このOSでは選択した文章の取得に対応していません。".into())
+    Err(selection_capture_retry_message().into())
 }
 #[tauri::command]
 fn paste_to_active_app(text: String) -> Result<(), String> {
@@ -978,40 +978,57 @@ fn selection_probe_marker() -> String {
     format!("__DOON_VOICE_SELECTION_PROBE_{nonce}__")
 }
 
-fn selection_from_copy_probe(_previous: &str, probe: &str, copied: &str) -> Option<String> {
-    // The probe is written before Cmd/Ctrl+C. A source selection may be equal
-    // to the previous clipboard, so compare only with the unique probe.
-    (copied != probe && !copied.trim().is_empty()).then(|| copied.to_string())
+fn selection_capture_retry_message() -> &'static str {
+    "選択した文章を取得できませんでした。文章を選択し直してから、もう一度試してください。"
 }
 
-fn capture_selection_after_copy() -> Result<String, String> {
+fn selection_question_permission_message() -> &'static str {
+    "選択した文章への質問には許可が必要です。システム設定 > プライバシーとセキュリティ > アクセシビリティでDOON Voiceを許可してから、もう一度試してください。"
+}
+
+fn selection_from_copy_probe(probe: &str, copied: &str) -> Result<Option<String>, String> {
+    // The probe is written before Cmd/Ctrl+C. A source selection may be equal
+    // to the previous clipboard, so compare only with the unique probe.
+    if copied == probe {
+        return Ok(None);
+    }
+    if copied.trim().is_empty() {
+        return Err(selection_capture_retry_message().into());
+    }
+    clean(copied).map(Some)
+}
+
+fn capture_selection_after_copy() -> Result<Option<String>, String> {
     let previous = read_clipboard_raw_text()?;
     let probe = selection_probe_marker();
-    copy_to_clipboard(&probe)?;
-    let copied: Result<String, String> = (|| -> Result<String, String> {
-        send_copy_shortcut()?;
-        // Some accessibility-aware apps publish Cmd/Ctrl+C asynchronously.
-        // Keep the probe in place until the source has had a short chance to
-        // replace it, rather than treating the first clipboard poll as final.
-        for _ in 0..8 {
-            std::thread::sleep(Duration::from_millis(25));
-            let copied = read_clipboard_raw_text()?;
-            if copied != probe {
-                return Ok(copied);
-            }
-        }
-        Ok(probe.clone())
-    })();
-    let selection = copied
-        .ok()
-        .and_then(|copied| selection_from_copy_probe(&previous, &probe, &copied))
-        .and_then(|text| clean(&text).ok());
-    if selection.is_none() {
-        let _ = copy_to_clipboard(&previous);
+    let copied = copy_to_clipboard(&probe)
+        .map_err(|_| selection_capture_retry_message().to_string())
+        .and_then(|()| {
+            (|| -> Result<String, String> {
+                send_copy_shortcut()?;
+                // Some accessibility-aware apps publish Cmd/Ctrl+C asynchronously.
+                // Keep the probe in place until the source has had a short chance to
+                // replace it, rather than treating the first clipboard poll as final.
+                for _ in 0..8 {
+                    std::thread::sleep(Duration::from_millis(25));
+                    let copied = read_clipboard_raw_text()?;
+                    if copied != probe {
+                        return Ok(copied);
+                    }
+                }
+                Ok(probe.clone())
+            })()
+        });
+    let selection = copied.and_then(|copied| selection_from_copy_probe(&probe, &copied));
+    if !matches!(selection.as_ref(), Ok(Some(_))) {
+        copy_to_clipboard(&previous).map_err(|_| {
+            format!(
+                "{} クリップボードを元の内容へ戻せませんでした。内容を確認してください。",
+                selection_capture_retry_message()
+            )
+        })?;
     }
-    selection.ok_or_else(|| {
-        "選択した文章を取得できませんでした。質問したい文章を選択してから、もう一度試してください。".to_string()
-    })
+    selection
 }
 
 #[tauri::command]
@@ -1027,6 +1044,7 @@ fn capture_selected_text(app: AppHandle) -> Result<String, String> {
 
     let result = if direct_input_allowed() {
         capture_selection_after_copy()
+            .and_then(|selection| selection.ok_or_else(|| selection_capture_retry_message().into()))
     } else {
         read_clipboard_text()
     };
@@ -1047,12 +1065,18 @@ fn selection_capture_allowed_for_voice_question(direct_input_is_allowed: bool) -
 // otherwise the synthetic Command+C can be interpreted as a larger shortcut.
 const SELECTION_SHORTCUT_RELEASE_MILLIS: u64 = 180;
 
-fn capture_active_selection_for_voice_question(_app: &AppHandle) -> Option<String> {
-    if !selection_capture_allowed_for_voice_question(direct_input_allowed()) {
-        return None;
+fn selection_question_permission_error(direct_input_is_allowed: bool) -> Result<(), String> {
+    if selection_capture_allowed_for_voice_question(direct_input_is_allowed) {
+        Ok(())
+    } else {
+        Err(selection_question_permission_message().into())
     }
+}
+
+fn capture_active_selection_for_voice_question(_app: &AppHandle) -> Result<Option<String>, String> {
+    selection_question_permission_error(direct_input_allowed())?;
     std::thread::sleep(Duration::from_millis(SELECTION_SHORTCUT_RELEASE_MILLIS));
-    capture_selection_after_copy().ok()
+    capture_selection_after_copy()
 }
 
 fn screen_question_file(app: &AppHandle) -> Result<PathBuf, String> {
@@ -1116,12 +1140,13 @@ $graphics.Dispose(); $bitmap.Dispose()
 
 fn background_voice_question_context(
     selection_question: bool,
-    selection: Option<String>,
-) -> Option<QuestionContext> {
+    selection: Result<Option<String>, String>,
+) -> Result<Option<QuestionContext>, String> {
     if selection_question {
-        selection.map(QuestionContext::Selection)
+        let selection = selection?.ok_or_else(|| selection_capture_retry_message().to_string())?;
+        Ok(Some(QuestionContext::Selection(selection)))
     } else {
-        None
+        Ok(None)
     }
 }
 
@@ -3247,10 +3272,10 @@ fn start_background_recording(
     let selection = if selection_question {
         capture_active_selection_for_voice_question(app)
     } else {
-        None
+        Ok(None)
     };
     let selected_question_context =
-        background_voice_question_context(selection_question, selection);
+        background_voice_question_context(selection_question, selection)?;
     let (generation, snapshot) = {
         let mut runtime = state
             .0
@@ -4454,17 +4479,24 @@ mod tests {
     #[test]
     fn 選択文が直前のクリップボードと同じでも質問文脈として取得する() {
         assert_eq!(
-            selection_from_copy_probe("同じ選択文", "__DOON_PROBE__", "同じ選択文"),
-            Some("同じ選択文".to_string())
+            selection_from_copy_probe("__DOON_PROBE__", "同じ選択文"),
+            Ok(Some("同じ選択文".to_string()))
         );
     }
 
     #[test]
-    fn コピー後も検査文字列のままなら選択文として扱わない() {
+    fn コピー後も検査文字列のままなら選択文なしと判定する() {
         assert_eq!(
-            selection_from_copy_probe("元のクリップボード", "__DOON_PROBE__", "__DOON_PROBE__"),
-            None
+            selection_from_copy_probe("__DOON_PROBE__", "__DOON_PROBE__"),
+            Ok(None)
         );
+    }
+
+    #[test]
+    fn コピー処理で空文が返った場合は未選択フォールバックせずエラーにする() {
+        let error = selection_from_copy_probe("__DOON_PROBE__", " ").unwrap_err();
+
+        assert!(error.contains("選択し直して"));
     }
 
     #[test]
@@ -4474,15 +4506,32 @@ mod tests {
     }
 
     #[test]
-    fn 選択質問キーで選択文がないときは画面を読まず通常の音声入力に戻る() {
+    fn 選択質問キーは未選択や取得エラーを通常入力へフォールバックさせない() {
         assert!(matches!(
-            background_voice_question_context(true, Some("選択した文章".to_string())),
-            Some(QuestionContext::Selection(selection)) if selection == "選択した文章"
+            background_voice_question_context(true, Ok(Some("選択した文章".to_string()))),
+            Ok(Some(QuestionContext::Selection(selection))) if selection == "選択した文章"
         ));
-        assert!(background_voice_question_context(true, None).is_none());
-        assert!(
-            background_voice_question_context(false, Some("無視する選択文".to_string())).is_none()
-        );
+        assert!(matches!(
+            background_voice_question_context(true, Ok(None)),
+            Err(error) if error.contains("選択し直して")
+        ));
+        assert!(matches!(
+            background_voice_question_context(true, Err("選択文を取得できませんでした".to_string())),
+            Err(error) if error == "選択文を取得できませんでした"
+        ));
+        assert!(matches!(
+            background_voice_question_context(false, Ok(None)),
+            Ok(None)
+        ));
+    }
+
+    #[test]
+    fn 選択質問キーでアクセシビリティ未許可なら許可先を案内する() {
+        let error = selection_question_permission_error(false).unwrap_err();
+
+        assert!(error.contains("システム設定"));
+        assert!(error.contains("アクセシビリティ"));
+        assert!(error.contains("DOON Voice"));
     }
 
     #[test]
