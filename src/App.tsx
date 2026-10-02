@@ -293,6 +293,7 @@ function MainApp() {
   useEffect(() => {
     const monitor = createLocalStatusMonitor(() => appInvoke<LocalLlmStatus>("local_llm_status"), setLocal);
     localStatusMonitorRef.current = monitor;
+    void monitor.refresh();
     let disposed = false;
     let unlisten: (() => void) | undefined;
     if (isTauriApp()) {
