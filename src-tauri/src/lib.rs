@@ -2913,12 +2913,14 @@ async fn prewarm_local_ai(app: &AppHandle) -> Result<(), String> {
     }
 }
 fn local_connection_error(error: &reqwest::Error) -> String {
-    if error.is_timeout() {
-        return "ローカルAIの処理が時間切れになりました。文章を短くして、もう一度試してください。"
-            .into();
-    }
+    // A Windows TCP connection deadline can be both a connection error and a
+    // timeout. It must not be presented as an inference that ran too long.
     if error.is_connect() {
         return "このPCのローカルAIに接続できませんでした。接続と設定から状態を確認してください。"
+            .into();
+    }
+    if error.is_timeout() {
+        return "ローカルAIの処理が時間切れになりました。文章を短くして、もう一度試してください。"
             .into();
     }
     "ローカルAIと通信できませんでした。接続と設定から状態を確認してください。".into()

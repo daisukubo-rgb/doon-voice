@@ -1,6 +1,14 @@
 use super::*;
 
 fn local_http_fixture(status: &str, body: &str) -> (String, std::thread::JoinHandle<()>) {
+    local_http_fixture_with_delay(status, body, Duration::ZERO)
+}
+
+fn local_http_fixture_with_delay(
+    status: &str,
+    body: &str,
+    delay: Duration,
+) -> (String, std::thread::JoinHandle<()>) {
     use std::io::{Read, Write};
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let address = listener.local_addr().unwrap();
@@ -16,6 +24,7 @@ fn local_http_fixture(status: &str, body: &str) -> (String, std::thread::JoinHan
                         .unwrap();
                     let mut buffer = [0; 4096];
                     let _ = stream.read(&mut buffer);
+                    std::thread::sleep(delay);
                     let _ = stream.write_all(reply.as_bytes());
                     return;
                 }
@@ -97,8 +106,31 @@ fn local_connection_failure_does_not_claim_that_the_runtime_is_stopped() {
     let error = tauri::async_runtime::block_on(async { client().unwrap().get(url).send().await })
         .unwrap_err();
     let message = local_connection_error(&error);
-    assert!(message.contains("接続できません"));
+    assert!(
+        message.contains("接続できません"),
+        "{error:?}; connect={}; timeout={}; message={message}",
+        error.is_connect(),
+        error.is_timeout()
+    );
     assert!(!message.contains("起動していません"));
+}
+
+#[test]
+fn a_connected_local_response_timeout_keeps_the_processing_timeout_message() {
+    let (url, server) = local_http_fixture_with_delay("200 OK", "{}", Duration::from_millis(600));
+    let error = tauri::async_runtime::block_on(async {
+        client()
+            .unwrap()
+            .get(url)
+            .timeout(Duration::from_millis(300))
+            .send()
+            .await
+    })
+    .unwrap_err();
+    server.join().unwrap();
+    assert!(error.is_timeout());
+    assert!(!error.is_connect(), "{error:?}");
+    assert!(local_connection_error(&error).contains("処理が時間切れ"));
 }
 
 #[test]
