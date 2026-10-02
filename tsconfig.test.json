@@ -9,6 +9,7 @@
     "rootDir": "."
   },
   "include": [
+    "src/local-status.ts",
     "src/audio-recorder.ts",
     "src/output-target.ts",
     "src/shortcut.ts",
