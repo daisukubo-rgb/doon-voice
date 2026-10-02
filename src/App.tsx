@@ -11,6 +11,7 @@ import { AudioRecorder, requestMicrophoneAccess, startAudioRecorder } from "./au
 import { DEFAULT_OUTPUT_TARGET, DEFAULT_SELECTION_QUESTION_TARGET, isOutputTarget, isSelectionQuestionTarget, OutputTarget, outputTargetLabel, SelectionQuestionTarget } from "./output-target";
 import { DEFAULT_SELECTION_QUESTION_SHORTCUT, DEFAULT_SHORTCUT, shortcutCaptureResult, shortcutLabel } from "./shortcut";
 import { fitWindowPositionToWorkArea, fitWindowSizeToWorkArea } from "./window-fit";
+import { createLocalStatusMonitor } from "./local-status";
 
 type ProviderId = "codex" | "claude" | "gemini";
 type ProviderConnections = Record<ProviderId, boolean>;
@@ -287,6 +288,28 @@ function MainApp() {
   const questionRecorderRef = useRef<AudioRecorder | null>(null);
   const questionOperationRef = useRef(0);
   const questionComposingRef = useRef(false);
+  const localStatusMonitorRef = useRef<ReturnType<typeof createLocalStatusMonitor<LocalLlmStatus>> | null>(null);
+
+  useEffect(() => {
+    const monitor = createLocalStatusMonitor(() => appInvoke<LocalLlmStatus>("local_llm_status"), setLocal);
+    localStatusMonitorRef.current = monitor;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    if (isTauriApp()) {
+      void listen<LocalLlmStatus>("local-llm-status", (event) => monitor.accept(event.payload)).then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      }).catch(() => undefined); // Bounded periodic probes remain available.
+    }
+    const timer = window.setInterval(() => { void monitor.refresh(); }, 5000);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+      unlisten?.();
+      monitor.dispose();
+      if (localStatusMonitorRef.current === monitor) localStatusMonitorRef.current = null;
+    };
+  }, []);
 
   useEffect(() => { void refreshAll(); void fitMainWindowToWorkArea(); }, []);
   useEffect(() => {
@@ -473,7 +496,7 @@ function MainApp() {
             setStatuses((current) => ({ ...current, [id]: null }));
           }
         }),
-        appInvoke<LocalLlmStatus>("local_llm_status").then(setLocal).catch(() => setLocal(null)),
+        localStatusMonitorRef.current?.refresh(),
         appInvoke<TranscriptionStatus>("transcription_status").then(setTranscription).catch(() => setTranscription(null)),
         appInvoke<boolean>("direct_input_status").then(setDirectInputAllowed).catch(() => setDirectInputAllowed(null)),
         microphonePermission().then((status) => {
@@ -491,9 +514,8 @@ function MainApp() {
   async function waitForLocalLlmStart() {
     for (let attempt = 0; attempt < 15; attempt += 1) {
       try {
-        const status = await appInvoke<LocalLlmStatus>("local_llm_status");
-        setLocal(status);
-        if (status.running) return true;
+        const status = await localStatusMonitorRef.current?.refresh();
+        if (status?.running) return true;
       } catch {
         setLocal(null);
       }

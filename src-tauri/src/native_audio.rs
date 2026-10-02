@@ -266,29 +266,41 @@ fn initialize_stream_for_device(
     device: &Device,
     recording: &Arc<Mutex<RecordingBuffer>>,
 ) -> Result<Stream, String> {
-    let configs = input_config_candidates(device)?;
+    try_preferred_input_config(
+        device
+            .default_input_config()
+            .map_err(|error| error.to_string()),
+        || input_config_candidates(device),
+        |supported| initialize_stream_with_config(device, supported, recording),
+    )
+}
+
+fn try_preferred_input_config<C, S>(
+    preferred: Result<C, String>,
+    fallback: impl FnOnce() -> Result<Vec<C>, String>,
+    mut open: impl FnMut(&C) -> Result<S, String>,
+) -> Result<S, String> {
+    // WASAPI enumerates many rates/formats. Open the default first, so a
+    // working microphone never pays that cost on every shortcut press.
+    let preferred_error = match preferred.and_then(|config| open(&config)) {
+        Ok(stream) => return Ok(stream),
+        Err(error) => error,
+    };
+    let configs = fallback().map_err(|error| format!("{preferred_error} {error}"))?;
     let mut last_error = None;
-    for supported in configs {
-        match initialize_stream_with_config(device, &supported, recording) {
+    for supported in &configs {
+        match open(supported) {
             Ok(stream) => return Ok(stream),
             Err(error) => last_error = Some(error),
         }
     }
-    Err(last_error.unwrap_or_else(|| "このマイクで使える音声設定が見つかりませんでした。".into()))
+    Err(last_error.unwrap_or(preferred_error))
 }
 
 fn input_config_candidates(device: &Device) -> Result<Vec<SupportedStreamConfig>, String> {
     let mut candidates = Vec::new();
-    if let Ok(config) = device.default_input_config() {
-        candidates.push(config);
-    }
-
     let configs = match device.supported_input_configs() {
         Ok(configs) => configs,
-        // A default stream can be opened on some CoreAudio devices even when
-        // querying every supported format fails. Keep that valid default
-        // candidate instead of rejecting the device before trying it.
-        Err(_error) if !candidates.is_empty() => return Ok(candidates),
         Err(error) => return Err(format!("マイクの設定を読み取れませんでした: {error}")),
     };
     for config in configs {
@@ -452,7 +464,9 @@ mod tests {
     fn default_microphone_starts_without_enumerating_formats() {
         let result = super::try_preferred_input_config(
             Ok(44_100),
-            || -> Result<Vec<u32>, String> { panic!("healthy default must not enumerate WASAPI formats") },
+            || -> Result<Vec<u32>, String> {
+                panic!("healthy default must not enumerate WASAPI formats")
+            },
             |config| Ok(*config),
         );
         assert_eq!(result, Ok(44_100));
@@ -466,7 +480,11 @@ mod tests {
             || Ok(vec![48_000, 16_000]),
             |config| {
                 attempts.borrow_mut().push(*config);
-                if *config == 48_000 { Ok(*config) } else { Err("unsupported".into()) }
+                if *config == 48_000 {
+                    Ok(*config)
+                } else {
+                    Err("unsupported".into())
+                }
             },
         );
         assert_eq!(result, Ok(48_000));

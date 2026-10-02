@@ -11,13 +11,17 @@ fn local_http_fixture(status: &str, body: &str) -> (String, std::thread::JoinHan
         while Instant::now() < deadline {
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
                     let mut buffer = [0; 4096];
                     let _ = stream.read(&mut buffer);
                     let _ = stream.write_all(reply.as_bytes());
                     return;
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(10)),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10))
+                }
                 Err(error) => panic!("fixture listener failed: {error}"),
             }
         }
@@ -39,21 +43,34 @@ fn local_ai_client_connects_directly_even_with_an_unreachable_proxy() {
             .env("ALL_PROXY", &proxy_address).env("all_proxy", &proxy_address)
             .env("NO_PROXY", "").env("no_proxy", "")
             .output().unwrap();
-        assert!(result.status.success(), "loopback communication must bypass proxies: {}", String::from_utf8_lossy(&result.stdout));
+        assert!(
+            result.status.success(),
+            "loopback communication must bypass proxies: {}",
+            String::from_utf8_lossy(&result.stdout)
+        );
         return;
     }
     let (url, server) = local_http_fixture("200 OK", r#"{"models":[{"name":"gemma4:e2b"}]}"#);
     let result = tauri::async_runtime::block_on(async { client().unwrap().get(url).send().await });
     server.join().unwrap();
-    assert!(result.is_ok(), "local inference must not connect through HTTP_PROXY: {result:?}");
+    assert!(
+        result.is_ok(),
+        "local inference must not connect through HTTP_PROXY: {result:?}"
+    );
 }
 
 #[test]
 fn local_ai_status_rejects_http_errors_even_when_the_body_contains_models() {
-    let (url, server) = local_http_fixture("503 Service Unavailable", r#"{"models":[{"name":"gemma4:e2b"}]}"#);
+    let (url, server) = local_http_fixture(
+        "503 Service Unavailable",
+        r#"{"models":[{"name":"gemma4:e2b"}]}"#,
+    );
     let result = tauri::async_runtime::block_on(fetch_local_model_names(&client().unwrap(), &url));
     server.join().unwrap();
-    assert!(result.is_err(), "a failed HTTP response must never mean running");
+    assert!(
+        result.is_err(),
+        "a failed HTTP response must never mean running"
+    );
 }
 
 #[test]
@@ -77,7 +94,8 @@ fn local_connection_failure_does_not_claim_that_the_runtime_is_stopped() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     drop(listener);
-    let error = tauri::async_runtime::block_on(async { client().unwrap().get(url).send().await }).unwrap_err();
+    let error = tauri::async_runtime::block_on(async { client().unwrap().get(url).send().await })
+        .unwrap_err();
     let message = local_connection_error(&error);
     assert!(message.contains("接続できません"));
     assert!(!message.contains("起動していません"));

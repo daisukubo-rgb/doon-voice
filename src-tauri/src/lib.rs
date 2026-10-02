@@ -82,6 +82,8 @@ const ANTIGRAVITY_FLASH_MODEL: &str = "Gemini 3.6 Flash (Low)";
 static TRANSCRIPTION_DOWNLOAD_RUNNING: AtomicBool = AtomicBool::new(false);
 static LOCAL_RUNTIME_INSTALL_RUNNING: AtomicBool = AtomicBool::new(false);
 static LOCAL_MODEL_PULL_RUNNING: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "windows")]
+static LOCAL_RUNTIME_START_RUNNING: AtomicBool = AtomicBool::new(false);
 
 struct ExclusiveOperation<'a>(&'a AtomicBool);
 
@@ -1456,8 +1458,9 @@ fn prewarm_output_target(app: &AppHandle, target: OutputTarget) {
     match target {
         OutputTarget::Raw => {}
         OutputTarget::Local => {
-            tauri::async_runtime::spawn(async {
-                let _ = prewarm_local_ai().await;
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = prewarm_local_ai(&app).await;
             });
         }
         OutputTarget::Codex | OutputTarget::Claude | OutputTarget::Gemini => {
@@ -1487,6 +1490,10 @@ fn prewarm_output_target(app: &AppHandle, target: OutputTarget) {
 
 fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
+        // This client is only for loopback Ollama calls. Voice text must never
+        // be routed through a system/company HTTP proxy.
+        .no_proxy()
+        .connect_timeout(Duration::from_secs(2))
         .timeout(Duration::from_secs(90))
         .build()
         .map_err(|_| "接続を準備できませんでした。".into())
@@ -1605,23 +1612,14 @@ async fn start_official_login(
 }
 #[tauri::command]
 async fn local_llm_status() -> LocalLlmStatus {
-    let installed = ollama_installed();
-    let names = if installed {
-        match client() {
-            Ok(c) => match c.get("http://127.0.0.1:11434/api/tags").send().await {
-                Ok(r) => r
-                    .json::<OllamaTags>()
-                    .await
-                    .ok()
-                    .map(|x| x.models.into_iter().map(|m| m.name).collect::<Vec<_>>()),
-                Err(_) => None,
-            },
-            Err(_) => None,
-        }
-    } else {
-        None
+    let names = match client() {
+        Ok(c) => fetch_local_model_names(&c, "http://127.0.0.1:11434/api/tags")
+            .await
+            .ok(),
+        Err(_) => None,
     };
     let running = names.is_some();
+    let installed = running || ollama_installed();
     let models = names.unwrap_or_default();
     LocalLlmStatus {
         installed,
@@ -1633,6 +1631,95 @@ async fn local_llm_status() -> LocalLlmStatus {
             installed: models.iter().any(|x| x.starts_with(LOCAL_MODEL)),
         }],
     }
+}
+
+async fn fetch_local_model_names(
+    http: &reqwest::Client,
+    url: &str,
+) -> Result<Vec<String>, reqwest::Error> {
+    let tags = http
+        .get(url)
+        .timeout(Duration::from_secs(2))
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<OllamaTags>()
+        .await?;
+    Ok(tags.models.into_iter().map(|model| model.name).collect())
+}
+
+async fn publish_local_llm_status(app: &AppHandle) -> bool {
+    let status = local_llm_status().await;
+    let running = status.running;
+    let _ = app.emit("local-llm-status", &status);
+    running
+}
+
+async fn ensure_local_runtime(app: &AppHandle) -> Result<(), String> {
+    if publish_local_llm_status(app).await {
+        return Ok(());
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // Start an already-installed CLI only. Never download software or open
+        // a signup screen while processing a user's voice text.
+        let _start =
+            begin_exclusive_operation(&LOCAL_RUNTIME_START_RUNNING, "ローカルAIを起動中です。")
+                .ok();
+        if _start.is_some() {
+            let mut serve = cli_command(&command_path("ollama"), &cli_path_environment())?;
+            serve
+                .arg("serve")
+                .env("OLLAMA_HOST", "127.0.0.1:11434")
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            cli_command::hide_console(&mut serve);
+            serve.spawn().map_err(|_| {
+                "ローカルAIを起動できませんでした。接続と設定から確認してください。".to_string()
+            })?;
+        }
+        let ready = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                if publish_local_llm_status(app).await {
+                    return;
+                }
+            }
+        })
+        .await;
+        if ready.is_ok() {
+            return Ok(());
+        }
+    }
+    Err("このPCのローカルAIに接続できませんでした。接続と設定から状態を確認してください。".into())
+}
+
+async fn local_generation(
+    app: &AppHandle,
+    payload: &serde_json::Value,
+) -> Result<reqwest::Response, String> {
+    ensure_local_runtime(app).await?;
+    let http = client()?;
+    let send = || {
+        http.post("http://127.0.0.1:11434/api/generate")
+            .json(payload)
+            .send()
+    };
+    let response = send().await;
+    // Retry only a connection failure, before a response was accepted. A model
+    // error/timeout must never cause a second inference or a cloud fallback.
+    #[cfg(target_os = "windows")]
+    let response = if response.as_ref().is_err_and(reqwest::Error::is_connect) {
+        ensure_local_runtime(app).await?;
+        send().await
+    } else {
+        response
+    };
+    if response.is_err() {
+        publish_local_llm_status(app).await;
+    }
+    response.map_err(|error| local_connection_error(&error))
 }
 fn publish_installation_progress(
     app: &AppHandle,
@@ -1852,8 +1939,9 @@ async fn pull_local_model(app: AppHandle) -> Result<(), String> {
     )?;
     let _operation = operation;
     publish_installation_progress(&app, "local_model", "モデル情報を確認しています", 0, 0);
-    let mut response = download_client()?
+    let mut response = client()?
         .post("http://127.0.0.1:11434/api/pull")
+        .timeout(Duration::from_secs(60 * 30))
         .json(&serde_json::json!({ "name": LOCAL_MODEL, "stream": true }))
         .send()
         .await
@@ -2813,16 +2901,11 @@ fn local_warmup_payload() -> serde_json::Value {
         "keep_alive": "30m"
     })
 }
-async fn prewarm_local_ai() -> Result<(), String> {
+async fn prewarm_local_ai(app: &AppHandle) -> Result<(), String> {
     if !ollama_installed() {
         return Ok(());
     }
-    let response = client()?
-        .post("http://127.0.0.1:11434/api/generate")
-        .json(&local_warmup_payload())
-        .send()
-        .await
-        .map_err(|error| local_connection_error(&error))?;
+    let response = local_generation(app, &local_warmup_payload()).await?;
     if response.status().is_success() {
         Ok(())
     } else {
@@ -2835,7 +2918,8 @@ fn local_connection_error(error: &reqwest::Error) -> String {
             .into();
     }
     if error.is_connect() {
-        return "ローカルAIが起動していません。接続と設定から「ローカルAIを起動」を選んで、もう一度試してください。".into();
+        return "このPCのローカルAIに接続できませんでした。接続と設定から状態を確認してください。"
+            .into();
     }
     "ローカルAIと通信できませんでした。接続と設定から状態を確認してください。".into()
 }
@@ -3003,12 +3087,7 @@ async fn process_voice_text_cancellable(
     } else {
         until_cancelled(
             async {
-                let r = client()?
-                    .post("http://127.0.0.1:11434/api/generate")
-                    .json(&local_generate_payload(&p))
-                    .send()
-                    .await
-                    .map_err(|error| local_connection_error(&error))?;
+                let r = local_generation(&app, &local_generate_payload(&p)).await?;
                 if !r.status().is_success() {
                     if r.status() == reqwest::StatusCode::NOT_FOUND {
                         return Err(
@@ -3092,12 +3171,7 @@ async fn answer_selection_question(
         .await
         .map_err(|_| "回答の生成が中断されました。".to_string())?
     } else {
-        let response = client()?
-            .post("http://127.0.0.1:11434/api/generate")
-            .json(&local_generate_payload(&prompt))
-            .send()
-            .await
-            .map_err(|error| local_connection_error(&error))?;
+        let response = local_generation(&app, &local_generate_payload(&prompt)).await?;
         if !response.status().is_success() {
             return Err(if response.status() == reqwest::StatusCode::NOT_FOUND {
                 "高速ローカルAIが未準備です。接続と設定からモデルを取得してください。".into()
@@ -3180,12 +3254,11 @@ async fn answer_screen_question(
         .await
         .map_err(|_| "回答の生成が中断されました。".to_string())?
     } else {
-        let response = client()?
-            .post("http://127.0.0.1:11434/api/generate")
-            .json(&local_generate_payload_with_image(&prompt, &image_data_url))
-            .send()
-            .await
-            .map_err(|error| local_connection_error(&error))?;
+        let response = local_generation(
+            &app,
+            &local_generate_payload_with_image(&prompt, &image_data_url),
+        )
+        .await?;
         if !response.status().is_success() {
             return Err("このPCのAIが画面について回答を生成できませんでした。".into());
         }
