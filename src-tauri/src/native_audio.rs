@@ -448,6 +448,53 @@ fn sample_to_pcm(sample: f32) -> i16 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn default_microphone_starts_without_enumerating_formats() {
+        let result = super::try_preferred_input_config(
+            Ok(44_100),
+            || -> Result<Vec<u32>, String> { panic!("healthy default must not enumerate WASAPI formats") },
+            |config| Ok(*config),
+        );
+        assert_eq!(result, Ok(44_100));
+    }
+
+    #[test]
+    fn rejected_default_microphone_uses_fallback_formats() {
+        let attempts = std::cell::RefCell::new(Vec::new());
+        let result = super::try_preferred_input_config(
+            Ok(44_100),
+            || Ok(vec![48_000, 16_000]),
+            |config| {
+                attempts.borrow_mut().push(*config);
+                if *config == 48_000 { Ok(*config) } else { Err("unsupported".into()) }
+            },
+        );
+        assert_eq!(result, Ok(48_000));
+        assert_eq!(*attempts.borrow(), vec![44_100, 48_000]);
+    }
+
+    #[test]
+    fn missing_default_microphone_configuration_still_uses_fallback() {
+        let result = super::try_preferred_input_config(
+            Err("missing default".into()),
+            || Ok(vec![16_000]),
+            |config| Ok(*config),
+        );
+        assert_eq!(result, Ok(16_000));
+    }
+
+    #[test]
+    fn microphone_format_scan_failure_keeps_the_actual_open_error() {
+        let result = super::try_preferred_input_config(
+            Ok(44_100),
+            || Err("format scan failed".into()),
+            |_| Err::<(), _>("device disconnected".into()),
+        );
+        let error = result.unwrap_err();
+        assert!(error.contains("device disconnected"));
+        assert!(error.contains("format scan failed"));
+    }
+
     use super::*;
 
     #[test]
