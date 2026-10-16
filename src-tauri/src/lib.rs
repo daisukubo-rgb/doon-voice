@@ -30,7 +30,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -57,6 +57,7 @@ use process_runner::run_bounded;
 const MODEL: &str = "ggml-large-v3-turbo-q5_0.bin";
 const MODEL_URL: &str =
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin?download=true";
+const PROVIDER_RETRY_AFTER: Duration = Duration::from_secs(60);
 const MAX_TEXT: usize = 20_000;
 const MAX_WAV: usize = MAX_WAV_BYTES;
 const LONG_TEXT_FORMAT_THRESHOLD: usize = 180;
@@ -518,6 +519,38 @@ fn register_voice_shortcut_handler(
             }
         })
         .map_err(|error| format!("ショートカットを登録できませんでした: {error}"))
+}
+
+// Each shortcut is recorded right after its own registration succeeds, so a
+// failure on the second one still leaves the first one tracked (and
+// replaceable/clearable from settings).
+fn register_startup_shortcuts(
+    config: &VoiceRuntimeConfig,
+    registrations: &Mutex<VoiceShortcutRegistrations>,
+    mut register: impl FnMut(&str, VoiceShortcutKind) -> Result<(), String>,
+) -> Result<(), String> {
+    let record = |kind: VoiceShortcutKind, shortcut: &str| {
+        let mut registered = registrations
+            .lock()
+            .map_err(|_| "ショートカット状態を確認できませんでした。".to_string())?;
+        match kind {
+            VoiceShortcutKind::Input => registered.input = Some(shortcut.to_string()),
+            VoiceShortcutKind::SelectionQuestion => {
+                registered.selection_question = Some(shortcut.to_string())
+            }
+        }
+        Ok::<(), String>(())
+    };
+    register(&config.shortcut, VoiceShortcutKind::Input)?;
+    record(VoiceShortcutKind::Input, &config.shortcut)?;
+    register(
+        &config.selection_question_shortcut,
+        VoiceShortcutKind::SelectionQuestion,
+    )?;
+    record(
+        VoiceShortcutKind::SelectionQuestion,
+        &config.selection_question_shortcut,
+    )
 }
 
 fn set_registered_shortcut(
@@ -1000,30 +1033,104 @@ fn selection_from_copy_probe(probe: &str, copied: &str) -> Result<Option<String>
     clean(copied).map(Some)
 }
 
+// The OS clipboard is injected so the capture sequence can be tested without
+// touching the real clipboard or sending key events.
+trait SelectionClipboard {
+    type Snapshot;
+    /// `Ok(None)` means the clipboard holds nothing that can be restored.
+    /// `Err` means it could not be read right now (e.g. another app holds it).
+    fn snapshot(&mut self) -> Result<Option<Self::Snapshot>, String>;
+    fn restore(&mut self, snapshot: &Self::Snapshot) -> Result<(), String>;
+    fn read(&mut self) -> Result<String, String>;
+    fn write(&mut self, text: &str) -> Result<(), String>;
+    fn clear(&mut self) -> Result<(), String>;
+    fn send_copy(&mut self) -> Result<(), String>;
+}
+
+struct SystemClipboard;
+
+enum SystemClipboardSnapshot {
+    Text(String),
+    Image(arboard::ImageData<'static>),
+}
+
+impl SelectionClipboard for SystemClipboard {
+    type Snapshot = SystemClipboardSnapshot;
+    fn snapshot(&mut self) -> Result<Option<SystemClipboardSnapshot>, String> {
+        let unreadable = || selection_capture_retry_message().to_string();
+        let mut clipboard = arboard::Clipboard::new().map_err(|_| unreadable())?;
+        match clipboard.get_text() {
+            Ok(text) => return Ok(Some(SystemClipboardSnapshot::Text(text))),
+            Err(arboard::Error::ContentNotAvailable) => {}
+            Err(_) => return Err(unreadable()),
+        }
+        match clipboard.get_image() {
+            Ok(image) => Ok(Some(SystemClipboardSnapshot::Image(image.to_owned_img()))),
+            Err(arboard::Error::ContentNotAvailable) => Ok(None),
+            Err(_) => Err(unreadable()),
+        }
+    }
+    fn restore(&mut self, snapshot: &SystemClipboardSnapshot) -> Result<(), String> {
+        match snapshot {
+            SystemClipboardSnapshot::Text(text) => copy_to_clipboard(text),
+            SystemClipboardSnapshot::Image(image) => arboard::Clipboard::new()
+                .and_then(|mut clipboard| clipboard.set_image(image.clone()))
+                .map_err(|_| "クリップボードを元の状態へ戻せませんでした。".to_string()),
+        }
+    }
+    fn read(&mut self) -> Result<String, String> {
+        read_clipboard_raw_text()
+    }
+    fn write(&mut self, text: &str) -> Result<(), String> {
+        copy_to_clipboard(text)
+    }
+    fn clear(&mut self) -> Result<(), String> {
+        arboard::Clipboard::new()
+            .and_then(|mut clipboard| clipboard.clear())
+            .map_err(|_| "クリップボードを元の状態へ戻せませんでした。".to_string())
+    }
+    fn send_copy(&mut self) -> Result<(), String> {
+        send_copy_shortcut()
+    }
+}
+
 fn capture_selection_after_copy() -> Result<Option<String>, String> {
-    let previous = read_clipboard_raw_text()?;
+    capture_selection_with(&mut SystemClipboard)
+}
+
+fn capture_selection_with(
+    clipboard: &mut impl SelectionClipboard,
+) -> Result<Option<String>, String> {
+    // Text and images are restored after a failed capture. Only a clipboard
+    // that cannot be read right now stops the capture, so nothing is lost.
+    let previous = clipboard.snapshot()?;
     let probe = selection_probe_marker();
-    let copied = copy_to_clipboard(&probe)
+    let copied = clipboard
+        .write(&probe)
         .map_err(|_| selection_capture_retry_message().to_string())
         .and_then(|()| {
-            (|| -> Result<String, String> {
-                send_copy_shortcut()?;
-                // Some accessibility-aware apps publish Cmd/Ctrl+C asynchronously.
-                // Keep the probe in place until the source has had a short chance to
-                // replace it, rather than treating the first clipboard poll as final.
-                for _ in 0..8 {
-                    std::thread::sleep(Duration::from_millis(25));
-                    let copied = read_clipboard_raw_text()?;
+            clipboard.send_copy()?;
+            // Some accessibility-aware apps publish Cmd/Ctrl+C asynchronously.
+            // Keep the probe in place until the source has had a short chance to
+            // replace it, rather than treating the first clipboard poll as final.
+            for _ in 0..8 {
+                std::thread::sleep(Duration::from_millis(25));
+                // A read failure while the source app is still publishing is "not yet".
+                if let Ok(copied) = clipboard.read() {
                     if copied != probe {
                         return Ok(copied);
                     }
                 }
-                Ok(probe.clone())
-            })()
+            }
+            Ok(probe.clone())
         });
     let selection = copied.and_then(|copied| selection_from_copy_probe(&probe, &copied));
     if !matches!(selection.as_ref(), Ok(Some(_))) {
-        copy_to_clipboard(&previous).map_err(|_| {
+        match &previous {
+            Some(previous) => clipboard.restore(previous),
+            None => clipboard.clear(),
+        }
+        .map_err(|_| {
             format!(
                 "{} クリップボードを元の内容へ戻せませんでした。内容を確認してください。",
                 selection_capture_retry_message()
@@ -1301,8 +1408,33 @@ fn load_voice_runtime_config(app: &AppHandle) -> VoiceRuntimeConfig {
 fn save_voice_runtime_config(app: &AppHandle, config: &VoiceRuntimeConfig) -> Result<(), String> {
     let bytes = serde_json::to_vec_pretty(config)
         .map_err(|_| "設定を保存できませんでした。".to_string())?;
-    std::fs::write(voice_runtime_config_path(app)?, bytes)
+    write_file_atomically(&voice_runtime_config_path(app)?, &bytes)
         .map_err(|_| "設定を保存できませんでした。".to_string())
+}
+
+// Write a sibling file, then rename over the target, so a crash or full disk
+// never leaves a truncated settings file.
+fn write_file_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    // Each write gets its own temporary file so concurrent saves never rename
+    // each other's file away.
+    use std::io::Write;
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let mut temporary = path.as_os_str().to_owned();
+    temporary.push(format!(
+        ".{}.{}.tmp",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let temporary = PathBuf::from(temporary);
+    std::fs::File::create(&temporary)
+        .and_then(|mut file| {
+            file.write_all(bytes)?;
+            file.sync_all()
+        })
+        .and_then(|()| std::fs::rename(&temporary, path))
+        .inspect_err(|_| {
+            let _ = std::fs::remove_file(&temporary);
+        })
 }
 #[derive(Serialize)]
 struct ProviderStatus {
@@ -1322,20 +1454,32 @@ enum ProviderUsability {
 }
 
 #[derive(Default)]
-struct ProviderHealthState(Mutex<HashMap<Provider, ProviderUsability>>);
+struct ProviderHealthState(Mutex<HashMap<Provider, (ProviderUsability, Option<Instant>)>>);
 
 impl ProviderHealthState {
     fn usability(&self, provider: Provider) -> ProviderUsability {
-        self.0
-            .lock()
-            .ok()
-            .and_then(|health| health.get(&provider).copied())
-            .unwrap_or_default()
+        self.usability_at(provider, Instant::now())
+    }
+
+    // A login-expiry mark carries a retry time so that logging in outside the
+    // app (or a transient failure) does not leave the provider stuck.
+    fn usability_at(&self, provider: Provider, now: Instant) -> ProviderUsability {
+        let Ok(mut health) = self.0.lock() else {
+            return ProviderUsability::default();
+        };
+        match health.get(&provider).copied() {
+            Some((ProviderUsability::Unavailable, Some(retry_at))) if now >= retry_at => {
+                health.remove(&provider);
+                ProviderUsability::default()
+            }
+            Some((usability, _)) => usability,
+            None => ProviderUsability::default(),
+        }
     }
 
     fn set(&self, provider: Provider, usability: ProviderUsability) {
         if let Ok(mut health) = self.0.lock() {
-            health.insert(provider, usability);
+            health.insert(provider, (usability, None));
         }
     }
 
@@ -1345,6 +1489,18 @@ impl ProviderHealthState {
 
     fn mark_unavailable(&self, provider: Provider) {
         self.set(provider, ProviderUsability::Unavailable);
+    }
+
+    fn mark_login_required(&self, provider: Provider) {
+        if let Ok(mut health) = self.0.lock() {
+            health.insert(
+                provider,
+                (
+                    ProviderUsability::Unavailable,
+                    Some(Instant::now() + PROVIDER_RETRY_AFTER),
+                ),
+            );
+        }
     }
 
     fn reset(&self, provider: Provider) {
@@ -1388,6 +1544,8 @@ struct OllamaModel {
 #[derive(Deserialize)]
 struct OllamaGenerate {
     response: String,
+    #[serde(default)]
+    done_reason: Option<String>,
 }
 #[derive(Deserialize)]
 struct OllamaPullProgress {
@@ -1568,9 +1726,20 @@ fn provider_authenticated(provider: &Provider) -> bool {
         Ok(run) => run,
         Err(_) => return false,
     };
-    let mut text = String::from_utf8_lossy(&run.stdout).into_owned();
-    text.push_str(&String::from_utf8_lossy(&run.stderr));
+    let text = login_status_text(
+        provider,
+        &String::from_utf8_lossy(&run.stdout),
+        &String::from_utf8_lossy(&run.stderr),
+    );
     login_status_is_authenticated(provider, run.status.success(), &text)
+}
+
+fn login_status_text(provider: &Provider, stdout: &str, stderr: &str) -> String {
+    // Claude prints JSON on stdout; any stderr warning would break parsing.
+    if provider == &Provider::Claude {
+        return stdout.to_string();
+    }
+    format!("{stdout}{stderr}")
 }
 
 #[tauri::command]
@@ -1695,31 +1864,44 @@ async fn ensure_local_runtime(app: &AppHandle) -> Result<(), String> {
     Err("このPCのローカルAIに接続できませんでした。接続と設定から状態を確認してください。".into())
 }
 
+const LOCAL_GENERATE_URL: &str = "http://127.0.0.1:11434/api/generate";
+
+// Send first; the runtime is only started/checked after a connection failure,
+// so a slow status probe can never block a request that would have worked.
+// Only a connection failure is retried, once, before a response was accepted.
+// A model error/timeout must never cause a second inference or a cloud fallback.
+async fn send_generate_recovering_connection<F, Fut>(
+    http: &reqwest::Client,
+    url: &str,
+    payload: &serde_json::Value,
+    recover: F,
+) -> Result<reqwest::Response, String>
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Result<(), String>>,
+{
+    let send = || http.post(url).json(payload).send();
+    let mut response = send().await;
+    if response.as_ref().is_err_and(reqwest::Error::is_connect) {
+        recover().await?;
+        response = send().await;
+    }
+    response.map_err(|error| local_connection_error(&error))
+}
+
 async fn local_generation(
     app: &AppHandle,
     payload: &serde_json::Value,
 ) -> Result<reqwest::Response, String> {
-    ensure_local_runtime(app).await?;
     let http = client()?;
-    let send = || {
-        http.post("http://127.0.0.1:11434/api/generate")
-            .json(payload)
-            .send()
-    };
-    let response = send().await;
-    // Retry only a connection failure, before a response was accepted. A model
-    // error/timeout must never cause a second inference or a cloud fallback.
-    #[cfg(target_os = "windows")]
-    let response = if response.as_ref().is_err_and(reqwest::Error::is_connect) {
-        ensure_local_runtime(app).await?;
-        send().await
-    } else {
-        response
-    };
+    let response = send_generate_recovering_connection(&http, LOCAL_GENERATE_URL, payload, || {
+        ensure_local_runtime(app)
+    })
+    .await;
     if response.is_err() {
         publish_local_llm_status(app).await;
     }
-    response.map_err(|error| local_connection_error(&error))
+    response
 }
 fn publish_installation_progress(
     app: &AppHandle,
@@ -1835,12 +2017,42 @@ async fn verify_sha256(path: PathBuf, expected: String) -> Result<(), String> {
     .map_err(|_| "ローカルAIの取得内容を確認できませんでした。".to_string())?
 }
 
+// Starts an Ollama that is already on this PC. Never downloads anything.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn start_installed_ollama() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    if Command::new("open")
+        .args(["-a", "Ollama"])
+        .status()
+        .is_ok_and(|status| status.success())
+    {
+        return Ok(());
+    }
+    let mut serve = cli_command(&command_path("ollama"), &cli_path_environment())?;
+    serve
+        .arg("serve")
+        .env("OLLAMA_HOST", "127.0.0.1:11434")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    cli_command::hide_console(&mut serve);
+    serve
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| "ローカルAIを起動できませんでした。".into())
+}
+
 #[tauri::command]
 async fn open_local_llm_install(app: AppHandle) -> Result<(), String> {
     let _operation = begin_exclusive_operation(
         &LOCAL_RUNTIME_INSTALL_RUNNING,
         "ローカルAIの準備中です。完了までお待ちください。",
     )?;
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
+    if ollama_installed() {
+        publish_installation_progress(&app, "ollama", "ローカルAIを起動しています", 0, 0);
+        return start_installed_ollama();
+    }
     #[cfg(target_os = "macos")]
     let work = std::env::temp_dir().join(format!(
         "doon-voice-ollama-{}",
@@ -1854,28 +2066,36 @@ async fn open_local_llm_install(app: AppHandle) -> Result<(), String> {
         .map_err(|_| "インストーラーの保存先を作成できませんでした。".to_string())?;
     #[cfg(target_os = "macos")]
     {
-        let archive = work.join("Ollama-darwin.zip");
-        download_to_path(&app, "ollama", OLLAMA_MAC_URL, &archive).await?;
-        publish_installation_progress(&app, "ollama", "インストーラーを展開しています", 0, 0);
-        let extracted = Command::new("ditto")
-            .args(["-x", "-k"])
-            .arg(&archive)
-            .arg(&work)
-            .status()
-            .map_err(|_| "Ollamaを展開できませんでした。".to_string())?;
-        if !extracted.success() {
-            return Err("Ollamaを展開できませんでした。".into());
+        let result: Result<(), String> = async {
+            let archive = work.join("Ollama-darwin.zip");
+            download_to_path(&app, "ollama", OLLAMA_MAC_URL, &archive).await?;
+            publish_installation_progress(&app, "ollama", "インストーラーを展開しています", 0, 0);
+            let extracted = Command::new("ditto")
+                .args(["-x", "-k"])
+                .arg(&archive)
+                .arg(&work)
+                .status()
+                .map_err(|_| "Ollamaを展開できませんでした。".to_string())?;
+            if !extracted.success() {
+                return Err("Ollamaを展開できませんでした。".into());
+            }
+            let ollama_app = work.join("Ollama.app");
+            if !ollama_app.is_dir() {
+                return Err("Ollamaアプリが見つかりませんでした。".into());
+            }
+            publish_installation_progress(&app, "ollama", "インストーラーを開いています", 0, 0);
+            Command::new("open")
+                .arg(ollama_app)
+                .spawn()
+                .map(|_| ())
+                .map_err(|_| "Ollamaのインストーラーを起動できませんでした。".into())
         }
-        let ollama_app = work.join("Ollama.app");
-        if !ollama_app.is_dir() {
-            return Err("Ollamaアプリが見つかりませんでした。".into());
+        .await;
+        // On success the opened installer still runs from this folder.
+        if result.is_err() {
+            let _ = std::fs::remove_dir_all(&work);
         }
-        publish_installation_progress(&app, "ollama", "インストーラーを開いています", 0, 0);
-        Command::new("open")
-            .arg(ollama_app)
-            .spawn()
-            .map(|_| ())
-            .map_err(|_| "Ollamaのインストーラーを起動できませんでした。".into())
+        result
     }
     #[cfg(target_os = "windows")]
     {
@@ -2320,10 +2540,27 @@ fn whisper_arguments(
     ]
 }
 
+// Inference on a long recording takes longer than a fixed limit allows; scale
+// with the audio length (2x realtime) up to a ceiling.
+fn whisper_deadline(audio: &[u8]) -> Duration {
+    const MINIMUM: u64 = 300;
+    const MAXIMUM: u64 = 1_800;
+    if audio.len() < 44 {
+        return Duration::from_secs(MINIMUM);
+    }
+    // Native recording is mono 16-bit PCM with a 44-byte header.
+    let sample_rate = u64::from(u32::from_le_bytes([
+        audio[24], audio[25], audio[26], audio[27],
+    ]));
+    let seconds = (audio.len() as u64 - 44) / (sample_rate * 2).max(1);
+    Duration::from_secs(seconds.saturating_mul(2).clamp(MINIMUM, MAXIMUM))
+}
+
 async fn whisper(
     app: &AppHandle,
     wav: &Path,
     initial_prompt: &str,
+    timeout: Duration,
     cancelled: &AtomicBool,
 ) -> Result<RecognizedText, String> {
     let m = model_path(app)?;
@@ -2348,7 +2585,7 @@ async fn whisper(
         .spawn()
         .map_err(|_| "音声認識を起動できませんでした。".to_string())?;
     let mut child = WhisperChild(Some(child));
-    let deadline = std::time::Instant::now() + Duration::from_secs(300);
+    let deadline = std::time::Instant::now() + timeout;
     let mut out = String::new();
     let failure = loop {
         if cancelled.load(Ordering::Acquire) {
@@ -2426,6 +2663,7 @@ async fn transcribe_recording(
         return Err("録音が長すぎます。15分以内で区切ってください。".into());
     }
     let dictionary = validate_dictionary(dictionary)?;
+    let timeout = whisper_deadline(&audio);
     let base = voice_dir(&app)?;
     let file_cancelled = cancelled.clone();
     let mut wav = tauri::async_runtime::spawn_blocking(move || {
@@ -2442,7 +2680,7 @@ async fn transcribe_recording(
     .await
     .map_err(|_| "録音ファイルの準備が中断されました。".to_string())??;
     let initial_prompt = transcription_prompt(&dictionary);
-    let result = whisper(&app, wav.path(), &initial_prompt, &cancelled).await;
+    let result = whisper(&app, wav.path(), &initial_prompt, timeout, &cancelled).await;
     match (result, wav.cleanup()) {
         (Ok(mut result), Err(error)) => {
             result.warning = Some(match result.warning {
@@ -2455,7 +2693,12 @@ async fn transcribe_recording(
         (result, Ok(())) => result,
     }
 }
+const EDITOR_TERMS_MAX_CHARS: usize = 1_200;
+
 fn editor_instruction(dict: &[String]) -> String {
+    // The local model has a 4096-token context, so registered terms are capped
+    // by total length as well as by count.
+    let mut terms_length = 0usize;
     let terms = dict
         .iter()
         .filter_map(|x| {
@@ -2463,6 +2706,10 @@ fn editor_instruction(dict: &[String]) -> String {
             (!t.is_empty() && t.chars().count() <= 80).then_some(t)
         })
         .take(100)
+        .take_while(|t| {
+            terms_length += t.chars().count() + 1;
+            terms_length <= EDITOR_TERMS_MAX_CHARS
+        })
         .collect::<Vec<_>>()
         .join("、");
     let terms = if terms.is_empty() { "なし" } else { &terms };
@@ -2577,7 +2824,47 @@ fn visible_characters(text: &str) -> Vec<char> {
         .collect()
 }
 
-fn character_overlap_is_sufficient(input: &str, output: &str) -> bool {
+// A list line's marker ("1.", "1)", "１．", "-", "・", "•") is formatting, not
+// content. Returns the text without markers and the number of list lines.
+fn without_list_markers(text: &str) -> (String, usize) {
+    let mut items = 0;
+    let body = text
+        .lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            let digits = trimmed
+                .find(|c: char| !(c.is_ascii_digit() || ('０'..='９').contains(&c)))
+                .unwrap_or(trimmed.len());
+            let rest = if (1..=2).contains(&trimmed[..digits].chars().count()) {
+                trimmed[digits..]
+                    .strip_prefix(['.', ')', '．', '）'])
+                    .filter(|rest| {
+                        !rest
+                            .starts_with(|c: char| c.is_ascii_digit() || ('０'..='９').contains(&c))
+                    })
+                    .map(str::trim_start)
+            } else if let Some(rest) = trimmed.strip_prefix(['・', '•']) {
+                Some(rest.trim_start())
+            } else {
+                trimmed
+                    .strip_prefix('-')
+                    .filter(|rest| rest.starts_with(char::is_whitespace))
+                    .map(str::trim_start)
+            };
+            match rest {
+                Some(rest) if !rest.is_empty() => {
+                    items += 1;
+                    rest
+                }
+                _ => line,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    (body, items)
+}
+
+fn character_overlap_is_sufficient(input: &str, output: &str, input_percent: usize) -> bool {
     let input = visible_characters(input);
     let output = visible_characters(output);
     if input.is_empty() || output.is_empty() {
@@ -2596,30 +2883,36 @@ fn character_overlap_is_sufficient(input: &str, output: &str) -> bool {
             }
         }
     }
-    shared * 100 >= input.len() * 55 && shared * 100 >= output.len() * 55
+    shared * 100 >= input.len() * input_percent && shared * 100 >= output.len() * 55
+}
+
+// Runs of two or more kanji/katakana: names, dates, objects and actions.
+fn topic_runs(text: &str) -> Vec<String> {
+    let is_topic_character = |character: char| matches!(character as u32, 0x30A0..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF);
+    let mut topics = Vec::new();
+    let mut topic = String::new();
+    for character in text.chars() {
+        if is_topic_character(character) {
+            topic.push(character);
+        } else {
+            if topic.chars().count() >= 2 {
+                topics.push(std::mem::take(&mut topic));
+            }
+            topic.clear();
+        }
+    }
+    if topic.chars().count() >= 2 {
+        topics.push(topic);
+    }
+    topics
 }
 
 fn sentence_topics_are_preserved(input: &str, output: &str) -> bool {
-    let is_topic_character = |character: char| matches!(character as u32, 0x30A0..=0x30FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF);
     input
         .split('。')
         .filter(|sentence| !sentence.trim().is_empty())
         .all(|sentence| {
-            let mut topics = Vec::new();
-            let mut topic = String::new();
-            for character in sentence.chars() {
-                if is_topic_character(character) {
-                    topic.push(character);
-                } else {
-                    if topic.chars().count() >= 2 {
-                        topics.push(std::mem::take(&mut topic));
-                    }
-                    topic.clear();
-                }
-            }
-            if topic.chars().count() >= 2 {
-                topics.push(topic);
-            }
+            let topics = topic_runs(sentence);
             topics.is_empty() || topics.iter().any(|topic| output.contains(topic))
         })
 }
@@ -2631,10 +2924,25 @@ fn preserve_transcription_meaning<'a>(input: &'a str, output: &'a str) -> &'a st
     if input.contains("://") || input.contains("www.") || input.contains('@') {
         return input;
     }
-    let input_length = visible_characters(input).len();
-    let output_length = visible_characters(output).len();
+    // A list replaces spoken connectives such as 「まず」「次に」 with its markers.
+    // Both are ignored, the usual coverage floors still apply, and because a
+    // list is terse every name, date, object and action must survive in it.
+    let (output_body, list_items) = without_list_markers(output);
+    let is_list = list_items >= 2;
+    let mut checked_input = input.to_string();
+    if is_list {
+        for word in ["まず", "次に", "最後に"] {
+            checked_input = checked_input.replace(word, "");
+        }
+    }
+    let list_topics_are_preserved = !is_list
+        || topic_runs(&checked_input)
+            .iter()
+            .all(|topic| output_body.contains(topic.as_str()));
+    let input_length = visible_characters(&checked_input).len();
+    let output_length = visible_characters(&output_body).len();
     let input_sentences = input.matches('。').count();
-    let output_sentences = output.matches('。').count();
+    let output_sentences = output_body.matches('。').count().max(list_items);
     const VIEWPOINT_WORDS: [&str; 6] = ["あなた", "私", "僕", "俺", "我々", "私たち"];
     const NEGATION_WORDS: [&str; 8] = [
         "ない",
@@ -2646,11 +2954,15 @@ fn preserve_transcription_meaning<'a>(input: &'a str, output: &'a str) -> &'a st
         "禁止",
         "不要",
     ];
-    let protected_words_are_preserved = VIEWPOINT_WORDS
-        .iter()
-        .chain(NEGATION_WORDS.iter())
-        .all(|word| protected_word_count(input, word) == protected_word_count(output, word));
-    let locations_are_preserved = location_anchors(input)
+    let protected_words_are_preserved =
+        VIEWPOINT_WORDS
+            .iter()
+            .chain(NEGATION_WORDS.iter())
+            .all(|word| {
+                protected_word_count(&checked_input, word)
+                    == protected_word_count(&output_body, word)
+            });
+    let locations_are_preserved = location_anchors(&checked_input)
         .iter()
         .all(|anchor| output.contains(anchor));
     if input_length == 0
@@ -2661,11 +2973,12 @@ fn preserve_transcription_meaning<'a>(input: &'a str, output: &'a str) -> &'a st
             && (output_sentences == 0
                 || (output_sentences < input_sentences
                     && !sentence_topics_are_preserved(input, output))))
-        || numeric_tokens(input) != numeric_tokens(output)
-        || signed_numeric_tokens(input) != signed_numeric_tokens(output)
+        || numeric_tokens(input) != numeric_tokens(&output_body)
+        || signed_numeric_tokens(input) != signed_numeric_tokens(&output_body)
         || !protected_words_are_preserved
         || !locations_are_preserved
-        || !character_overlap_is_sufficient(input, output)
+        || !list_topics_are_preserved
+        || !character_overlap_is_sufficient(&checked_input, &output_body, 55)
     {
         input
     } else {
@@ -2878,6 +3191,18 @@ fn selection_question_prompt(selection: &str, question: &str) -> String {
     )
 }
 
+const LOCAL_ANSWER_TRUNCATED: &str =
+    "回答が長すぎて途中で切れました。質問や選択範囲を短くしてください。";
+
+// Ollama stops at num_predict with done_reason "length". A cut-off reply must
+// never be delivered as if it were complete.
+fn local_answer_text(generated: OllamaGenerate, truncated_error: &str) -> Result<String, String> {
+    if generated.done_reason.as_deref() == Some("length") {
+        return Err(truncated_error.into());
+    }
+    clean_ai_output(&generated.response)
+}
+
 fn local_generate_payload(prompt: &str) -> serde_json::Value {
     serde_json::json!({
         "model": LOCAL_MODEL,
@@ -2887,8 +3212,8 @@ fn local_generate_payload(prompt: &str) -> serde_json::Value {
         "keep_alive": "30m",
         "options": {
             "temperature": 0.0,
-            "num_ctx": 2048,
-            "num_predict": 256,
+            "num_ctx": 4096,
+            "num_predict": 1024,
             "repeat_penalty": 1.12
         }
     })
@@ -3099,11 +3424,13 @@ async fn process_voice_text_cancellable(
                     }
                     return Err("ローカルAIが文章を整えられませんでした。".into());
                 }
-                clean_ai_output(
-                    &r.json::<OllamaGenerate>()
+                // A truncated cleanup is treated like an empty one, which
+                // falls back to the raw transcript.
+                local_answer_text(
+                    r.json::<OllamaGenerate>()
                         .await
-                        .map_err(|_| "このPCのAIの応答を読めませんでした。".to_string())?
-                        .response,
+                        .map_err(|_| "このPCのAIの応答を読めませんでした。".to_string())?,
+                    EMPTY_AI_RESPONSE,
                 )
             },
             &cancelled,
@@ -3118,7 +3445,9 @@ async fn process_voice_text_cancellable(
             Err(error) if error == CLAUDE_SUBSCRIPTION_UNAVAILABLE => {
                 health.mark_unavailable(provider)
             }
-            Err(error) if provider_error_requires_login(error) => health.mark_unavailable(provider),
+            Err(error) if provider_error_requires_login(error) => {
+                health.mark_login_required(provider)
+            }
             Err(_) => {}
         }
     }
@@ -3135,6 +3464,24 @@ async fn answer_selection_question(
     selection: String,
     question: String,
 ) -> Result<String, String> {
+    answer_selection_question_cancellable(
+        app,
+        target,
+        selection,
+        question,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .await
+}
+
+async fn answer_selection_question_cancellable(
+    app: AppHandle,
+    target: OutputTarget,
+    selection: String,
+    question: String,
+    cancelled: Arc<AtomicBool>,
+) -> Result<String, String> {
+    check_cancelled(&cancelled)?;
     if target == OutputTarget::Raw {
         return Err(
             "質問への回答にはChatGPT、Claude、Gemini、またはこのPCのAIを選んでください。".into(),
@@ -3160,35 +3507,37 @@ async fn answer_selection_question(
     let answer = if let Some(provider) = provider {
         provider_preflight(&app.state::<ProviderHealthState>(), provider)?;
         let worker_app = app.clone();
+        let worker_cancelled = cancelled.clone();
         tokio::task::spawn_blocking(move || {
-            process_with_cloud(
-                &worker_app,
-                provider,
-                &prompt,
-                Arc::new(AtomicBool::new(false)),
-                true,
-                None,
-            )
+            process_with_cloud(&worker_app, provider, &prompt, worker_cancelled, true, None)
         })
         .await
         .map_err(|_| "回答の生成が中断されました。".to_string())?
     } else {
-        let response = local_generation(&app, &local_generate_payload(&prompt)).await?;
-        if !response.status().is_success() {
-            return Err(if response.status() == reqwest::StatusCode::NOT_FOUND {
-                "高速ローカルAIが未準備です。接続と設定からモデルを取得してください。".into()
-            } else {
-                "このPCのAIが回答を生成できませんでした。".into()
-            });
-        }
-        clean_ai_output(
-            &response
-                .json::<OllamaGenerate>()
-                .await
-                .map_err(|_| "このPCのAIの応答を読めませんでした。".to_string())?
-                .response,
+        until_cancelled(
+            async {
+                let response = local_generation(&app, &local_generate_payload(&prompt)).await?;
+                if !response.status().is_success() {
+                    return Err(if response.status() == reqwest::StatusCode::NOT_FOUND {
+                        "高速ローカルAIが未準備です。接続と設定からモデルを取得してください。"
+                            .into()
+                    } else {
+                        "このPCのAIが回答を生成できませんでした。".into()
+                    });
+                }
+                local_answer_text(
+                    response
+                        .json::<OllamaGenerate>()
+                        .await
+                        .map_err(|_| "このPCのAIの応答を読めませんでした。".to_string())?,
+                    LOCAL_ANSWER_TRUNCATED,
+                )
+            },
+            &cancelled,
         )
+        .await
     };
+    check_cancelled(&cancelled)?;
     if let Some(provider) = provider {
         let health = app.state::<ProviderHealthState>();
         match &answer {
@@ -3196,7 +3545,9 @@ async fn answer_selection_question(
             Err(error) if error == CLAUDE_SUBSCRIPTION_UNAVAILABLE => {
                 health.mark_unavailable(provider)
             }
-            Err(error) if provider_error_requires_login(error) => health.mark_unavailable(provider),
+            Err(error) if provider_error_requires_login(error) => {
+                health.mark_login_required(provider)
+            }
             Err(_) => {}
         }
     }
@@ -3223,7 +3574,9 @@ async fn answer_screen_question(
     target: OutputTarget,
     image_data_url: String,
     question: String,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<String, String> {
+    check_cancelled(&cancelled)?;
     if target == OutputTarget::Raw {
         return Err(
             "質問への回答にはChatGPT、Claude、Gemini、またはこのPCのAIを選んでください。".into(),
@@ -3243,12 +3596,13 @@ async fn answer_screen_question(
     let answer = if let Some(provider) = provider {
         provider_preflight(&app.state::<ProviderHealthState>(), provider)?;
         let worker_app = app.clone();
+        let worker_cancelled = cancelled.clone();
         tokio::task::spawn_blocking(move || {
             process_with_cloud(
                 &worker_app,
                 provider,
                 &prompt,
-                Arc::new(AtomicBool::new(false)),
+                worker_cancelled,
                 true,
                 Some(image_data_url),
             )
@@ -3256,22 +3610,29 @@ async fn answer_screen_question(
         .await
         .map_err(|_| "回答の生成が中断されました。".to_string())?
     } else {
-        let response = local_generation(
-            &app,
-            &local_generate_payload_with_image(&prompt, &image_data_url),
+        until_cancelled(
+            async {
+                let response = local_generation(
+                    &app,
+                    &local_generate_payload_with_image(&prompt, &image_data_url),
+                )
+                .await?;
+                if !response.status().is_success() {
+                    return Err("このPCのAIが画面について回答を生成できませんでした。".into());
+                }
+                local_answer_text(
+                    response
+                        .json::<OllamaGenerate>()
+                        .await
+                        .map_err(|_| "このPCのAIの応答を読めませんでした。".to_string())?,
+                    LOCAL_ANSWER_TRUNCATED,
+                )
+            },
+            &cancelled,
         )
-        .await?;
-        if !response.status().is_success() {
-            return Err("このPCのAIが画面について回答を生成できませんでした。".into());
-        }
-        clean_ai_output(
-            &response
-                .json::<OllamaGenerate>()
-                .await
-                .map_err(|_| "このPCのAIの応答を読めませんでした。".to_string())?
-                .response,
-        )
+        .await
     };
+    check_cancelled(&cancelled)?;
     if let Some(provider) = provider {
         let health = app.state::<ProviderHealthState>();
         match &answer {
@@ -3279,7 +3640,9 @@ async fn answer_screen_question(
             Err(error) if error == CLAUDE_SUBSCRIPTION_UNAVAILABLE => {
                 health.mark_unavailable(provider)
             }
-            Err(error) if provider_error_requires_login(error) => health.mark_unavailable(provider),
+            Err(error) if provider_error_requires_login(error) => {
+                health.mark_login_required(provider)
+            }
             Err(_) => {}
         }
     }
@@ -3291,13 +3654,14 @@ async fn answer_question_context(
     target: OutputTarget,
     context: QuestionContext,
     question: String,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<String, String> {
     match context {
         QuestionContext::Selection(selection) => {
-            answer_selection_question(app, target, selection, question).await
+            answer_selection_question_cancellable(app, target, selection, question, cancelled).await
         }
         QuestionContext::Screen { image_data_url } => {
-            answer_screen_question(app, target, image_data_url, question).await
+            answer_screen_question(app, target, image_data_url, question, cancelled).await
         }
     }
 }
@@ -3532,14 +3896,23 @@ fn stop_and_process_background_recording(
                     runtime.message = "質問への回答を作っています".into();
                 })?;
                 let question = recognized.text.clone();
-                match answer_question_context(
+                let answered = answer_question_context(
                     app.clone(),
                     config.selection_question_target,
                     context.clone(),
                     question.clone(),
+                    cancelled.clone(),
                 )
-                .await
-                {
+                .await;
+                // A cancelled question must not pop up an answer afterwards, but
+                // the spoken question stays recoverable from the main window.
+                if let Err(error) = check_cancelled(&cancelled) {
+                    let _ = update_processing_result(&app, generation, |runtime| {
+                        runtime.recovery_pending = !runtime.transcript.is_empty();
+                    });
+                    return Err(error);
+                }
+                match answered {
                     Ok(answer) => {
                         update_processing_result(&app, generation, |runtime| {
                             runtime.question_result_opened = true;
@@ -4033,7 +4406,14 @@ async fn answer_open_question(
         .as_ref()
         .map(|session| session.context.clone())
         .ok_or_else(|| "質問する対象がありません。もう一度質問してください。".to_string())?;
-    answer_question_context(app, target, context, question).await
+    answer_question_context(
+        app,
+        target,
+        context,
+        question,
+        Arc::new(AtomicBool::new(false)),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -4088,7 +4468,18 @@ fn setup_desktop_tray(app: &AppHandle) -> Result<(), Box<dyn std::error::Error>>
 }
 
 pub fn run() {
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Must be registered first. A second launch on Windows (e.g. from the Start
+    // menu while the app is in the tray) shows the running instance instead.
+    // macOS already keeps one instance and reopens it, and its updater relaunch
+    // starts the new process before the old one exits.
+    #[cfg(target_os = "windows")]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        if let Err(error) = show_main_window(app) {
+            eprintln!("{error}");
+        }
+    }));
+    let app = builder
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -4135,26 +4526,11 @@ pub fn run() {
                     runtime.configuration_ready = true;
                 };
             }
-            let registration_result = (|| {
-                register_voice_shortcut_handler(
-                    handle,
-                    &config.shortcut,
-                    VoiceShortcutKind::Input,
-                )?;
-                register_voice_shortcut_handler(
-                    handle,
-                    &config.selection_question_shortcut,
-                    VoiceShortcutKind::SelectionQuestion,
-                )?;
-                let state = handle.state::<VoiceShortcutState>();
-                let mut registered = state
-                    .0
-                    .lock()
-                    .map_err(|_| "ショートカット状態を確認できませんでした。".to_string())?;
-                registered.input = Some(config.shortcut.clone());
-                registered.selection_question = Some(config.selection_question_shortcut.clone());
-                Ok::<(), String>(())
-            })();
+            let registration_result = register_startup_shortcuts(
+                &config,
+                &handle.state::<VoiceShortcutState>().0,
+                |shortcut, kind| register_voice_shortcut_handler(handle, shortcut, kind),
+            );
             if let Err(error) = registration_result {
                 let state = handle.state::<BackgroundVoiceState>();
                 if let Ok(mut runtime) = state.0.lock() {
@@ -4417,8 +4793,49 @@ mod tests {
         assert_eq!(payload["model"], "gemma4:e2b");
         assert_eq!(payload["think"], false);
         assert_eq!(payload["keep_alive"], "30m");
-        assert_eq!(payload["options"]["num_ctx"], 2048);
-        assert_eq!(payload["options"]["num_predict"], 256);
+        assert_eq!(payload["options"]["num_ctx"], 4096);
+        assert_eq!(payload["options"]["num_predict"], 1024);
+    }
+
+    #[test]
+    fn ローカルaiの出力上限で切れた整形結果は原文へ戻す() {
+        let generated: OllamaGenerate =
+            serde_json::from_str(r#"{"response":"見積もりを送ります。","done_reason":"length"}"#)
+                .unwrap();
+        let polished = local_answer_text(generated, EMPTY_AI_RESPONSE);
+        assert_eq!(
+            use_ai_output_or_transcript("えー見積もりを送ります", polished).unwrap(),
+            "えー見積もりを送ります"
+        );
+    }
+
+    #[test]
+    fn ローカルaiの回答が途中で切れたら明示して伝える() {
+        let generated: OllamaGenerate =
+            serde_json::from_str(r#"{"response":"途中まで","done_reason":"length"}"#).unwrap();
+        assert_eq!(
+            local_answer_text(generated, LOCAL_ANSWER_TRUNCATED).unwrap_err(),
+            LOCAL_ANSWER_TRUNCATED
+        );
+        let finished: OllamaGenerate =
+            serde_json::from_str(r#"{"response":"完全な回答","done_reason":"stop"}"#).unwrap();
+        assert_eq!(
+            local_answer_text(finished, LOCAL_ANSWER_TRUNCATED).unwrap(),
+            "完全な回答"
+        );
+        let legacy: OllamaGenerate = serde_json::from_str(r#"{"response":"理由なし"}"#).unwrap();
+        assert_eq!(
+            local_answer_text(legacy, LOCAL_ANSWER_TRUNCATED).unwrap(),
+            "理由なし"
+        );
+    }
+
+    #[test]
+    fn 登録語が多くても整形指示がローカルaiの文脈に収まる() {
+        let dictionary = (0..100)
+            .map(|index| format!("{index:03}{}", "あ".repeat(77)))
+            .collect::<Vec<_>>();
+        assert!(editor_instruction(&dictionary).chars().count() < 2_400);
     }
 
     #[test]
@@ -4428,6 +4845,80 @@ mod tests {
         assert_eq!(payload["keep_alive"], "30m");
         assert_eq!(payload["prompt"], "");
         assert_eq!(payload["stream"], false);
+    }
+
+    #[test]
+    fn 箇条書きや番号付きリストへの整形は受け入れる() {
+        let transcript = "まず見積もり、次に契約、最後に請求をお願いします。";
+        for list in [
+            "次の対応をお願いします。\n1. 見積もり\n2. 契約\n3. 請求",
+            "次の対応をお願いします。\n1) 見積もり\n2) 契約\n3) 請求",
+            "次の対応をお願いします。\n１．見積もり\n２．契約\n３．請求",
+            "次の対応をお願いします。\n- 見積もり\n- 契約\n- 請求",
+            "次の対応をお願いします。\n・見積もり\n・契約\n・請求",
+            "次の対応をお願いします。\n• 見積もり\n• 契約\n• 請求",
+        ] {
+            assert_eq!(
+                preserve_transcription_meaning(transcript, list),
+                list,
+                "{list}"
+            );
+        }
+        let with_numbers = "見積もりは3000円です。契約は来週です。";
+        let list = "1. 見積もりは3000円です。\n2. 契約は来週です。";
+        assert_eq!(preserve_transcription_meaning(with_numbers, list), list);
+    }
+
+    #[test]
+    fn リスト形式で曜日や名前や動作が抜けたら文字起こしへ戻す() {
+        for (transcript, list) in [
+            (
+                "見積書の提出期限は金曜日です。契約書の締結は月曜日です。請求書の発行は水曜日です。",
+                "- 見積書の提出\n- 契約書の締結\n- 請求書の発行",
+            ),
+            (
+                "山田さんに見積書を送って、佐藤さんに契約書を送って、鈴木さんに請求書を送ってください。",
+                "- 見積書を送る\n- 契約書を送る\n- 請求書を送る",
+            ),
+            (
+                "見積書の金額を確認して修正します。契約書の期限を延長して再送します。請求書の宛名を訂正して発送します。",
+                "- 見積書の金額を確認\n- 契約書の期限を延長\n- 請求書の宛名を訂正",
+            ),
+        ] {
+            assert_eq!(
+                preserve_transcription_meaning(transcript, list),
+                transcript,
+                "{list}"
+            );
+        }
+    }
+
+    #[test]
+    fn 行頭の小数や日付はリスト記号として扱わない() {
+        let transcript = "売上は3.5倍に増えました。費用は2.5倍に減りました。";
+        let polished = "売上は3.5倍に増えました。\n費用は2.5倍に減りました。";
+        assert_eq!(
+            preserve_transcription_meaning(transcript, polished),
+            polished
+        );
+        let leading = "3.5倍に増えました。\n2.5倍に減りました。";
+        assert_eq!(without_list_markers(leading), (leading.to_string(), 0));
+        assert_eq!(
+            without_list_markers("2025.10.5に会議です。"),
+            ("2025.10.5に会議です。".to_string(), 0)
+        );
+    }
+
+    #[test]
+    fn リスト形式でも数字の変更は文字起こしへ戻す() {
+        let transcript = "見積もりは3000円です。契約は来週です。";
+        let list = "1. 見積もりは2000円です。\n2. 契約は来週です。";
+        assert_eq!(preserve_transcription_meaning(transcript, list), transcript);
+        let plain = "見積もりは2000円です。契約は来週です。";
+        assert_eq!(
+            preserve_transcription_meaning(transcript, plain),
+            transcript
+        );
     }
 
     #[test]
@@ -4702,6 +5193,275 @@ mod tests {
         assert_eq!(
             provider_preflight(&health, Provider::Claude),
             Err(CLAUDE_SUBSCRIPTION_UNAVAILABLE.to_string())
+        );
+    }
+
+    #[test]
+    fn 中止された質問は待機中のローカルai応答を打ち切る() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let flag = cancelled.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            flag.store(true, Ordering::Release);
+        });
+        let started = Instant::now();
+        let result = tauri::async_runtime::block_on(until_cancelled(
+            std::future::pending::<Result<String, String>>(),
+            &cancelled,
+        ));
+        assert!(result.is_err());
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    enum FakeContent {
+        Text(String),
+        Image,
+    }
+
+    #[derive(Default)]
+    struct FakeClipboard {
+        // None models an empty clipboard (or content that cannot be restored).
+        content: Option<FakeContent>,
+        snapshot_fails: bool,
+        copy_result: Option<String>,
+        read_failures_after_copy: usize,
+        copied: bool,
+    }
+
+    impl FakeClipboard {
+        fn text(&self) -> Option<&str> {
+            match &self.content {
+                Some(FakeContent::Text(text)) => Some(text),
+                _ => None,
+            }
+        }
+    }
+
+    impl SelectionClipboard for FakeClipboard {
+        type Snapshot = FakeContent;
+        fn snapshot(&mut self) -> Result<Option<FakeContent>, String> {
+            if self.snapshot_fails {
+                return Err("読めません".into());
+            }
+            Ok(self.content.clone())
+        }
+        fn restore(&mut self, snapshot: &FakeContent) -> Result<(), String> {
+            self.content = Some(snapshot.clone());
+            Ok(())
+        }
+        fn read(&mut self) -> Result<String, String> {
+            if self.copied && self.read_failures_after_copy > 0 {
+                self.read_failures_after_copy -= 1;
+                return Err("読めません".into());
+            }
+            self.text()
+                .map(str::to_string)
+                .ok_or_else(|| "テキストなし".to_string())
+        }
+        fn write(&mut self, text: &str) -> Result<(), String> {
+            self.content = Some(FakeContent::Text(text.to_string()));
+            Ok(())
+        }
+        fn clear(&mut self) -> Result<(), String> {
+            self.content = None;
+            Ok(())
+        }
+        fn send_copy(&mut self) -> Result<(), String> {
+            self.copied = true;
+            if let Some(text) = self.copy_result.take() {
+                self.content = Some(FakeContent::Text(text));
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn 画像などテキスト以外のクリップボードでも選択文を取得できる() {
+        let mut clipboard = FakeClipboard {
+            copy_result: Some("選択した文章".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            capture_selection_with(&mut clipboard).unwrap(),
+            Some("選択した文章".to_string())
+        );
+    }
+
+    #[test]
+    fn 画像のクリップボードは選択文がなければ画像のまま戻す() {
+        let mut clipboard = FakeClipboard {
+            content: Some(FakeContent::Image),
+            ..Default::default()
+        };
+        assert_eq!(capture_selection_with(&mut clipboard).unwrap(), None);
+        assert_eq!(clipboard.content, Some(FakeContent::Image));
+    }
+
+    #[test]
+    fn 空のクリップボードは選択文がなければ検査文字列を消す() {
+        let mut clipboard = FakeClipboard::default();
+        assert_eq!(capture_selection_with(&mut clipboard).unwrap(), None);
+        assert_eq!(clipboard.content, None);
+    }
+
+    #[test]
+    fn 読めないクリップボードは上書きせずに中止する() {
+        let mut clipboard = FakeClipboard {
+            content: Some(FakeContent::Text("元の内容".into())),
+            snapshot_fails: true,
+            copy_result: Some("選択した文章".into()),
+            ..Default::default()
+        };
+        assert!(capture_selection_with(&mut clipboard).is_err());
+        assert!(!clipboard.copied);
+        assert_eq!(clipboard.text(), Some("元の内容"));
+    }
+
+    #[test]
+    fn 選択がなければ元のテキストを戻す() {
+        let mut clipboard = FakeClipboard {
+            content: Some(FakeContent::Text("元の内容".into())),
+            ..Default::default()
+        };
+        assert_eq!(capture_selection_with(&mut clipboard).unwrap(), None);
+        assert_eq!(clipboard.text(), Some("元の内容"));
+    }
+
+    #[test]
+    fn コピー直後の一時的な読み取り失敗は再試行する() {
+        let mut clipboard = FakeClipboard {
+            content: Some(FakeContent::Text("元の内容".into())),
+            copy_result: Some("選択した文章".into()),
+            read_failures_after_copy: 2,
+            ..Default::default()
+        };
+        assert_eq!(
+            capture_selection_with(&mut clipboard).unwrap(),
+            Some("選択した文章".to_string())
+        );
+    }
+
+    fn mono_wav_of_seconds(seconds: usize, sample_rate: u32) -> Vec<u8> {
+        let data_bytes = seconds * sample_rate as usize * 2;
+        let mut wav = vec![0_u8; 44 + data_bytes];
+        wav[..4].copy_from_slice(b"RIFF");
+        wav[8..12].copy_from_slice(b"WAVE");
+        wav[20..22].copy_from_slice(&1_u16.to_le_bytes());
+        wav[22..24].copy_from_slice(&1_u16.to_le_bytes());
+        wav[24..28].copy_from_slice(&sample_rate.to_le_bytes());
+        wav[34..36].copy_from_slice(&16_u16.to_le_bytes());
+        wav
+    }
+
+    #[test]
+    fn 音声認識の制限時間は録音の長さに応じて延びる() {
+        assert_eq!(
+            whisper_deadline(&mono_wav_of_seconds(30, 16_000)),
+            Duration::from_secs(300)
+        );
+        assert_eq!(
+            whisper_deadline(&mono_wav_of_seconds(200, 16_000)),
+            Duration::from_secs(400)
+        );
+        // The longest allowed recording (15 minutes) needs more than 300 seconds.
+        assert_eq!(
+            whisper_deadline(&mono_wav_of_seconds(900, 8_000)),
+            Duration::from_secs(1_800)
+        );
+        assert_eq!(whisper_deadline(b"not a wav"), Duration::from_secs(300));
+    }
+
+    #[test]
+    fn 設定ファイルは一時ファイル経由で置き換える() {
+        let dir =
+            std::env::temp_dir().join(format!("doon-voice-atomic-{}", selection_probe_marker()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("voice-runtime.json");
+        write_file_atomically(&path, b"first").unwrap();
+        write_file_atomically(&path, b"second").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"second");
+        let names = std::fs::read_dir(&dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec![std::ffi::OsString::from("voice-runtime.json")]);
+        // A failed write must not leave a temporary file or touch the settings.
+        assert!(write_file_atomically(&dir.join("missing").join("x.json"), b"third").is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"second");
+        // Concurrent saves each complete with one of the written contents.
+        let writers = (0..8)
+            .map(|index| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    write_file_atomically(&path, format!("{index}").as_bytes())
+                })
+            })
+            .collect::<Vec<_>>();
+        for writer in writers {
+            writer.join().unwrap().unwrap();
+        }
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn claudeの認証状態は標準出力のjsonだけで判定する() {
+        let json = r#"{"loggedIn": true, "authMethod": "claude.ai"}"#;
+        let text = login_status_text(&Provider::Claude, json, "warning: update available\n");
+        assert!(login_status_is_authenticated(
+            &Provider::Claude,
+            true,
+            &text
+        ));
+        let text = login_status_text(&Provider::Claude, r#"{"loggedIn": false}"#, "loggedIn");
+        assert!(!login_status_is_authenticated(
+            &Provider::Claude,
+            true,
+            &text
+        ));
+        // Other CLIs print their status on either stream.
+        let text = login_status_text(&Provider::Codex, "", "Logged in using ChatGPT");
+        assert!(login_status_is_authenticated(&Provider::Codex, true, &text));
+    }
+
+    #[test]
+    fn 起動時のショートカット登録が途中で失敗しても成功分は記録する() {
+        let config = VoiceRuntimeConfig::default();
+        let registrations = Mutex::new(VoiceShortcutRegistrations::default());
+        let error = register_startup_shortcuts(&config, &registrations, |_, kind| match kind {
+            VoiceShortcutKind::Input => Ok(()),
+            VoiceShortcutKind::SelectionQuestion => Err("登録できません".into()),
+        })
+        .unwrap_err();
+        assert_eq!(error, "登録できません");
+        let registered = registrations.lock().unwrap();
+        assert_eq!(registered.input.as_deref(), Some(config.shortcut.as_str()));
+        assert_eq!(registered.selection_question, None);
+    }
+
+    #[test]
+    fn ログイン期限切れの利用不可は一定時間後に再試行できる() {
+        let health = ProviderHealthState::default();
+        health.mark_login_required(Provider::Codex);
+        let now = Instant::now();
+        assert_eq!(
+            health.usability_at(Provider::Codex, now + Duration::from_secs(10)),
+            ProviderUsability::Unavailable
+        );
+        assert!(provider_preflight(&health, Provider::Codex).is_err());
+        assert_eq!(
+            health.usability_at(
+                Provider::Codex,
+                now + PROVIDER_RETRY_AFTER + Duration::from_secs(1)
+            ),
+            ProviderUsability::Unknown
+        );
+        // Claude's disabled subscription is a policy decision, not an expired login.
+        health.mark_unavailable(Provider::Claude);
+        assert_eq!(
+            health.usability_at(Provider::Claude, now + Duration::from_secs(3600)),
+            ProviderUsability::Unavailable
         );
     }
 

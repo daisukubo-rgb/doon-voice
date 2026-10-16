@@ -380,3 +380,57 @@ fn failed_engine_shutdown_preserves_partial_text_and_blocks_more_recording() {
     runtime.engine_restart_required = result.restart_required;
     assert!(runtime.ensure_can_record().is_err());
 }
+
+fn closed_generate_url() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/api/generate", listener.local_addr().unwrap());
+    drop(listener);
+    url
+}
+
+#[test]
+fn local_generation_is_sent_before_any_runtime_probe() {
+    let (url, server) = local_http_fixture("200 OK", r#"{"response":"ok"}"#);
+    let probes = std::sync::atomic::AtomicUsize::new(0);
+    let result = tauri::async_runtime::block_on(send_generate_recovering_connection(
+        &client().unwrap(),
+        &url,
+        &serde_json::json!({}),
+        || async {
+            probes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        },
+    ));
+    server.join().unwrap();
+    assert!(result.is_ok());
+    assert_eq!(probes.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn local_generation_recovers_the_runtime_once_after_a_connection_failure() {
+    let probes = std::sync::atomic::AtomicUsize::new(0);
+    let error = tauri::async_runtime::block_on(send_generate_recovering_connection(
+        &client().unwrap(),
+        &closed_generate_url(),
+        &serde_json::json!({}),
+        || async {
+            probes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        },
+    ))
+    .unwrap_err();
+    assert_eq!(probes.load(Ordering::SeqCst), 1);
+    assert!(error.contains("接続できません"), "{error}");
+}
+
+#[test]
+fn local_generation_reports_a_failed_runtime_recovery() {
+    let error = tauri::async_runtime::block_on(send_generate_recovering_connection(
+        &client().unwrap(),
+        &closed_generate_url(),
+        &serde_json::json!({}),
+        || async { Err("起動できません".to_string()) },
+    ))
+    .unwrap_err();
+    assert_eq!(error, "起動できません");
+}
