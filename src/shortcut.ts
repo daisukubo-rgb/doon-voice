@@ -19,6 +19,7 @@ export function shortcutFromKeyboardEvent(event: ShortcutKeyboardEvent): string 
   const key = keyName(event.code);
   if (!key) return null;
 
+  if (!event.metaKey && !event.ctrlKey && !event.altKey) return null;
   const modifiers = [
     event.metaKey ? "Command" : "",
     event.ctrlKey ? "Ctrl" : "",
@@ -26,7 +27,7 @@ export function shortcutFromKeyboardEvent(event: ShortcutKeyboardEvent): string 
     event.shiftKey ? "Shift" : "",
   ].filter(Boolean);
 
-  return modifiers.length ? [...modifiers, key].join("+") : null;
+  return [...modifiers, key].join("+");
 }
 
 export function shortcutCaptureResult(event: ShortcutKeyboardEvent): ShortcutCaptureResult {

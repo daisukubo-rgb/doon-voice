@@ -9,6 +9,13 @@ function versionFromFolder(name, prefix) {
   return match?.[1];
 }
 
+function compareVersions(left, right) {
+  const a = left.split(".").map(Number);
+  const b = right.split(".").map(Number);
+  for (let index = 0; index < 3; index += 1) if (a[index] !== b[index]) return a[index] - b[index];
+  return 0;
+}
+
 function moveContents(source, destination) {
   mkdirSync(destination, { recursive: true });
   for (const name of readdirSync(source)) renameSync(join(source, name), join(destination, name));
@@ -43,17 +50,29 @@ export function publishDriveRelease({ sourceDirectory, driveRoot, version }) {
   for (const name of updates) requireFile(sourceDirectory, name);
 
   mkdirSync(driveRoot, { recursive: true });
-  const previousLatest = readdirSync(driveRoot).find((name) => versionFromFolder(name, "01_最新版"));
-  if (previousLatest) {
-    const previousVersion = versionFromFolder(previousLatest, "01_最新版");
-    if (previousVersion !== version) moveContents(join(driveRoot, previousLatest), join(driveRoot, "02_過去バージョン", `v${previousVersion}`));
+  const previousLatest = readdirSync(driveRoot).filter((name) => versionFromFolder(name, "01_最新版"));
+  for (const name of previousLatest) {
+    const previousVersion = versionFromFolder(name, "01_最新版");
+    if (compareVersions(previousVersion, version) > 0) {
+      throw new Error(`既存の最新版（v${previousVersion}）より古いv${version}は公開できません。バージョンを確認してください。`);
+    }
   }
   const updaterRoot = join(driveRoot, "03_自動更新用");
   mkdirSync(join(updaterRoot, "過去"), { recursive: true });
-  const previousUpdater = readdirSync(updaterRoot).find((name) => versionFromFolder(name, "最新版"));
-  if (previousUpdater) {
-    const previousVersion = versionFromFolder(previousUpdater, "最新版");
-    if (previousVersion !== version) moveContents(join(updaterRoot, previousUpdater), join(updaterRoot, "過去", `v${previousVersion}`));
+  const previousUpdater = readdirSync(updaterRoot).filter((name) => versionFromFolder(name, "最新版"));
+  for (const name of previousUpdater) {
+    const previousVersion = versionFromFolder(name, "最新版");
+    if (compareVersions(previousVersion, version) > 0) {
+      throw new Error(`既存の自動更新用の最新版（v${previousVersion}）より古いv${version}は公開できません。バージョンを確認してください。`);
+    }
+  }
+  for (const name of previousLatest) {
+    const previousVersion = versionFromFolder(name, "01_最新版");
+    if (previousVersion !== version) moveContents(join(driveRoot, name), join(driveRoot, "02_過去バージョン", `v${previousVersion}`));
+  }
+  for (const name of previousUpdater) {
+    const previousVersion = versionFromFolder(name, "最新版");
+    if (previousVersion !== version) moveContents(join(updaterRoot, name), join(updaterRoot, "過去", `v${previousVersion}`));
   }
 
   const latest = join(driveRoot, `01_最新版（v${version}）`);

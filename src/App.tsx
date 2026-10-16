@@ -38,7 +38,7 @@ type BackgroundVoiceSnapshot = {
   clipboard_saved: boolean;
   recovery_pending: boolean;
 };
-type QuestionPhase = "ready" | "recording" | "transcribing" | "answering" | "answer";
+type QuestionPhase = "ready" | "starting" | "recording" | "transcribing" | "answering" | "answer";
 type SelectionQuestionEvent = { selection: string; question: string; answer: string };
 type SelectionQuestionErrorEvent = { selection: string; question: string; error: string };
 type SelectionQuestionPopupPayload = { selection: string; context_kind: "selection" | "screen"; question: string; answer?: string; error?: string; target: OutputTarget };
@@ -535,6 +535,10 @@ function MainApp() {
 
   async function updateApp() {
     if (updatingApp) return;
+    if (busy || resultActionPending || recoveryPending) {
+      setNotice("音声入力の処理が終わってから更新してください");
+      return;
+    }
     if (!isTauriApp()) {
       setNotice("更新の確認はインストール済みのアプリ版で使えます");
       return;
@@ -597,7 +601,7 @@ function MainApp() {
   }
 
   async function openSelectionQuestion() {
-    if (busy || questionPhase === "recording" || questionPhase === "transcribing" || questionPhase === "answering") return;
+    if (busy || questionPhase === "starting" || questionPhase === "recording" || questionPhase === "transcribing" || questionPhase === "answering") return;
     const operation = ++questionOperationRef.current;
     try {
       const selection = (await appInvoke<string>("capture_selected_text")).trim();
@@ -616,7 +620,7 @@ function MainApp() {
   }
 
   async function openScreenQuestion() {
-    if (busy || questionPhase === "recording" || questionPhase === "transcribing" || questionPhase === "answering") return;
+    if (busy || questionPhase === "starting" || questionPhase === "recording" || questionPhase === "transcribing" || questionPhase === "answering") return;
     const operation = ++questionOperationRef.current;
     try {
       await appInvoke("open_frontmost_screen_question", { target: selectionQuestionTargetRef.current });
@@ -637,7 +641,7 @@ function MainApp() {
 
   async function askSelectionQuestion(question = questionDraft) {
     const normalizedQuestion = question.trim();
-    if (!normalizedQuestion || questionPhase === "recording" || questionPhase === "transcribing" || questionPhase === "answering") return;
+    if (!normalizedQuestion || questionPhase === "starting" || questionPhase === "recording" || questionPhase === "transcribing" || questionPhase === "answering") return;
     if (outputTarget === "raw") {
       setQuestionError("回答にはChatGPT、Claude、Gemini、またはこのPCのAIを選んでください");
       return;
@@ -667,7 +671,7 @@ function MainApp() {
   }
 
   async function toggleQuestionVoice() {
-    if (questionPhase === "answering" || questionPhase === "transcribing") return;
+    if (questionPhase === "starting" || questionPhase === "answering" || questionPhase === "transcribing") return;
     if (questionPhase === "recording") {
       const recorder = questionRecorderRef.current;
       questionRecorderRef.current = null;
@@ -691,12 +695,21 @@ function MainApp() {
       }
       return;
     }
+    const operation = ++questionOperationRef.current;
+    setQuestionError("");
+    setQuestionPhase("starting");
     try {
-      setQuestionError("");
-      questionRecorderRef.current = await startAudioRecorder();
+      const recorder = await startAudioRecorder();
+      if (operation !== questionOperationRef.current) {
+        void recorder.stop().catch(() => undefined);
+        return;
+      }
+      questionRecorderRef.current = recorder;
       setQuestionPhase("recording");
     } catch (error) {
+      if (operation !== questionOperationRef.current) return;
       setQuestionError(errorMessage(error, "質問用のマイクを開始できませんでした"));
+      setQuestionPhase("ready");
     }
   }
 
@@ -841,7 +854,7 @@ function MainApp() {
       event.preventDefault(); event.stopPropagation();
       const result = shortcutCaptureResult(event);
       if (result.kind === "cancel") { cancelShortcutCapture(); return; }
-      if (result.kind === "invalid") { setNotice("Control、Option/Alt、Shift、Commandのいずれかを一緒に押してください"); return; }
+      if (result.kind === "invalid") { setNotice("Control、Option/Alt、Commandのいずれかを一緒に押してください（Shiftは追加でのみ使えます）"); return; }
       if (captureInput) void applyShortcut(result.shortcut);
       else void applySelectionQuestionShortcut(result.shortcut);
     };
@@ -1195,7 +1208,7 @@ function MainApp() {
             <button className={selectionQuestionTarget === "local" ? "is-selected" : ""} type="button" role="radio" aria-checked={selectionQuestionTarget === "local"} disabled={busy} onClick={() => chooseSelectionQuestionTarget("local")}><BrandGlyph name="dx" /><span><strong>このPCのAI</strong><small>Gemma 4 E2Bで答える</small></span>{selectionQuestionTarget === "local" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
           </div>
         </section>
-        <div className="settings-list"><article className="app-update-row"><span className="setting-icon"><RefreshCw size={22} strokeWidth={1.8} /></span><div><h2>アプリの更新</h2><p>現在の版: {appVersion === null ? "確認中" : appVersion === "開発版" || appVersion === "確認できません" ? appVersion : `v${appVersion}`}</p><p>{updateCheckError ? `確認エラー: ${updateCheckError}` : updateCheckedAt === null ? "最新版はまだ確認していません。" : latestAppVersion && latestAppVersion !== appVersion ? `確認した最新版: v${latestAppVersion}` : `確認結果: 現在の版が最新版です（${new Date(updateCheckedAt).toLocaleString("ja-JP")}）`}</p></div><span className={latestAppVersion && latestAppVersion !== appVersion ? "setting-state state-available" : "setting-state state-permitted"}>{latestAppVersion && latestAppVersion !== appVersion ? <Download size={15} strokeWidth={2} /> : <Check size={15} strokeWidth={2.3} />}{latestAppVersion && latestAppVersion !== appVersion ? `v${latestAppVersion}あり` : "自動更新対応"}</span><button className="outline-action" type="button" onClick={() => void updateApp()} disabled={updatingApp}>{updatingApp ? "更新中" : "更新を確認"} <RefreshCw className={updatingApp ? "is-spinning" : undefined} size={15} /></button></article></div>
+        <div className="settings-list"><article className="app-update-row"><span className="setting-icon"><RefreshCw size={22} strokeWidth={1.8} /></span><div><h2>アプリの更新</h2><p>現在の版: {appVersion === null ? "確認中" : appVersion === "開発版" || appVersion === "確認できません" ? appVersion : `v${appVersion}`}</p><p>{updateCheckError ? `確認エラー: ${updateCheckError}` : updateCheckedAt === null ? "最新版はまだ確認していません。" : latestAppVersion && latestAppVersion !== appVersion ? `確認した最新版: v${latestAppVersion}` : `確認結果: 現在の版が最新版です（${new Date(updateCheckedAt).toLocaleString("ja-JP")}）`}</p></div><span className={latestAppVersion && latestAppVersion !== appVersion ? "setting-state state-available" : "setting-state state-permitted"}>{latestAppVersion && latestAppVersion !== appVersion ? <Download size={15} strokeWidth={2} /> : <Check size={15} strokeWidth={2.3} />}{latestAppVersion && latestAppVersion !== appVersion ? `v${latestAppVersion}あり` : "自動更新対応"}</span><button className="outline-action" type="button" onClick={() => void updateApp()} disabled={updatingApp || busy}>{updatingApp ? "更新中" : "更新を確認"} <RefreshCw className={updatingApp ? "is-spinning" : undefined} size={15} /></button></article></div>
         <div className="settings-list direct-input-settings"><article><span className="setting-icon"><BrandGlyph name="move" /></span><div><h2>カーソル位置へ入力</h2><p>{directInputAllowed ? "ほかのアプリへ直接入力できます。" : "macOSのアクセシビリティ許可が必要です。"}</p></div><span className={directInputAllowed ? "setting-state state-permitted" : "setting-state state-unavailable"}>{directInputAllowed ? <Check size={15} strokeWidth={2.3} /> : <CircleAlert size={15} strokeWidth={2} />}{directInputAllowed ? "許可済み" : "未許可"}</span>{isMac ? <button className="outline-action" type="button" onClick={() => void (directInputAllowed ? openDirectInputSettings() : requestDirectInputPermission())}>{directInputAllowed ? "設定を開く" : "許可する"} <ExternalLink size={15} /></button> : <span />}</article></div>
         <div className="settings-list microphone-settings"><article><span className="setting-icon"><Mic size={22} strokeWidth={1.8} /></span><div><h2>マイク</h2><p>{microphoneReady === true ? "許可と実際のマイク接続を確認しました。" : microphoneReady === false ? "許可だけでは録音できない場合があります。マイク接続を確認して、もう一度試してください。" : microphonePermissionState === "granted" ? "許可済みです。実際に録音できるか確認してください。" : microphonePermissionState === "unsupported" ? "この環境ではマイクを使えません。" : "初回にこのボタンからマイクを許可・確認します。"}</p></div><span className={microphoneReady === true ? "setting-state state-permitted" : "setting-state state-unavailable"}>{microphoneReady === true ? <Check size={15} strokeWidth={2.3} /> : <CircleAlert size={15} strokeWidth={2} />}{microphoneReady === true ? "接続確認済み" : microphonePermissionState === "unsupported" ? "利用不可" : microphonePermissionState === "granted" ? "確認が必要" : "許可が必要"}</span><button className="outline-action" type="button" onClick={() => void requestMicrophonePermission()} disabled={checkingMicrophone || microphonePermissionState === "unsupported"}>{checkingMicrophone ? "確認中" : microphoneReady === true ? "もう一度確認" : "マイクを許可・確認"} <Mic size={15} /></button></article></div>
         <div className="settings-list transcription-settings"><article><span className="setting-icon"><BrandGlyph name="work" /></span><div><h2>音声認識</h2><p>{transcription?.downloaded ? "日本語音声認識をこのPCで行います。" : "話した言葉を文字にする日本語モデルです。"}</p>{progressFor("transcription") && <div className="installation-progress" role="status"><span>{progressFor("transcription")?.phase}</span><strong>{installationProgressLabel(progressFor("transcription")!, installationNow)}</strong><i aria-hidden="true"><b style={{ width: `${progressPercent("transcription") ?? 8}%` }} /></i></div>}</div><span className={transcription?.downloaded ? "setting-state state-installed" : "setting-state state-unavailable"}>{transcription?.downloaded ? <Check size={15} strokeWidth={2.3} /> : <Download size={15} strokeWidth={2} />}{transcription?.downloaded ? "モデル取得済み" : downloadingTranscription ? `${progressPercent("transcription") ?? "…"}%` : transcription?.size || "未取得"}</span>{transcription?.downloaded ? <span /> : <button className="outline-action" type="button" onClick={() => void downloadTranscriptionModel()} disabled={downloadingTranscription}>{downloadingTranscription ? "取得中" : "モデルを取得"} <Download size={15} /></button>}</article></div>
@@ -1214,7 +1227,7 @@ function MainApp() {
         {questionError && <p className="question-error" role="alert">{questionError}</p>}
         <div className="question-compose">
           <textarea ref={questionInputRef} value={questionDraft} disabled={questionPhase === "recording" || questionPhase === "transcribing" || questionPhase === "answering"} onChange={(event) => setQuestionDraft(event.target.value)} onCompositionStart={() => { questionComposingRef.current = true; }} onCompositionEnd={() => { questionComposingRef.current = false; }} onKeyDown={questionKeyDown} placeholder="質問を入力" aria-label="選択した文章への質問" />
-          <div className="question-compose-actions"><button className={questionPhase === "recording" ? "outline-action is-recording" : "outline-action"} type="button" onClick={() => void toggleQuestionVoice()} disabled={questionPhase === "transcribing" || questionPhase === "answering"}>{questionPhase === "recording" ? "録音を止める" : "音声で質問"}</button><button className="outline-action question-send" type="button" onClick={() => void askSelectionQuestion()} disabled={!questionDraft.trim() || questionPhase === "recording" || questionPhase === "transcribing" || questionPhase === "answering"}>実行する</button></div>
+          <div className="question-compose-actions"><button className={questionPhase === "recording" ? "outline-action is-recording" : "outline-action"} type="button" onClick={() => void toggleQuestionVoice()} disabled={questionPhase === "starting" || questionPhase === "transcribing" || questionPhase === "answering"}>{questionPhase === "recording" ? "録音を止める" : "音声で質問"}</button><button className="outline-action question-send" type="button" onClick={() => void askSelectionQuestion()} disabled={!questionDraft.trim() || questionPhase === "starting" || questionPhase === "recording" || questionPhase === "transcribing" || questionPhase === "answering"}>実行する</button></div>
         </div>
         {questionAnswer && <div className="question-answer-actions"><button className="outline-action" type="button" onClick={() => void copyQuestionAnswer()}>回答をコピー</button><button className="outline-action question-send" type="button" onClick={() => void pasteQuestionAnswer()}>カーソル位置へ入力</button></div>}
       </section>

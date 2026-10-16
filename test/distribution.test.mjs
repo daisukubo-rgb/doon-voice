@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -223,6 +223,43 @@ test("Drive配布は最新版・過去版・自動更新用を混在させない
   assert.ok(existsSync(join(drive, "02_過去バージョン", "v0.5.39", "old.zip")));
   assert.ok(existsSync(join(drive, "03_自動更新用", `最新版（v${version}）`, `DOON Voice-update-${version}-windows-x86_64.msi.sig`)));
   assert.ok(existsSync(join(drive, "03_自動更新用", "過去", "v0.5.39", "old.sig")));
+});
+
+function driveReleaseFixture(t, releaseVersion, existingLatest) {
+  const root = mkdtempSync(join(tmpdir(), "doon drive order "));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const source = join(root, "release");
+  const drive = join(root, "drive");
+  mkdirSync(source);
+  for (const old of existingLatest) {
+    mkdirSync(join(drive, `01_最新版（v${old}）`), { recursive: true });
+    writeFileSync(join(drive, `01_最新版（v${old}）`, `old-${old}.zip`), "old");
+  }
+  for (const name of ["DOON Voice-macOS.zip", "DOON Voice-macOS-Intel.zip", "DOON Voice-Windows.zip"]) writeFileSync(join(source, name), name);
+  for (const name of [
+    `DOON Voice-update-${releaseVersion}-macos-aarch64.tar.gz`,
+    `DOON Voice-update-${releaseVersion}-macos-aarch64.tar.gz.sig`,
+    `DOON Voice-update-${releaseVersion}-macos-x86_64.tar.gz`,
+    `DOON Voice-update-${releaseVersion}-macos-x86_64.tar.gz.sig`,
+    `DOON Voice-update-${releaseVersion}-windows-x86_64.msi`,
+    `DOON Voice-update-${releaseVersion}-windows-x86_64.msi.sig`,
+  ]) writeFileSync(join(source, name), name);
+  return { source, drive };
+}
+
+test("Drive配布は既存の最新版より低い版の公開を拒否し、フォルダを動かさない", (t) => {
+  const { source, drive } = driveReleaseFixture(t, "0.6.0", ["0.10.0"]);
+  assert.throws(() => publishDriveRelease({ sourceDirectory: source, driveRoot: drive, version: "0.6.0" }), /0\.10\.0.*0\.6\.0|古い|低い/);
+  assert.ok(existsSync(join(drive, "01_最新版（v0.10.0）", "old-0.10.0.zip")));
+  assert.equal(existsSync(join(drive, "01_最新版（v0.6.0）")), false);
+});
+
+test("Drive配布は版を数値で比べ、複数の旧最新版フォルダをすべて過去へ移す", (t) => {
+  const { source, drive } = driveReleaseFixture(t, "0.10.0", ["0.9.0", "0.5.0"]);
+  publishDriveRelease({ sourceDirectory: source, driveRoot: drive, version: "0.10.0" });
+  assert.ok(existsSync(join(drive, "02_過去バージョン", "v0.9.0", "old-0.9.0.zip")));
+  assert.ok(existsSync(join(drive, "02_過去バージョン", "v0.5.0", "old-0.5.0.zip")));
+  assert.deepEqual(readdirSync(drive).filter((name) => name.startsWith("01_最新版")), ["01_最新版（v0.10.0）"]);
 });
 
 test("Drive配布はGitHub ReleaseのDOON.Voiceファイル名をそのまま受け入れる", (t) => {

@@ -33,6 +33,18 @@ assert(
   shortcutFromKeyboardEvent(keyEvent({ code: "KeyA" })) === null,
   "修飾キーのない単独キーは登録しない",
 );
+assert(
+  shortcutFromKeyboardEvent(keyEvent({ code: "KeyA", shiftKey: true })) === null,
+  "Shiftだけの組み合わせは文字入力と衝突するため登録しない",
+);
+assert(
+  shortcutFromKeyboardEvent(keyEvent({ code: "KeyA", ctrlKey: true, shiftKey: true })) === "Ctrl+Shift+A",
+  "Shiftは他の修飾キーに追加する場合だけ使える",
+);
+assert(
+  shortcutCaptureResult(keyEvent({ key: "A", code: "KeyA", shiftKey: true })).kind === "invalid",
+  "Shift+文字は登録操作で無効として扱う",
+);
 const capturedShortcut = shortcutCaptureResult(keyEvent({ key: "v", code: "KeyV", ctrlKey: true, altKey: true }));
 assert(
   capturedShortcut.kind === "shortcut" && capturedShortcut.shortcut === "Ctrl+Alt+V",
