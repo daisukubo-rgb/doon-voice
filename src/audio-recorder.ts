@@ -76,26 +76,33 @@ export async function startAudioRecorder(): Promise<AudioRecorder> {
   }
 
   const context = new AudioContextConstructor();
-  const source = context.createMediaStreamSource(stream);
-  const processor = context.createScriptProcessor(4096, 1, 1);
-  const silent = context.createGain();
-  silent.gain.value = 0;
   const chunks: Float32Array[] = [];
+  const nodes: AudioNode[] = [];
+  try {
+    const source = context.createMediaStreamSource(stream);
+    const processor = context.createScriptProcessor(4096, 1, 1);
+    const silent = context.createGain();
+    nodes.push(source, processor, silent);
+    silent.gain.value = 0;
 
-  processor.onaudioprocess = (event) => {
-    const input = event.inputBuffer.getChannelData(0);
-    chunks.push(new Float32Array(input));
-  };
-  source.connect(processor);
-  processor.connect(silent);
-  silent.connect(context.destination);
-  await context.resume();
+    processor.onaudioprocess = (event) => {
+      const input = event.inputBuffer.getChannelData(0);
+      chunks.push(new Float32Array(input));
+    };
+    source.connect(processor);
+    processor.connect(silent);
+    silent.connect(context.destination);
+    await context.resume();
+  } catch (error) {
+    nodes.forEach((node) => { try { node.disconnect(); } catch { /* 未接続のノードは無視する */ } });
+    stream.getTracks().forEach((track) => track.stop());
+    await context.close().catch(() => undefined);
+    throw error;
+  }
 
   return {
     stop: async () => {
-      source.disconnect();
-      processor.disconnect();
-      silent.disconnect();
+      nodes.forEach((node) => node.disconnect());
       stream.getTracks().forEach((track) => track.stop());
       await context.close();
       return encodeWav(mergeAudioChunks(chunks), context.sampleRate);

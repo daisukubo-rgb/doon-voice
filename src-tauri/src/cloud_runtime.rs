@@ -212,7 +212,7 @@ struct JsonLineProcess {
     child: Child,
     stdin: mpsc::SyncSender<Vec<u8>>,
     messages: mpsc::Receiver<JsonLineEvent>,
-    stderr: Arc<Mutex<String>>,
+    stderr: Arc<Mutex<Vec<u8>>>,
     cancelled: Arc<AtomicBool>,
 }
 
@@ -270,29 +270,29 @@ impl JsonLineProcess {
             let _ = sender.send(JsonLineEvent::OutputClosed);
         });
 
-        let stderr = Arc::new(Mutex::new(String::new()));
+        let stderr = Arc::new(Mutex::new(Vec::new()));
         let captured = Arc::clone(&stderr);
         thread::spawn(move || {
             let mut reader = BufReader::new(stderr_reader);
-            let mut retained = Vec::new();
             let mut buffer = [0_u8; 4_096];
             loop {
                 match reader.read(&mut buffer) {
                     Ok(0) => break,
                     Ok(bytes) => {
-                        let keep = bytes.min((32 * 1024_usize).saturating_sub(retained.len()));
-                        if keep > 0 {
-                            retained.extend_from_slice(&buffer[..keep]);
-                            if let Ok(mut output) = captured.lock() {
-                                *output = String::from_utf8_lossy(&retained).into_owned();
-                            }
+                        // Keep the newest output: a long-lived CLI's old warnings
+                        // must not hide the reason of its latest failure.
+                        if let Ok(mut output) = captured.lock() {
+                            output.extend_from_slice(&buffer[..bytes]);
+                            let excess = output.len().saturating_sub(32 * 1024);
+                            output.drain(..excess);
                         }
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                     Err(error) => {
                         if let Ok(mut output) = captured.lock() {
                             if output.is_empty() {
-                                *output = format!("CLIのエラー出力を読み取れませんでした: {error}");
+                                *output = format!("CLIのエラー出力を読み取れませんでした: {error}")
+                                    .into_bytes();
                             }
                         }
                         break;
@@ -351,11 +351,19 @@ impl JsonLineProcess {
         matches!(self.child.try_wait(), Ok(None))
     }
 
+    // Called at the start of each request so earlier output is not reported as
+    // the cause of a later failure.
+    fn clear_stderr(&self) {
+        if let Ok(mut output) = self.stderr.lock() {
+            output.clear();
+        }
+    }
+
     fn failure_detail(&self) -> String {
         self.stderr
             .lock()
             .ok()
-            .map(|text| text.trim().to_string())
+            .map(|text| String::from_utf8_lossy(&text).trim().to_string())
             .filter(|text| !text.is_empty())
             .unwrap_or_else(|| "CLIとの常駐接続が終了しました。".into())
     }
@@ -409,6 +417,7 @@ impl CodexClient {
         question_mode: bool,
         image_data_url: Option<&str>,
     ) -> Result<String, String> {
+        self.process.clear_stderr();
         let thread_request_id = self.take_id();
         self.process.send(&codex_thread_start_request(
             thread_request_id,
@@ -616,6 +625,7 @@ impl StreamClient {
         timeout: Duration,
         parser: ResultParser,
     ) -> Result<String, String> {
+        self.process.clear_stderr();
         self.process.send(&input)?;
         let deadline = Instant::now() + timeout;
         loop {
@@ -805,10 +815,27 @@ mod tests {
                 .unwrap();
             std::process::exit(7);
         }
+        if mode == "stale-warning-reject" {
+            std::io::stderr()
+                .write_all(b"stale OAuth warning: token refresh deprecated")
+                .unwrap();
+        }
         let mut line = String::new();
         std::io::stdin().read_line(&mut line).unwrap();
         let _: Value = serde_json::from_str(&line).unwrap();
         match mode.as_str() {
+            "stale-warning-reject" => {
+                std::io::stderr()
+                    .write_all(b"fixture fresh rejection")
+                    .unwrap();
+                std::process::exit(7);
+            }
+            "large-old-stderr-exit" => {
+                let mut stderr = std::io::stderr();
+                stderr.write_all(&vec![b'o'; 40 * 1024]).unwrap();
+                stderr.write_all(b"fixture fresh rejection").unwrap();
+                std::process::exit(7);
+            }
             #[cfg(windows)]
             "console" => {
                 #[link(name = "kernel32")]
@@ -870,6 +897,38 @@ mod tests {
             .unwrap_err();
         assert_eq!(error, "fixture startup rejection");
         assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn json_line_failure_detail_keeps_the_latest_stderr() {
+        let mut process =
+            JsonLineProcess::spawn(exit_fixture_command("large-old-stderr-exit")).unwrap();
+        process
+            .send(&json!({"id": 0, "method": "initialize"}))
+            .unwrap();
+        let error = process
+            .receive(Instant::now() + Duration::from_secs(2))
+            .unwrap_err();
+        assert!(error.ends_with("fixture fresh rejection"), "{error}");
+        assert!(error.len() <= 32 * 1024);
+    }
+
+    #[test]
+    fn stderr_from_before_a_request_is_not_part_of_its_failure() {
+        let mut client = StreamClient {
+            process: JsonLineProcess::spawn(exit_fixture_command("stale-warning-reject")).unwrap(),
+        };
+        // Let the CLI's earlier warning reach the stderr reader first.
+        thread::sleep(Duration::from_millis(300));
+        let error = client
+            .rewrite(
+                "人工的なテスト文",
+                Duration::from_secs(2),
+                claude_input,
+                claude_final_result,
+            )
+            .unwrap_err();
+        assert_eq!(error, "fixture fresh rejection");
     }
 
     #[cfg(windows)]

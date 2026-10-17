@@ -189,12 +189,14 @@ assert(
   "手動の選択文取得で失敗してもメイン画面を再表示する",
 );
 const selectionCopyCapture = backend.slice(
-  backend.indexOf("fn capture_selection_after_copy"),
+  backend.indexOf("fn capture_selection_with"),
   backend.indexOf("#[tauri::command]\nfn capture_selected_text"),
 );
 assert(
-  selectionCopyCapture.includes("copy_to_clipboard(&previous).map_err")
-    && !selectionCopyCapture.includes("let _ = copy_to_clipboard(&previous)"),
+  selectionCopyCapture.includes("Some(previous) => clipboard.restore(previous)")
+    && selectionCopyCapture.includes("None => clipboard.clear()")
+    && /clipboard\.clear\(\),\s*\}\s*\.map_err/.test(selectionCopyCapture)
+    && !selectionCopyCapture.includes("let _ = clipboard.restore"),
   "選択取得に失敗してクリップボードを復元できない場合はエラーを返す",
 );
 assert(

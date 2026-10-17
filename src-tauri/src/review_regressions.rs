@@ -1,5 +1,138 @@
 use super::*;
 
+fn local_http_fixture(status: &str, body: &str) -> (String, std::thread::JoinHandle<()>) {
+    local_http_fixture_with_delay(status, body, Duration::ZERO)
+}
+
+fn local_http_fixture_with_delay(
+    status: &str,
+    body: &str,
+    delay: Duration,
+) -> (String, std::thread::JoinHandle<()>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let reply = format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
+    let worker = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .unwrap();
+                    let mut buffer = [0; 4096];
+                    let _ = stream.read(&mut buffer);
+                    std::thread::sleep(delay);
+                    let _ = stream.write_all(reply.as_bytes());
+                    return;
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(10))
+                }
+                Err(error) => panic!("fixture listener failed: {error}"),
+            }
+        }
+    });
+    (format!("http://{address}/api/tags"), worker)
+}
+
+#[test]
+fn local_ai_client_connects_directly_even_with_an_unreachable_proxy() {
+    const CHILD: &str = "DOON_LOCAL_PROXY_REPRO_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let proxy = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let proxy_address = format!("http://{}", proxy.local_addr().unwrap());
+        drop(proxy);
+        let result = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "review_regressions::local_ai_client_connects_directly_even_with_an_unreachable_proxy", "--nocapture"])
+            .env(CHILD, "1")
+            .env("HTTP_PROXY", &proxy_address).env("http_proxy", &proxy_address)
+            .env("ALL_PROXY", &proxy_address).env("all_proxy", &proxy_address)
+            .env("NO_PROXY", "").env("no_proxy", "")
+            .output().unwrap();
+        assert!(
+            result.status.success(),
+            "loopback communication must bypass proxies: {}",
+            String::from_utf8_lossy(&result.stdout)
+        );
+        return;
+    }
+    let (url, server) = local_http_fixture("200 OK", r#"{"models":[{"name":"gemma4:e2b"}]}"#);
+    let result = tauri::async_runtime::block_on(async { client().unwrap().get(url).send().await });
+    server.join().unwrap();
+    assert!(
+        result.is_ok(),
+        "local inference must not connect through HTTP_PROXY: {result:?}"
+    );
+}
+
+#[test]
+fn local_ai_status_rejects_http_errors_even_when_the_body_contains_models() {
+    let (url, server) = local_http_fixture(
+        "503 Service Unavailable",
+        r#"{"models":[{"name":"gemma4:e2b"}]}"#,
+    );
+    let result = tauri::async_runtime::block_on(fetch_local_model_names(&client().unwrap(), &url));
+    server.join().unwrap();
+    assert!(
+        result.is_err(),
+        "a failed HTTP response must never mean running"
+    );
+}
+
+#[test]
+fn local_ai_status_reads_the_actual_loopback_models() {
+    let (url, server) = local_http_fixture("200 OK", r#"{"models":[{"name":"gemma4:e2b"}]}"#);
+    let result = tauri::async_runtime::block_on(fetch_local_model_names(&client().unwrap(), &url));
+    server.join().unwrap();
+    assert_eq!(result.unwrap(), vec!["gemma4:e2b"]);
+}
+
+#[test]
+fn local_ai_status_rejects_malformed_responses() {
+    let (url, server) = local_http_fixture("200 OK", "not json");
+    let result = tauri::async_runtime::block_on(fetch_local_model_names(&client().unwrap(), &url));
+    server.join().unwrap();
+    assert!(result.is_err());
+}
+
+#[test]
+fn local_connection_failure_does_not_claim_that_the_runtime_is_stopped() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+    let error = tauri::async_runtime::block_on(async { client().unwrap().get(url).send().await })
+        .unwrap_err();
+    let message = local_connection_error(&error);
+    assert!(
+        message.contains("接続できません"),
+        "{error:?}; connect={}; timeout={}; message={message}",
+        error.is_connect(),
+        error.is_timeout()
+    );
+    assert!(!message.contains("起動していません"));
+}
+
+#[test]
+fn a_connected_local_response_timeout_keeps_the_processing_timeout_message() {
+    let (url, server) = local_http_fixture_with_delay("200 OK", "{}", Duration::from_millis(600));
+    let error = tauri::async_runtime::block_on(async {
+        client()
+            .unwrap()
+            .get(url)
+            .timeout(Duration::from_millis(300))
+            .send()
+            .await
+    })
+    .unwrap_err();
+    server.join().unwrap();
+    assert!(error.is_timeout());
+    assert!(!error.is_connect(), "{error:?}");
+    assert!(local_connection_error(&error).contains("処理が時間切れ"));
+}
+
 #[test]
 fn recognized_original_preserves_names_fillers_and_literal_tags() {
     for text in [
@@ -246,4 +379,58 @@ fn failed_engine_shutdown_preserves_partial_text_and_blocks_more_recording() {
     runtime.configuration_ready = true;
     runtime.engine_restart_required = result.restart_required;
     assert!(runtime.ensure_can_record().is_err());
+}
+
+fn closed_generate_url() -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/api/generate", listener.local_addr().unwrap());
+    drop(listener);
+    url
+}
+
+#[test]
+fn local_generation_is_sent_before_any_runtime_probe() {
+    let (url, server) = local_http_fixture("200 OK", r#"{"response":"ok"}"#);
+    let probes = std::sync::atomic::AtomicUsize::new(0);
+    let result = tauri::async_runtime::block_on(send_generate_recovering_connection(
+        &client().unwrap(),
+        &url,
+        &serde_json::json!({}),
+        || async {
+            probes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        },
+    ));
+    server.join().unwrap();
+    assert!(result.is_ok());
+    assert_eq!(probes.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn local_generation_recovers_the_runtime_once_after_a_connection_failure() {
+    let probes = std::sync::atomic::AtomicUsize::new(0);
+    let error = tauri::async_runtime::block_on(send_generate_recovering_connection(
+        &client().unwrap(),
+        &closed_generate_url(),
+        &serde_json::json!({}),
+        || async {
+            probes.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        },
+    ))
+    .unwrap_err();
+    assert_eq!(probes.load(Ordering::SeqCst), 1);
+    assert!(error.contains("接続できません"), "{error}");
+}
+
+#[test]
+fn local_generation_reports_a_failed_runtime_recovery() {
+    let error = tauri::async_runtime::block_on(send_generate_recovering_connection(
+        &client().unwrap(),
+        &closed_generate_url(),
+        &serde_json::json!({}),
+        || async { Err("起動できません".to_string()) },
+    ))
+    .unwrap_err();
+    assert_eq!(error, "起動できません");
 }

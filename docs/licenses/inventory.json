@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "locks": {
-    "package-lock.json": "c12bdcb1a7437b87bdc31fd294ad23d387fb89f69ceb0377a9e7ac559268be76",
-    "src-tauri/Cargo.lock": "d1127a8e00ff76ce16aa65fec0d3c0016f34ae86eaa830fb46ae7569128b56a9"
+    "package-lock.json": "4e8bc72d0abe63ddcb252315240ffb888dfdc76f1d72257e78558d2a631af482",
+    "src-tauri/Cargo.lock": "84ffad567ff9231666ee564096d404dd0768cddc160decb19c82db48c5b1dcce"
   },
   "packages": [
     {
@@ -4917,6 +4917,29 @@
     },
     {
       "ecosystem": "cargo",
+      "name": "tauri-plugin-single-instance",
+      "version": "2.4.5",
+      "license": "Apache-2.0 OR MIT",
+      "files": [
+        {
+          "path": "cargo/tauri-plugin-single-instance-2.4.5/LICENSE.spdx",
+          "sha256": "eb8a6c84630461b352badcab1dbe5d0168c56d377358b2b8c86b51003272d5ef",
+          "source": "https://crates.io/api/v1/crates/tauri-plugin-single-instance/2.4.5/download#LICENSE.spdx"
+        },
+        {
+          "path": "cargo/tauri-plugin-single-instance-2.4.5/LICENSE_APACHE-2.0",
+          "sha256": "0cec06e0e55fbc3dc5cee4fca9b607f66cb8f4e4dbcf3b3c013594dd156732e9",
+          "source": "https://crates.io/api/v1/crates/tauri-plugin-single-instance/2.4.5/download#LICENSE_APACHE-2.0"
+        },
+        {
+          "path": "cargo/tauri-plugin-single-instance-2.4.5/LICENSE_MIT",
+          "sha256": "b7f455413bfe5f9d7da501a4468d4c5f866a432c325947e98cc9535e8b26cd6d",
+          "source": "https://crates.io/api/v1/crates/tauri-plugin-single-instance/2.4.5/download#LICENSE_MIT"
+        }
+      ]
+    },
+    {
+      "ecosystem": "cargo",
       "name": "tauri-plugin-updater",
       "version": "2.11.0",
       "license": "Apache-2.0 OR MIT",
@@ -5486,6 +5509,19 @@
           "path": "cargo/tower-0.5.3/LICENSE",
           "sha256": "4249c8e6c5ebb85f97c77e6457c6fafc1066406eb8f1ef61e796fbdc5ff18482",
           "source": "https://crates.io/api/v1/crates/tower/0.5.3/download#LICENSE"
+        }
+      ]
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "tracing-attributes",
+      "version": "0.1.31",
+      "license": "MIT",
+      "files": [
+        {
+          "path": "cargo/tracing-attributes-0.1.31/LICENSE",
+          "sha256": "898b1ae9821e98daf8964c8d6c7f61641f5f5aa78ad500020771c0939ee0dea1",
+          "source": "https://crates.io/api/v1/crates/tracing-attributes/0.1.31/download#LICENSE"
         }
       ]
     },

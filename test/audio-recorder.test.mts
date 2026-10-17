@@ -59,6 +59,31 @@ try {
   assert(recorded.length === 48, "録音した2サンプルをWAVへ変換する");
   assert(stopped && closed, "録音停止時にマイクとAudioContextを解放する");
 
+  let failedStopped = 0;
+  let failedClosed = false;
+  let failedDisconnects = 0;
+  class ResumeFailingAudioContext extends FakeAudioContext {
+    createMediaStreamSource() { return { connect() {}, disconnect: () => { failedDisconnects += 1; } }; }
+    async resume() { throw new Error("resume failed"); }
+    async close() { failedClosed = true; }
+  }
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop: () => { failedStopped += 1; } }, { stop: () => { failedStopped += 1; } }] }) } },
+  });
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { AudioContext: ResumeFailingAudioContext } });
+  let resumeError = "";
+  try { await startAudioRecorder(); }
+  catch (error) { resumeError = error instanceof Error ? error.message : String(error); }
+  assert(resumeError === "resume failed", "AudioContextの開始に失敗したら元のエラーを返す");
+  assert(failedStopped === 2, "開始に失敗したらマイクの全トラックを止める");
+  assert(failedClosed, "開始に失敗したらAudioContextを閉じる");
+  assert(failedDisconnects === 1, "開始に失敗したら接続済みの音声ノードを切断する");
+
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: { mediaDevices: { getUserMedia: async () => ({ getTracks: () => [{ stop: () => { stopped = true; } }] }) } },
+  });
   stopped = false;
   await requestMicrophoneAccess();
   assert(stopped, "マイクを許可・確認する操作は、許可確認後にマイクをすぐ解放する");
