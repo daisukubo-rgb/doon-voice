@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "locks": {
-    "package-lock.json": "4e8bc72d0abe63ddcb252315240ffb888dfdc76f1d72257e78558d2a631af482",
-    "src-tauri/Cargo.lock": "84ffad567ff9231666ee564096d404dd0768cddc160decb19c82db48c5b1dcce"
+    "package-lock.json": "e4f32c6c5c72a8292a23168ef24f8232915ba68dbca9fca7b08a0a5a24051b92",
+    "src-tauri/Cargo.lock": "7760b3faffbd32b0ae1b638374dcca4fba48e01b471e1b4b520a2a3a0a9a3556"
   },
   "packages": [
     {
@@ -5054,18 +5054,18 @@
     {
       "ecosystem": "cargo",
       "name": "tauri",
-      "version": "2.11.5",
+      "version": "2.11.6",
       "license": "Apache-2.0 OR MIT",
       "files": [
         {
-          "path": "cargo/tauri-2.11.5/LICENSE_APACHE-2.0",
+          "path": "cargo/tauri-2.11.6/LICENSE_APACHE-2.0",
           "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594",
-          "source": "https://crates.io/api/v1/crates/tauri/2.11.5/download#LICENSE_APACHE-2.0"
+          "source": "https://crates.io/api/v1/crates/tauri/2.11.6/download#LICENSE_APACHE-2.0"
         },
         {
-          "path": "cargo/tauri-2.11.5/LICENSE_MIT",
+          "path": "cargo/tauri-2.11.6/LICENSE_MIT",
           "sha256": "9dd42ea92cff2ede5cd477cbfcce051b2d0115c0ac7f368ee88cb545055dff1d",
-          "source": "https://crates.io/api/v1/crates/tauri/2.11.5/download#LICENSE_MIT"
+          "source": "https://crates.io/api/v1/crates/tauri/2.11.6/download#LICENSE_MIT"
         }
       ]
     },

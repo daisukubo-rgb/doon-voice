@@ -248,10 +248,10 @@ function driveReleaseFixture(t, releaseVersion, existingLatest) {
 }
 
 test("Drive配布は既存の最新版より低い版の公開を拒否し、フォルダを動かさない", (t) => {
-  const { source, drive } = driveReleaseFixture(t, "0.6.0", ["0.10.0"]);
-  assert.throws(() => publishDriveRelease({ sourceDirectory: source, driveRoot: drive, version: "0.6.0" }), /0\.10\.0.*0\.6\.0|古い|低い/);
+  const { source, drive } = driveReleaseFixture(t, "0.6.1", ["0.10.0"]);
+  assert.throws(() => publishDriveRelease({ sourceDirectory: source, driveRoot: drive, version: "0.6.1" }), /0\.10\.0.*0\.6\.1|古い|低い/);
   assert.ok(existsSync(join(drive, "01_最新版（v0.10.0）", "old-0.10.0.zip")));
-  assert.equal(existsSync(join(drive, "01_最新版（v0.6.0）")), false);
+  assert.equal(existsSync(join(drive, "01_最新版（v0.6.1）")), false);
 });
 
 test("Drive配布は版を数値で比べ、複数の旧最新版フォルダをすべて過去へ移す", (t) => {
