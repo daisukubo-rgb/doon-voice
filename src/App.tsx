@@ -5,7 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { currentMonitor, getCurrentWindow, primaryMonitor } from "@tauri-apps/api/window";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check } from "@tauri-apps/plugin-updater";
-import { Check, CircleAlert, Download, ExternalLink, KeyRound, Mic, Plus, RefreshCw, Trash2, WifiOff, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, CircleAlert, Download, ExternalLink, KeyRound, Mic, Plus, RefreshCw, Trash2, WifiOff, X } from "lucide-react";
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
 import { AudioRecorder, requestMicrophoneAccess, startAudioRecorder } from "./audio-recorder";
 import { DEFAULT_OUTPUT_TARGET, DEFAULT_SELECTION_QUESTION_TARGET, isOutputTarget, isSelectionQuestionTarget, OutputTarget, outputTargetLabel, SelectionQuestionTarget } from "./output-target";
@@ -15,7 +15,7 @@ import { createLocalStatusMonitor } from "./local-status";
 
 type ProviderId = "codex" | "claude" | "gemini";
 type ApiKeyStatus = Record<ProviderId, boolean>;
-type View = "home" | "dictionary" | "settings";
+type View = "home" | "dictionary" | "settings" | "onboarding";
 type LocalModel = { id: "gemma4_e2b"; name: string; size: string; installed: boolean };
 type LocalLlmStatus = { installed: boolean; running: boolean; models: LocalModel[] };
 type TranscriptionStatus = { downloaded: boolean; name: string; size: string };
@@ -196,7 +196,10 @@ function MainApp() {
   const initialOutputTarget = useRef(savedOutputTarget()).current;
   const initialSelectionQuestionTarget = useRef(savedSelectionQuestionTarget()).current;
   const initialDictionary = useRef(savedDictionary()).current;
-  const [view, setView] = useState<View>("home");
+  // 初めて入れた人だけに案内を出す。既に使っている人（出力先の保存がある人）には自動で出さない。
+  const [view, setView] = useState<View>(() =>
+    window.localStorage.getItem("doon-voice-onboarding") === null && window.localStorage.getItem("doon-voice-output-target") === null ? "onboarding" : "home");
+  const [onboardingStep, setOnboardingStep] = useState(0);
   const [apiKeys, setApiKeys] = useState<ApiKeyStatus | null>(null);
   const [local, setLocal] = useState<LocalLlmStatus | null>(null);
   const [installingOllama, setInstallingOllama] = useState(false);
@@ -480,7 +483,8 @@ function MainApp() {
         appInvoke<boolean>("direct_input_status").then(setDirectInputAllowed).catch(() => setDirectInputAllowed(null)),
         microphonePermission().then((status) => {
           setMicrophonePermissionState(status);
-          if (status !== "granted") setMicrophoneReady(null);
+          // 許可を確かめられない環境（"unknown"）では、確認済みの結果を消さない。取り消された時だけ確認し直す。
+          if (status === "denied" || status === "prompt") setMicrophoneReady(null);
         }).catch(() => { setMicrophonePermissionState("unknown"); setMicrophoneReady(null); }),
       ]);
       if (manual) showRefreshToast("状態を更新しました");
@@ -790,7 +794,24 @@ function MainApp() {
     }
   }
 
-  function navigate(next: View) { cancelShortcutCapture(); setView(next); }
+  function navigate(next: View) {
+    cancelShortcutCapture();
+    if (view === "onboarding" && next !== "onboarding" && window.localStorage.getItem("doon-voice-onboarding") === null) {
+      window.localStorage.setItem("doon-voice-onboarding", "later");
+    }
+    setView(next);
+  }
+
+  function openOnboarding() {
+    setOnboardingStep(0);
+    navigate("onboarding");
+  }
+
+  function finishOnboarding() {
+    window.localStorage.setItem("doon-voice-onboarding", "done");
+    navigate("home");
+    showRefreshToast("はじめの設定が終わりました");
+  }
 
   useEffect(() => {
     window.addEventListener("blur", cancelShortcutCapture);
@@ -1076,6 +1097,77 @@ function MainApp() {
         : outputTarget === "raw"
           ? { label: "AIなし", detail: "音声認識のみ", ready: Boolean(transcription?.downloaded) }
           : { label: "このPCのAI", detail: localModel?.name || "未準備", ready: localReady };
+  function renderOnboarding() {
+    const steps = ["マイク", "音声認識", "文章を整えるAI", "試しに話す", "完了"];
+    const micDone = microphoneReady === true;
+    const modelDone = Boolean(transcription?.downloaded);
+    const cloudTarget = outputTarget === "codex" || outputTarget === "claude" || outputTarget === "gemini";
+    const aiDone = outputTarget === "raw" || (outputTarget === "local" && localReady) || (cloudTarget && apiKeys?.[outputTarget] === true);
+    const tryDone = Boolean(output);
+    const done = [micDone, modelDone, aiDone, tryDone, true];
+    const last = steps.length - 1;
+    const choices: Array<{ id: OutputTarget; label: string; detail: string }> = [
+      { id: "raw", label: "AIなし", detail: "話した内容をそのまま文字にします。料金はかかりません" },
+      { id: "local", label: "このPCのAI", detail: "PCの中で整えます。料金はかかりません。速さはPCの性能で変わります" },
+      { id: "codex", label: "ChatGPT", detail: "OpenAIのAPIキーで整えます。使った分だけOpenAIから請求されます" },
+      { id: "claude", label: "Claude", detail: "AnthropicのAPIキーで整えます。使った分だけAnthropicから請求されます" },
+      { id: "gemini", label: "Gemini", detail: "GoogleのAPIキーで整えます。使った分だけGoogleから請求されます" },
+    ];
+    const next = () => setOnboardingStep((current) => Math.min(last, current + 1));
+    const back = () => setOnboardingStep((current) => Math.max(0, current - 1));
+    const transcriptionProgress = progressFor("transcription");
+    const localProgress = progressFor("ollama") || progressFor("local_model");
+    const nextButton = (ready: boolean, label = "次へ") => <button className={ready ? "primary-action" : "outline-action"} type="button" onClick={next}>{ready ? label : "あとで設定して次へ"} <ArrowRight size={15} strokeWidth={1.9} /></button>;
+    return <section className="simple-view onboarding-view" aria-labelledby="onboarding-title">
+      <div className="onboarding-head"><div className="section-label"><span>GETTING STARTED</span><h1 id="onboarding-title">はじめの設定</h1></div><button className="text-action" type="button" onClick={() => navigate("home")}>あとで</button></div>
+      <ol className="onboarding-steps" aria-label="設定の手順">{steps.map((label, index) => <li key={label} className={index === onboardingStep ? "is-current" : done[index] && index < onboardingStep ? "is-done" : ""} aria-current={index === onboardingStep ? "step" : undefined}><span className="step-mark" aria-hidden="true">{done[index] && index < onboardingStep ? <Check size={13} strokeWidth={2.4} /> : index + 1}</span><span>{label}</span>{done[index] && index < onboardingStep && <span className="visually-hidden">（完了）</span>}</li>)}</ol>
+      <div className="onboarding-body" aria-live="polite">
+        {onboardingStep === 0 && <>
+          <h2>マイクを使えるようにします</h2>
+          <p>ボタンを押すとOSの確認画面が出ます。許可すると、実際に録音できるかも確かめます。</p>
+          <p className={micDone ? "onboarding-state is-done" : "onboarding-state"}>{micDone ? <Check size={15} strokeWidth={2.3} /> : <CircleAlert size={15} strokeWidth={2} />}{micDone ? "マイクの接続を確認しました" : microphoneReady === false ? "録音できませんでした。マイクの接続を確かめて、もう一度押してください" : "まだ確認していません"}</p>
+          <div className="onboarding-actions"><button className={micDone ? "outline-action" : "primary-action"} type="button" onClick={() => void requestMicrophonePermission()} disabled={checkingMicrophone}>{checkingMicrophone ? "確認中" : micDone ? "もう一度確認" : "マイクを許可・確認"} <Mic size={15} /></button>{nextButton(micDone)}</div>
+        </>}
+        {onboardingStep === 1 && <>
+          <h2>音声認識モデルを取得します</h2>
+          <p>話した言葉をこのPCの中で文字にするためのデータです（約574MB）。取得は最初の1回だけです。</p>
+          {transcriptionProgress && <div className="installation-progress" role="status"><span>{transcriptionProgress.phase}</span><strong>{installationProgressLabel(transcriptionProgress, installationNow)}</strong><i aria-hidden="true"><b style={{ width: `${progressPercent("transcription") ?? 8}%` }} /></i></div>}
+          <p className={modelDone ? "onboarding-state is-done" : "onboarding-state"}>{modelDone ? <Check size={15} strokeWidth={2.3} /> : <Download size={15} strokeWidth={2} />}{modelDone ? "取得済みです" : downloadingTranscription ? "取得しています" : "まだ取得していません"}</p>
+          <div className="onboarding-actions">{!modelDone && <button className="primary-action" type="button" onClick={() => void downloadTranscriptionModel()} disabled={downloadingTranscription}>{downloadingTranscription ? "取得中" : "モデルを取得"} <Download size={15} /></button>}<button className="outline-action" type="button" onClick={back}><ArrowLeft size={15} strokeWidth={1.9} /> 戻る</button>{nextButton(modelDone)}</div>
+        </>}
+        {onboardingStep === 2 && <>
+          <h2>文章を整えるAIを選びます</h2>
+          <div className="onboarding-choices" role="radiogroup" aria-label="文章を整えるAI">{choices.map(({ id, label, detail }) => <button key={id} type="button" role="radio" aria-checked={outputTarget === id} className={outputTarget === id ? "is-selected" : ""} disabled={busy} onClick={() => chooseOutputTarget(id)}><span><strong>{label}</strong><small>{detail}</small></span>{outputTarget === id && <Check size={16} strokeWidth={2.2} />}</button>)}</div>
+          {cloudTarget && (() => { const id = outputTarget as ProviderId; const provider = providers.find((item) => item.id === id)!; const saving = savingKeys[id]; return <div className="onboarding-key">
+            {apiKeys?.[id] ? <p className="onboarding-state is-done"><Check size={15} strokeWidth={2.3} />{provider.label}のAPIキーは保存済みです</p> : <form className="api-key-form" onSubmit={(event) => { event.preventDefault(); void saveApiKey(id); }}><input type="password" value={keyDrafts[id]} onChange={(event) => { const value = event.target.value; setKeyDrafts((current) => ({ ...current, [id]: value })); setProviderNotice(id, null); }} placeholder="APIキーを貼り付ける" aria-label={`${provider.label}のAPIキー`} autoComplete="off" spellCheck={false} disabled={saving} /><button className="outline-action" type="submit" disabled={saving || !keyDrafts[id].trim()}>{saving ? "確認中" : "確認して保存"} <KeyRound size={15} strokeWidth={1.9} /></button></form>}
+            {providerNotices[id] && <p id={`api-key-notice-${id}`} className={providerNotices[id].error ? "provider-notice is-error" : "provider-notice"} role={providerNotices[id].error ? "alert" : "status"}>{providerNotices[id].text}</p>}
+          </div>; })()}
+          {outputTarget === "local" && <div className="onboarding-key">
+            {localProgress && <div className="installation-progress" role="status"><span>{localProgress.phase}</span><strong>{installationProgressLabel(localProgress, installationNow)}</strong><i aria-hidden="true"><b style={{ width: `${progressPercent("ollama") ?? progressPercent("local_model") ?? 8}%` }} /></i></div>}
+            {localReady ? <p className="onboarding-state is-done"><Check size={15} strokeWidth={2.3} />このPCのAIを使えます</p> : !local?.installed ? <button className="outline-action" type="button" onClick={() => void installOllama()} disabled={installingOllama}>{installingOllama ? "準備中" : "このPCのAIを準備"} <Download size={15} /></button> : !local.running ? <button className="outline-action" type="button" onClick={() => void installOllama()} disabled={installingOllama}>{installingOllama ? "起動中" : "このPCのAIを起動"} <Download size={15} /></button> : <button className="outline-action" type="button" onClick={() => void pullModel()} disabled={pullingLocalModel}>{pullingLocalModel ? "取得中" : "Gemmaを取得（約7.2GB）"} <Download size={15} /></button>}
+          </div>}
+          <div className="onboarding-actions"><button className="outline-action" type="button" onClick={back}><ArrowLeft size={15} strokeWidth={1.9} /> 戻る</button>{nextButton(aiDone)}</div>
+        </>}
+        {onboardingStep === 3 && <>
+          <h2>試しに話してみます</h2>
+          <p>「話す」を押して話し、もう一度押すと止まります。ふだんは、文字を入れたい場所にカーソルを置いて <kbd>{shortcutLabel(shortcut, isMac)}</kbd> を押すと、同じように入力できます。</p>
+          <div className="onboarding-try">
+            <button className={recording ? "primary-action is-recording" : "primary-action"} type="button" onClick={() => void toggleRecording()} disabled={starting || processing || !modelDone}>{recording ? "止める" : starting ? "準備中" : processing ? "処理中" : "話す"} <Mic size={15} /></button>
+            {!modelDone && <p className="onboarding-state"><CircleAlert size={15} strokeWidth={2} />先に音声認識モデルを取得してください</p>}
+            {(processing || output) && <div className="result-output" aria-live="polite">{processing ? "音声を処理しています" : output}</div>}
+          </div>
+          <div className="onboarding-actions"><button className="outline-action" type="button" onClick={back}><ArrowLeft size={15} strokeWidth={1.9} /> 戻る</button>{nextButton(tryDone)}</div>
+        </>}
+        {onboardingStep === 4 && <>
+          <h2>設定の状態</h2>
+          <ul className="onboarding-summary">{[["マイク", micDone], ["音声認識モデル", modelDone], [`文章を整えるAI（${outputTargetLabel(outputTarget)}）`, aiDone]].map(([label, ok]) => <li key={label as string}>{ok ? <Check size={15} strokeWidth={2.3} /> : <CircleAlert size={15} strokeWidth={2} />}<span>{label}</span><strong>{ok ? "設定済み" : "未設定（接続と設定からあとで設定できます）"}</strong></li>)}</ul>
+          <p>開始・停止キーは <kbd>{shortcutLabel(shortcut, isMac)}</kbd>、選んだ文章を質問するキーは <kbd>{shortcutLabel(selectionQuestionShortcut, isMac)}</kbd> です。</p>
+          <div className="onboarding-actions"><button className="outline-action" type="button" onClick={back}><ArrowLeft size={15} strokeWidth={1.9} /> 戻る</button><button className="primary-action" type="button" onClick={finishOnboarding}>使い始める <ArrowRight size={15} strokeWidth={1.9} /></button></div>
+        </>}
+      </div>
+    </section>;
+  }
+
   const nav = [
     { id: "home" as const, label: "ホーム", glyph: "work" as const },
     { id: "dictionary" as const, label: "辞書", glyph: "coach" as const },
@@ -1089,8 +1181,9 @@ function MainApp() {
     </aside>
 
     <section className="main-canvas">
-      <header className="main-bar"><span>{view === "home" ? "DOON VOICE" : view === "dictionary" ? "DICTIONARY" : "SETTINGS"}</span><div className="top-status"><span><i className={selectedOutput.ready ? "status-dot is-ready" : "status-dot"} />{selectedOutput.label}</span><span className="top-status-detail">{selectedOutput.detail}</span><button className="icon-button" type="button" onClick={() => void refreshAll(true)} disabled={refreshing} aria-label={refreshing ? "状態を更新中" : "状態を更新"}><RefreshCw className={refreshing ? "is-spinning" : undefined} size={16} strokeWidth={1.9} /></button></div></header>
+      <header className="main-bar"><span>{view === "home" ? "DOON VOICE" : view === "dictionary" ? "DICTIONARY" : view === "onboarding" ? "GETTING STARTED" : "SETTINGS"}</span><div className="top-status"><span><i className={selectedOutput.ready ? "status-dot is-ready" : "status-dot"} />{selectedOutput.label}</span><span className="top-status-detail">{selectedOutput.detail}</span><button className="icon-button" type="button" onClick={() => void refreshAll(true)} disabled={refreshing} aria-label={refreshing ? "状態を更新中" : "状態を更新"}><RefreshCw className={refreshing ? "is-spinning" : undefined} size={16} strokeWidth={1.9} /></button></div></header>
 
+      {view === "onboarding" && renderOnboarding()}
       {view === "home" && <section className="home-view" aria-labelledby="home-title">
         <section className={recording ? "voice-stage is-recording" : "voice-stage"} aria-label="音声入力">
           <div className="hero-brand"><img src="/brand/doon-logo.png" alt="DOON" /><span>VOICE</span></div>
@@ -1169,6 +1262,7 @@ function MainApp() {
             <button className={selectionQuestionTarget === "local" ? "is-selected" : ""} type="button" role="radio" aria-checked={selectionQuestionTarget === "local"} disabled={busy} onClick={() => chooseSelectionQuestionTarget("local")}><BrandGlyph name="dx" /><span><strong>このPCのAI</strong><small>Gemma 4 E2Bで答える</small></span>{selectionQuestionTarget === "local" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
           </div>
         </section>
+        <div className="settings-list"><article><span className="setting-icon"><BrandGlyph name="speed" /></span><div><h2>はじめの設定</h2><p>マイク・音声認識・文章を整えるAIを順番に設定します。</p></div><span /><button className="outline-action" type="button" onClick={openOnboarding}>案内を開く <ArrowRight size={15} strokeWidth={1.9} /></button></article></div>
         <div className="settings-list"><article className="app-update-row"><span className="setting-icon"><RefreshCw size={22} strokeWidth={1.8} /></span><div><h2>アプリの更新</h2><p>現在の版: {appVersion === null ? "確認中" : appVersion === "開発版" || appVersion === "確認できません" ? appVersion : `v${appVersion}`}</p><p>{updateCheckError ? `確認エラー: ${updateCheckError}` : updateCheckedAt === null ? "最新版はまだ確認していません。" : latestAppVersion && latestAppVersion !== appVersion ? `確認した最新版: v${latestAppVersion}` : `確認結果: 現在の版が最新版です（${new Date(updateCheckedAt).toLocaleString("ja-JP")}）`}</p></div><span className={latestAppVersion && latestAppVersion !== appVersion ? "setting-state state-available" : "setting-state state-permitted"}>{latestAppVersion && latestAppVersion !== appVersion ? <Download size={15} strokeWidth={2} /> : <Check size={15} strokeWidth={2.3} />}{latestAppVersion && latestAppVersion !== appVersion ? `v${latestAppVersion}あり` : "自動更新対応"}</span><button className="outline-action" type="button" onClick={() => void updateApp()} disabled={updatingApp || busy}>{updatingApp ? "更新中" : "更新を確認"} <RefreshCw className={updatingApp ? "is-spinning" : undefined} size={15} /></button></article></div>
         <div className="settings-list direct-input-settings"><article><span className="setting-icon"><BrandGlyph name="move" /></span><div><h2>カーソル位置へ入力</h2><p>{directInputAllowed ? "ほかのアプリへ直接入力できます。" : "macOSのアクセシビリティ許可が必要です。"}</p></div><span className={directInputAllowed ? "setting-state state-permitted" : "setting-state state-unavailable"}>{directInputAllowed ? <Check size={15} strokeWidth={2.3} /> : <CircleAlert size={15} strokeWidth={2} />}{directInputAllowed ? "許可済み" : "未許可"}</span>{isMac ? <button className="outline-action" type="button" onClick={() => void (directInputAllowed ? openDirectInputSettings() : requestDirectInputPermission())}>{directInputAllowed ? "設定を開く" : "許可する"} <ExternalLink size={15} /></button> : <span />}</article></div>
         <div className="settings-list microphone-settings"><article><span className="setting-icon"><Mic size={22} strokeWidth={1.8} /></span><div><h2>マイク</h2><p>{microphoneReady === true ? "許可と実際のマイク接続を確認しました。" : microphoneReady === false ? "許可だけでは録音できない場合があります。マイク接続を確認して、もう一度試してください。" : microphonePermissionState === "granted" ? "許可済みです。実際に録音できるか確認してください。" : microphonePermissionState === "unsupported" ? "この環境ではマイクを使えません。" : "初回にこのボタンからマイクを許可・確認します。"}</p></div><span className={microphoneReady === true ? "setting-state state-permitted" : "setting-state state-unavailable"}>{microphoneReady === true ? <Check size={15} strokeWidth={2.3} /> : <CircleAlert size={15} strokeWidth={2} />}{microphoneReady === true ? "接続確認済み" : microphonePermissionState === "unsupported" ? "利用不可" : microphonePermissionState === "granted" ? "確認が必要" : "許可が必要"}</span><button className="outline-action" type="button" onClick={() => void requestMicrophonePermission()} disabled={checkingMicrophone || microphonePermissionState === "unsupported"}>{checkingMicrophone ? "確認中" : microphoneReady === true ? "もう一度確認" : "マイクを許可・確認"} <Mic size={15} /></button></article></div>

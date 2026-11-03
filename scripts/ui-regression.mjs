@@ -16,9 +16,11 @@ const browser = await chromium.launch({ headless: true });
 let failures = 0;
 const browserErrors = [];
 
-function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, overlayStatus = "", apiKeys = {}, transcription = { downloaded: true, name: "音声認識", size: "574 MB" }, local = { installed: false, running: false, models: [] }, selectionQuestionPopup, monitorSize = { width: 1440, height: 900 }, monitorPosition = { x: 0, y: 0 }, currentMonitorAvailable = true, primaryMonitorAvailable = true, primaryMonitorSize = monitorSize, primaryMonitorPosition = monitorPosition, initialWindowSize = { width: 1440, height: 900 }, initialWindowPosition = { x: 0, y: 0 }, windowFrame = { width: 0, height: 0 } } = {}) {
+function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, overlayStatus = "", apiKeys = {}, firstRun = false, existingUser = false, transcription = { downloaded: true, name: "音声認識", size: "574 MB" }, local = { installed: false, running: false, models: [] }, selectionQuestionPopup, monitorSize = { width: 1440, height: 900 }, monitorPosition = { x: 0, y: 0 }, currentMonitorAvailable = true, primaryMonitorAvailable = true, primaryMonitorSize = monitorSize, primaryMonitorPosition = monitorPosition, initialWindowSize = { width: 1440, height: 900 }, initialWindowPosition = { x: 0, y: 0 }, windowFrame = { width: 0, height: 0 } } = {}) {
   localStorage.clear();
   localStorage.setItem("doon-voice-dictionary", dictionaryRaw ?? JSON.stringify(dictionary));
+  if (!firstRun) localStorage.setItem("doon-voice-onboarding", "done");
+  if (existingUser) localStorage.setItem("doon-voice-output-target", "codex");
   const callbacks = new Map();
   const listeners = new Map();
   let nextId = 1;
@@ -69,7 +71,11 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, overlaySta
     window.fixture.clipboard = value;
   } } });
   Object.defineProperty(navigator, "mediaDevices", { value: { async getUserMedia() {
+    window.fixture.microphonePermission = "granted";
     return { getTracks: () => [{ stop() {} }] };
+  } } });
+  Object.defineProperty(navigator, "permissions", { value: { async query() {
+    return { state: window.fixture?.microphonePermission ?? "prompt" };
   } } });
   window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener() {} };
   window.__TAURI_INTERNALS__ = {
@@ -721,6 +727,73 @@ try {
     await claude.getByRole("button", { name: "もう一度押すと削除" }).click();
     await claude.getByText("キー未設定").waitFor();
     await page.getByRole("status").filter({ hasText: "ClaudeのAPIキーを削除しました" }).waitFor();
+    await page.close();
+  });
+
+  for (const viewport of [{ name: "desktop", width: 1440, height: 900 }, { name: "mobile", width: 390, height: 844 }, { name: "wide", width: 2560, height: 1440 }]) {
+    await check(`初めて入れた人には、はじめの設定を順に案内する（${viewport.name}）`, async () => {
+      const page = await pageFor({ firstRun: true, transcription: { downloaded: false, name: "音声認識", size: "574 MB" } }, "", viewport);
+      const steps = page.getByRole("list", { name: "設定の手順" });
+      await page.getByRole("heading", { name: "はじめの設定" }).waitFor();
+      assert.equal(await steps.locator('[aria-current="step"]').count(), 1);
+      await page.screenshot({ path: path.join(artifacts, `onboarding-1-mic-${viewport.name}.png`) });
+      // 1. マイク
+      await page.getByRole("button", { name: "マイクを許可・確認" }).click();
+      await page.getByText("マイクの接続を確認しました").waitFor();
+      await page.getByRole("button", { name: "次へ" }).click();
+      // 2. 音声認識モデル（取得前は「あとで設定して次へ」）
+      await page.getByRole("heading", { name: "音声認識モデルを取得します" }).waitFor();
+      await page.getByRole("button", { name: "あとで設定して次へ" }).waitFor();
+      await page.getByRole("button", { name: "モデルを取得" }).click();
+      await page.waitForFunction(() => window.fixture.pendingTranscriptionDownload !== null);
+      await page.evaluate(() => { window.fixture.transcription = { downloaded: true, name: "音声認識", size: "574 MB" }; window.fixture.pendingTranscriptionDownload(); });
+      await page.getByText("取得済みです").waitFor();
+      await page.screenshot({ path: path.join(artifacts, `onboarding-2-model-${viewport.name}.png`) });
+      await page.getByRole("button", { name: "次へ" }).click();
+      // 3. AIを選び、APIキーを保存
+      await page.getByRole("radio", { name: /Claude/ }).click();
+      await page.getByLabel("ClaudeのAPIキー").fill("sk-ant-test");
+      await page.getByRole("button", { name: "確認して保存" }).click();
+      await page.getByText("ClaudeのAPIキーは保存済みです").waitFor();
+      await page.screenshot({ path: path.join(artifacts, `onboarding-3-ai-${viewport.name}.png`) });
+      await page.getByRole("button", { name: "次へ" }).click();
+      // 4. 試しに話す
+      await page.getByRole("button", { name: "話す" }).click();
+      await page.waitForFunction(() => window.fixture.calls.some(({ command }) => command === "toggle_background_voice"));
+      await page.evaluate(() => window.fixture.publish({ state: "idle", generation: 1, transcript: "テストです", output: "テストです。" }));
+      await page.locator(".onboarding-try .result-output").filter({ hasText: "テストです。" }).waitFor();
+      await page.screenshot({ path: path.join(artifacts, `onboarding-4-try-${viewport.name}.png`) });
+      await page.getByRole("button", { name: "次へ" }).click();
+      // 5. 完了
+      await page.getByRole("heading", { name: "設定の状態" }).waitFor();
+      assert.equal(await page.locator(".onboarding-summary li").filter({ hasText: "設定済み" }).count(), 3);
+      await page.screenshot({ path: path.join(artifacts, `onboarding-5-done-${viewport.name}.png`) });
+      await page.getByRole("button", { name: "使い始める" }).click();
+      await page.getByRole("status").filter({ hasText: "はじめの設定が終わりました" }).waitFor();
+      await page.locator("#home-title").waitFor();
+      assert.equal(await page.evaluate(() => localStorage.getItem("doon-voice-onboarding")), "done");
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, "横にはみ出さない");
+      await page.close();
+    });
+  }
+
+  await check("はじめの設定は「あとで」で閉じ、接続と設定から開き直せる", async () => {
+    const page = await pageFor({ firstRun: true });
+    await page.getByRole("heading", { name: "はじめの設定" }).waitFor();
+    await page.getByRole("button", { name: "戻る" }).count().then((count) => assert.equal(count, 0, "最初の手順に戻るボタンは出さない"));
+    await page.getByRole("button", { name: "あとで", exact: true }).click();
+    await page.locator("#home-title").waitFor();
+    assert.equal(await page.evaluate(() => localStorage.getItem("doon-voice-onboarding")), "later");
+    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await page.getByRole("button", { name: "案内を開く" }).click();
+    await page.getByRole("heading", { name: "マイクを使えるようにします" }).waitFor();
+    await page.close();
+  });
+
+  await check("既に使っている人には、更新後もはじめの設定を自動で出さない", async () => {
+    const page = await pageFor({ firstRun: true, existingUser: true });
+    await page.locator("#home-title").waitFor();
+    assert.equal(await page.getByRole("heading", { name: "はじめの設定" }).count(), 0);
     await page.close();
   });
 
