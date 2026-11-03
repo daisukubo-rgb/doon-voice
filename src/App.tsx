@@ -5,7 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { currentMonitor, getCurrentWindow, primaryMonitor } from "@tauri-apps/api/window";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check } from "@tauri-apps/plugin-updater";
-import { ArrowLeft, ArrowRight, Check, CircleAlert, Download, ExternalLink, KeyRound, Mic, Plus, RefreshCw, Trash2, WifiOff, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, CircleAlert, CircleHelp, Download, ExternalLink, KeyRound, Mic, Plus, RefreshCw, Trash2, WifiOff, X } from "lucide-react";
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
 import { AudioRecorder, requestMicrophoneAccess, startAudioRecorder } from "./audio-recorder";
 import { DEFAULT_OUTPUT_TARGET, DEFAULT_SELECTION_QUESTION_TARGET, isOutputTarget, isSelectionQuestionTarget, OutputTarget, outputTargetLabel, SelectionQuestionTarget } from "./output-target";
@@ -1181,7 +1181,7 @@ function MainApp() {
     </aside>
 
     <section className="main-canvas">
-      <header className="main-bar"><span>{view === "home" ? "DOON VOICE" : view === "dictionary" ? "DICTIONARY" : view === "onboarding" ? "GETTING STARTED" : "SETTINGS"}</span><div className="top-status"><span><i className={selectedOutput.ready ? "status-dot is-ready" : "status-dot"} />{selectedOutput.label}</span><span className="top-status-detail">{selectedOutput.detail}</span><button className="icon-button" type="button" onClick={() => void refreshAll(true)} disabled={refreshing} aria-label={refreshing ? "状態を更新中" : "状態を更新"}><RefreshCw className={refreshing ? "is-spinning" : undefined} size={16} strokeWidth={1.9} /></button></div></header>
+      <header className="main-bar"><span>{view === "home" ? "DOON VOICE" : view === "dictionary" ? "DICTIONARY" : view === "onboarding" ? "GETTING STARTED" : "SETTINGS"}</span><div className="top-status"><span><i className={selectedOutput.ready ? "status-dot is-ready" : "status-dot"} />{selectedOutput.label}</span><span className="top-status-detail">{selectedOutput.detail}</span>{view !== "onboarding" && <button className="icon-button" type="button" onClick={openOnboarding} aria-label="使い方の案内を開く" title="使い方の案内"><CircleHelp size={16} strokeWidth={1.9} /></button>}<button className="icon-button" type="button" onClick={() => void refreshAll(true)} disabled={refreshing} aria-label={refreshing ? "状態を更新中" : "状態を更新"}><RefreshCw className={refreshing ? "is-spinning" : undefined} size={16} strokeWidth={1.9} /></button></div></header>
 
       {view === "onboarding" && renderOnboarding()}
       {view === "home" && <section className="home-view" aria-labelledby="home-title">
