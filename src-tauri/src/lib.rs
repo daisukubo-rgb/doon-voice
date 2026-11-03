@@ -2093,6 +2093,51 @@ fn transcription_status(app: AppHandle) -> Result<TranscriptionStatus, String> {
         size: "約574 MB".into(),
     })
 }
+static TRANSCRIPTION_WARMING: AtomicBool = AtomicBool::new(false);
+
+// 起動して最初の音声認識は、モデルの読み込みとWindowsのウイルス対策の検査が
+// 重なって特に遅い。無音を一度だけ認識させ、利用者が話す前に済ませておく。
+fn warm_up_transcription(app: &AppHandle, delay: Duration) {
+    if TRANSCRIPTION_WARMING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(delay).await;
+        let _ = warm_up_transcription_once(&app).await;
+        TRANSCRIPTION_WARMING.store(false, Ordering::Release);
+    });
+}
+
+async fn warm_up_transcription_once(app: &AppHandle) -> Result<(), String> {
+    if !model_path(app)?.is_file() {
+        return Ok(());
+    }
+    let directory = voice_dir(app)?.join("recordings");
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    // 録音と同じ名前の形にして、強制終了で残っても起動時の後片付けで消えるようにする。
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos())
+        .unwrap_or_default();
+    let wav = directory.join(format!("recording-0-{}-{stamp}.wav", std::process::id()));
+    std::fs::write(
+        &wav,
+        native_audio::encode_pcm_wav(&vec![0.0; 16_000], 16_000),
+    )
+    .map_err(|error| error.to_string())?;
+    let result = whisper(
+        app,
+        &wav,
+        JAPANESE_TRANSCRIPTION_PROMPT,
+        Duration::from_secs(120),
+        &AtomicBool::new(false),
+    )
+    .await;
+    let _ = std::fs::remove_file(&wav);
+    result.map(|_| ())
+}
+
 #[tauri::command]
 async fn download_transcription_model(app: AppHandle) -> Result<(), String> {
     let target = model_path(&app)?;
@@ -2157,6 +2202,7 @@ async fn download_transcription_model(app: AppHandle) -> Result<(), String> {
             completed,
             total,
         );
+        warm_up_transcription(&app, Duration::ZERO);
         Ok(())
     }
     .await;
@@ -2705,6 +2751,28 @@ fn without_list_markers(text: &str) -> (String, usize) {
     (body, items)
 }
 
+// 箇条書きでは「1つ目が」「二点目は」などの順番の言い方が行頭の番号に置き換わる。
+// 照合の前に外し、その数字を内容の数字として数えない。
+fn without_spoken_ordinals(text: &str) -> String {
+    const NUMERALS: [&str; 27] = [
+        "1", "2", "3", "4", "5", "6", "7", "8", "9", "１", "２", "３", "４", "５", "６", "７",
+        "８", "９", "一", "二", "三", "四", "五", "六", "七", "八", "九",
+    ];
+    const COUNTERS: [&str; 6] = ["つ目", "点目", "番目", "個目", "項目目", "つめ"];
+    const PARTICLES: [&str; 5] = ["として", "が", "は", "に", "、"];
+    let mut result = text.to_string();
+    for numeral in NUMERALS {
+        for counter in COUNTERS {
+            let ordinal = format!("{numeral}{counter}");
+            for particle in PARTICLES {
+                result = result.replace(&format!("{ordinal}{particle}"), "");
+            }
+            result = result.replace(&ordinal, "");
+        }
+    }
+    result
+}
+
 fn character_overlap_is_sufficient(input: &str, output: &str, input_percent: usize) -> bool {
     let input = visible_characters(input);
     let output = visible_characters(output);
@@ -2775,6 +2843,7 @@ fn preserve_transcription_meaning<'a>(input: &'a str, output: &'a str) -> &'a st
         for word in ["まず", "次に", "最後に"] {
             checked_input = checked_input.replace(word, "");
         }
+        checked_input = without_spoken_ordinals(&checked_input);
     }
     let list_topics_are_preserved = !is_list
         || topic_runs(&checked_input)
@@ -2814,8 +2883,8 @@ fn preserve_transcription_meaning<'a>(input: &'a str, output: &'a str) -> &'a st
             && (output_sentences == 0
                 || (output_sentences < input_sentences
                     && !sentence_topics_are_preserved(input, output))))
-        || numeric_tokens(input) != numeric_tokens(&output_body)
-        || signed_numeric_tokens(input) != signed_numeric_tokens(&output_body)
+        || numeric_tokens(&checked_input) != numeric_tokens(&output_body)
+        || signed_numeric_tokens(&checked_input) != signed_numeric_tokens(&output_body)
         || !protected_words_are_preserved
         || !locations_are_preserved
         || !list_topics_are_preserved
@@ -2974,6 +3043,9 @@ fn format_spoken_enumeration(text: &str) -> String {
     const ARABIC_POINT_LABELS: [&str; 9] = [
         "1点目", "2点目", "3点目", "4点目", "5点目", "6点目", "7点目", "8点目", "9点目",
     ];
+    const ARABIC_ORDINAL_LABELS: [&str; 9] = [
+        "1つ目", "2つ目", "3つ目", "4つ目", "5つ目", "6つ目", "7つ目", "8つ目", "9つ目",
+    ];
     const JAPANESE_POINT_LABELS: [&str; 9] = [
         "一つ目",
         "二つ目",
@@ -2987,6 +3059,7 @@ fn format_spoken_enumeration(text: &str) -> String {
     ];
 
     format_sequential_list(text, &ARABIC_POINT_LABELS)
+        .or_else(|| format_sequential_list(text, &ARABIC_ORDINAL_LABELS))
         .or_else(|| format_sequential_list(text, &JAPANESE_POINT_LABELS))
         .unwrap_or_else(|| text.to_string())
 }
@@ -4157,6 +4230,7 @@ pub fn run() {
                 }
             });
             let config = load_voice_runtime_config(handle);
+            warm_up_transcription(handle, Duration::from_secs(3));
             prewarm_output_target(handle, config.target);
             if config.selection_question_target != config.target {
                 prewarm_output_target(handle, config.selection_question_target);
@@ -4654,6 +4728,22 @@ mod tests {
         let expected = "生成AIには3点、とても良いところがございます。\n- 1点目はとても便利であること。\n- 2点目は安いこと。\n- 3点目は思ったことを言ったら結構何でもしてくれます。そのように便利なことが多いものです。";
 
         assert_eq!(format_spoken_enumeration(text), expected);
+    }
+
+    #[test]
+    fn 一つ目二つ目と話した内容を箇条書きにした整形結果は採用する() {
+        let input = "私に以下の3つを教えてください。1つ目がAIにできること。2つ目がチャットGPT、クロード、ジェミニの違い。3つ目がノーションAIのいいところ。";
+        let listed = "私に以下の3つを教えてください。\n1. AIにできること\n2. チャットGPT、クロード、ジェミニの違い\n3. ノーションAIのいいところ";
+        assert_eq!(preserve_transcription_meaning(input, listed), listed);
+        // 内容の数字が変わった場合は今までどおり原文を使う。
+        let changed = "私に以下の4つを教えてください。\n1. AIにできること\n2. チャットGPT、クロード、ジェミニの違い\n3. ノーションAIのいいところ";
+        assert_eq!(preserve_transcription_meaning(input, changed), input);
+        // 項目を落とした箇条書きも採用しない。
+        let dropped = "私に以下の3つを教えてください。\n1. AIにできること\n2. チャットGPT、クロード、ジェミニの違い";
+        assert_eq!(preserve_transcription_meaning(input, dropped), input);
+        // AIを使わない場合も「1つ目」から箇条書きにする。
+        let raw = format_spoken_enumeration(input);
+        assert!(raw.contains("\n- 1つ目がAIにできること。\n- 2つ目"));
     }
 
     #[test]
