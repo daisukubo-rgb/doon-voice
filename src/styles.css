@@ -94,6 +94,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .destination-list small.state-unavailable { color: var(--faint); }
 
 .notice { margin: 18px 0 0; color: var(--coral); font-size: 11px; line-height: 1.6; }
+.settings-list .provider-notice { margin-top: 4px; color: #416359; font-size: 11px; line-height: 1.6; }
+.settings-list .provider-notice.is-error { color: var(--coral); }
 .selection-question-popup-shell { min-height: 100vh; padding: 18px; background: var(--background); }
 .selection-question-popup { width: min(100%, 760px); margin: 0 auto; }
 .question-backdrop { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(17, 47, 42, .28); }
@@ -235,6 +237,8 @@ html.is-overlay, html.is-overlay body, html.is-overlay #root { width: 100%; min-
 
 @media (prefers-reduced-motion: reduce) {
   * { transition-duration: .01ms !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; }
+  /* 処理中の印は状態を伝えるため、動きを減らす設定でもゆっくり回し続ける */
+  .is-spinning, .state-connecting-mark, .overlay-spinner { animation-duration: 1.6s !important; animation-iteration-count: infinite !important; }
 }
 
 @keyframes state-spin { to { transform: rotate(360deg); } }

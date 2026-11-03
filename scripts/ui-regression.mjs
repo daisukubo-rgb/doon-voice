@@ -88,7 +88,7 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, overlaySta
         case "plugin:window|outer_size": { const size = f.windowSize || initialWindowSize; return { width: size.width + windowFrame.width, height: size.height + windowFrame.height }; }
         case "plugin:window|set_size": { const size = args.value.size; f.windowSize = { width: size.width, height: size.height }; return; }
         case "plugin:window|set_position": f.windowPosition = { x: args.value.position.x, y: args.value.position.y }; return;
-        case "provider_status": return { provider: args.provider, installed: true, authenticated: Boolean(f.authenticated[args.provider]), usability: "unknown" };
+        case "provider_status": return { provider: args.provider, installed: !(f.missingProviders ?? []).includes(args.provider), authenticated: Boolean(f.authenticated[args.provider]), usability: "unknown" };
         case "local_llm_status": return f.local;
         case "transcription_status": return f.transcription;
         case "download_transcription_model": return new Promise((resolve) => { f.pendingTranscriptionDownload = resolve; });
@@ -117,7 +117,7 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, overlaySta
           f.registeredShortcut = null;
           if (f.deferNextClear) { f.deferNextClear = false; return new Promise((resolve) => { f.pendingClear = resolve; }); }
           return;
-        case "start_official_login": return;
+        case "start_official_login": if (f.loginError) throw f.loginError; return;
         case "toggle_background_voice": f.publish({ state: "starting" }); return;
         case "cancel_voice_processing": f.publish({ state: "idle", message: "処理を取り消しました" }); return;
         case "retry_voice_processing": f.publish({ state: "processing" }); return;
@@ -674,13 +674,34 @@ try {
       await page.getByRole("button", { name: "接続と設定", exact: true }).click();
       const claude = page.locator("article").filter({ has: page.getByRole("heading", { name: "Claude", exact: true }) });
       await claude.getByRole("button", { name: "ログインする" }).click();
-      await page.getByRole("status").filter({ hasText: "ログインを確認できませんでした" }).waitFor();
+      await claude.getByRole("alert").filter({ hasText: "ログインを確認できませんでした" }).waitFor();
       await page.evaluate(() => { window.fixture.authenticated = { codex: true, claude: true, gemini: true }; });
       if (resume === "focus") await page.evaluate(() => window.dispatchEvent(new Event("focus")));
       else await page.getByRole("button", { name: "状態を更新" }).click();
       await claude.getByRole("button", { name: "再ログイン" }).waitFor();
       assert.doesNotMatch(await page.locator("main").innerText(), /ログインを確認できませんでした/);
       assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem("doon-voice-provider-connections"))), { codex: false, claude: true, gemini: false });
+      await page.close();
+    });
+  }
+
+  for (const [name, setup, expected] of [
+    ["CLI未導入", (f) => { f.missingProviders = ["codex"]; }, "このPCにCodex CLIが見つかりません"],
+    ["起動エラー", (f) => { f.loginError = "CLIが見つかりません: codex"; }, "CLIが見つかりません: codex"],
+  ]) {
+    await check(`ログインできない理由（${name}）を押したボタンの行に表示する`, async () => {
+      const page = await pageFor({}, "", { width: 1180, height: 760 });
+      await page.evaluate(`(${setup})(window.fixture)`);
+      await page.getByRole("button", { name: "状態を更新" }).click();
+      await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+      const chatgpt = page.locator("article").filter({ has: page.getByRole("heading", { name: "ChatGPT", exact: true }) });
+      await chatgpt.getByRole("button", { name: "ログインする" }).click();
+      const message = chatgpt.getByRole("alert").filter({ hasText: expected });
+      await message.waitFor();
+      const box = await message.boundingBox();
+      const viewport = page.viewportSize();
+      assert.ok(box && box.y >= 0 && box.y + box.height <= viewport.height, "ログインの結果がボタンと同じ画面内に見える");
+      await page.screenshot({ path: path.join(artifacts, `settings-login-${name === "CLI未導入" ? "missing-cli" : "start-error"}-desktop.png`) });
       await page.close();
     });
   }

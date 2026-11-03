@@ -251,4 +251,8 @@ assert(backend.includes('Command::new("tar.exe")'), "Windowsのスタンドア�
 assert(backend.includes('serve.arg("serve")'), "展開したローカルAIをバックグラウンドで起動する");
 assert(backend.includes("verify_sha256"), "取得したローカルAIを公式SHA-256と照合する");
 
+const reducedMotionRules = styles.slice(styles.indexOf("@media (prefers-reduced-motion: reduce)"), styles.indexOf("@keyframes state-spin"));
+assert(/\.overlay-spinner[^{]*\{[^}]*animation-iteration-count: infinite !important/.test(reducedMotionRules), "動きを減らす設定でも処理中の印を回し続ける");
+assert([".is-spinning", ".state-connecting-mark"].every((selector) => reducedMotionRules.includes(selector)), "更新中・接続中の印も止めない");
+
 console.info("PASS: UI制作規約v1.1の静的契約を検証しました");
