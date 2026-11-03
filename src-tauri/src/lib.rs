@@ -1,5 +1,5 @@
+mod api_cloud;
 mod cli_command;
-mod cloud_runtime;
 mod native_audio;
 mod process_runner;
 
@@ -50,14 +50,12 @@ use tokio::io::AsyncWriteExt;
 
 use audio_file::{cleanup_stale_recordings, OwnedAudioFile};
 use cli_command::cli_command;
-use cloud_runtime::{CloudKind, CloudRuntime, CloudSpec};
 use native_audio::{NativeAudioRecorder, MAX_WAV_BYTES};
 use process_runner::run_bounded;
 
 const MODEL: &str = "ggml-large-v3-turbo-q5_0.bin";
 const MODEL_URL: &str =
     "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin?download=true";
-const PROVIDER_RETRY_AFTER: Duration = Duration::from_secs(60);
 const MAX_TEXT: usize = 20_000;
 const MAX_WAV: usize = MAX_WAV_BYTES;
 const LONG_TEXT_FORMAT_THRESHOLD: usize = 180;
@@ -66,8 +64,6 @@ const QUESTION_MAX_TEXT: usize = 2_000;
 const QUESTION_SELECTION_MAX_TEXT: usize = 6_000;
 const SCREEN_QUESTION_MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 const EMPTY_AI_RESPONSE: &str = "文章を受け取れませんでした。もう一度話してください。";
-const CLAUDE_SUBSCRIPTION_UNAVAILABLE: &str =
-    "Claudeはログイン済みですが、Claude Codeの利用が無効です。ChatGPTまたはローカルAIを選んでください。";
 const LOCAL_MODEL: &str = "gemma4:e2b";
 #[cfg(target_os = "macos")]
 const OLLAMA_MAC_URL: &str = "https://ollama.com/download/Ollama-darwin.zip";
@@ -77,9 +73,6 @@ const OLLAMA_WINDOWS_STANDALONE_URL: &str = "https://ollama.com/download/ollama-
 const OLLAMA_WINDOWS_CHECKSUM_URL: &str = "https://ollama.com/download/sha256sum.txt";
 const JAPANESE_TRANSCRIPTION_PROMPT: &str =
     "日本語の音声入力です。句読点を自然に入れ、固有名詞や専門用語を正確に認識してください。";
-const CODEX_FAST_MODEL: &str = "gpt-5.6-luna";
-const CLAUDE_FAST_MODEL: &str = "haiku";
-const ANTIGRAVITY_FLASH_MODEL: &str = "Gemini 3.6 Flash (Low)";
 static TRANSCRIPTION_DOWNLOAD_RUNNING: AtomicBool = AtomicBool::new(false);
 static LOCAL_RUNTIME_INSTALL_RUNNING: AtomicBool = AtomicBool::new(false);
 static LOCAL_MODEL_PULL_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -1321,7 +1314,7 @@ fn open_direct_input_settings() -> Result<(), String> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 enum Provider {
     Codex,
@@ -1436,77 +1429,35 @@ fn write_file_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
             let _ = std::fs::remove_file(&temporary);
         })
 }
-#[derive(Serialize)]
-struct ProviderStatus {
-    provider: String,
-    installed: bool,
-    authenticated: bool,
-    usability: ProviderUsability,
+// キーの有無だけを記録する。キー本体はOSの資格情報ストアにあり、状態確認の
+// たびに読み出してOSの確認画面を出さないようにする。
+fn api_key_marker_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(voice_runtime_config_path(app)?.with_file_name("api-keys.json"))
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-enum ProviderUsability {
-    #[default]
-    Unknown,
-    Available,
-    Unavailable,
+fn load_api_key_markers(app: &AppHandle) -> Vec<Provider> {
+    api_key_marker_path(app)
+        .ok()
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice::<Vec<Provider>>(&bytes).ok())
+        .unwrap_or_default()
 }
 
-#[derive(Default)]
-struct ProviderHealthState(Mutex<HashMap<Provider, (ProviderUsability, Option<Instant>)>>);
+// キーの保存・削除と記録の更新を1件ずつ行い、同時保存で記録が消えないようにする。
+static API_KEY_LOCK: Mutex<()> = Mutex::new(());
 
-impl ProviderHealthState {
-    fn usability(&self, provider: Provider) -> ProviderUsability {
-        self.usability_at(provider, Instant::now())
+fn set_api_key_marker(app: &AppHandle, provider: Provider, present: bool) -> Result<(), String> {
+    let mut providers = load_api_key_markers(app);
+    providers.retain(|existing| *existing != provider);
+    if present {
+        providers.push(provider);
     }
-
-    // A login-expiry mark carries a retry time so that logging in outside the
-    // app (or a transient failure) does not leave the provider stuck.
-    fn usability_at(&self, provider: Provider, now: Instant) -> ProviderUsability {
-        let Ok(mut health) = self.0.lock() else {
-            return ProviderUsability::default();
-        };
-        match health.get(&provider).copied() {
-            Some((ProviderUsability::Unavailable, Some(retry_at))) if now >= retry_at => {
-                health.remove(&provider);
-                ProviderUsability::default()
-            }
-            Some((usability, _)) => usability,
-            None => ProviderUsability::default(),
-        }
-    }
-
-    fn set(&self, provider: Provider, usability: ProviderUsability) {
-        if let Ok(mut health) = self.0.lock() {
-            health.insert(provider, (usability, None));
-        }
-    }
-
-    fn mark_available(&self, provider: Provider) {
-        self.set(provider, ProviderUsability::Available);
-    }
-
-    fn mark_unavailable(&self, provider: Provider) {
-        self.set(provider, ProviderUsability::Unavailable);
-    }
-
-    fn mark_login_required(&self, provider: Provider) {
-        if let Ok(mut health) = self.0.lock() {
-            health.insert(
-                provider,
-                (
-                    ProviderUsability::Unavailable,
-                    Some(Instant::now() + PROVIDER_RETRY_AFTER),
-                ),
-            );
-        }
-    }
-
-    fn reset(&self, provider: Provider) {
-        self.set(provider, ProviderUsability::Unknown);
-    }
+    let bytes = serde_json::to_vec(&providers)
+        .map_err(|_| "APIキーの状態を保存できませんでした。".to_string())?;
+    write_file_atomically(&api_key_marker_path(app)?, &bytes)
+        .map_err(|_| "APIキーの状態を保存できませんでした。".to_string())
 }
+
 #[derive(Serialize)]
 struct LocalModelStatus {
     id: String,
@@ -1557,61 +1508,6 @@ struct OllamaPullProgress {
     error: Option<String>,
 }
 
-impl Provider {
-    fn cmd(&self) -> &'static str {
-        match self {
-            Self::Codex => "codex",
-            Self::Claude => "claude",
-            Self::Gemini => "agy",
-        }
-    }
-}
-
-fn cloud_kind(provider: Provider) -> CloudKind {
-    match provider {
-        Provider::Codex => CloudKind::Codex,
-        Provider::Claude => CloudKind::Claude,
-        Provider::Gemini => CloudKind::Gemini,
-    }
-}
-
-fn cloud_prewarm_timeout(provider: Provider) -> Option<Duration> {
-    match provider {
-        // Codex keeps its app-server process. Antigravity exits after the
-        // first response, but an idle stream process can still serve that
-        // first response without carrying a previous conversation.
-        Provider::Codex | Provider::Gemini => Some(Duration::from_secs(5)),
-        Provider::Claude => None,
-    }
-}
-
-fn cloud_spec(
-    app: &AppHandle,
-    provider: Provider,
-    question_mode: bool,
-    image_data_url: Option<String>,
-) -> Result<CloudSpec, String> {
-    let cwd = voice_dir(app)?.join("cloud-runtime");
-    std::fs::create_dir_all(&cwd)
-        .map_err(|_| "クラウドAIの作業場所を準備できませんでした。".to_string())?;
-    let (model, timeout) = match provider {
-        Provider::Codex => (CODEX_FAST_MODEL, Duration::from_secs(90)),
-        Provider::Claude => (CLAUDE_FAST_MODEL, Duration::from_secs(90)),
-        Provider::Gemini => (ANTIGRAVITY_FLASH_MODEL, Duration::from_secs(45)),
-    };
-    Ok(CloudSpec {
-        kind: cloud_kind(provider),
-        executable: command_path(provider.cmd()),
-        path: cli_path_environment(),
-        cwd,
-        model: model.into(),
-        timeout,
-        cancelled: Arc::new(AtomicBool::new(false)),
-        question_mode,
-        image_data_url,
-    })
-}
-
 fn prewarm_output_target(app: &AppHandle, target: OutputTarget) {
     match target {
         OutputTarget::Raw => {}
@@ -1621,28 +1517,8 @@ fn prewarm_output_target(app: &AppHandle, target: OutputTarget) {
                 let _ = prewarm_local_ai(&app).await;
             });
         }
-        OutputTarget::Codex | OutputTarget::Claude | OutputTarget::Gemini => {
-            let provider = match target {
-                OutputTarget::Codex => Provider::Codex,
-                OutputTarget::Claude => Provider::Claude,
-                OutputTarget::Gemini => Provider::Gemini,
-                OutputTarget::Local | OutputTarget::Raw => return,
-            };
-            let app = app.clone();
-            let Some(warm_timeout) = cloud_prewarm_timeout(provider) else {
-                return;
-            };
-            tauri::async_runtime::spawn_blocking(move || {
-                let Ok(mut spec) = cloud_spec(&app, provider, false, None) else {
-                    return;
-                };
-                // A warm-up is best effort. It must never hold the provider
-                // slot for the full request deadline when the CLI is slow.
-                spec.timeout = warm_timeout;
-                let cloud = app.state::<CloudRuntime>();
-                let _ = cloud.warm(spec);
-            });
-        }
+        // クラウドAIはHTTPSで都度つなぐため、事前の起動は不要。
+        OutputTarget::Codex | OutputTarget::Claude | OutputTarget::Gemini => {}
     }
 }
 
@@ -1692,93 +1568,58 @@ fn ollama_installed() -> bool {
     command_available("ollama")
 }
 
-fn login_status_args(provider: &Provider) -> &'static [&'static str] {
-    match provider {
-        Provider::Codex => &["login", "status"],
-        Provider::Claude => &["auth", "status"],
-        Provider::Gemini => &["models"],
-    }
-}
-
-fn login_status_is_authenticated(provider: &Provider, success: bool, output: &str) -> bool {
-    if !success {
-        return false;
-    }
-    match provider {
-        Provider::Codex => output.contains("Logged in"),
-        Provider::Claude => serde_json::from_str::<serde_json::Value>(output)
-            .ok()
-            .and_then(|value| value.get("loggedIn").and_then(|entry| entry.as_bool()))
-            .unwrap_or(false),
-        Provider::Gemini => output.contains("Gemini "),
-    }
-}
-
-fn provider_authenticated(provider: &Provider) -> bool {
-    let Ok(mut command) = cli_command(&command_path(provider.cmd()), &cli_path_environment())
-    else {
-        return false;
-    };
-    command
-        .args(login_status_args(provider))
-        .env("PATH", cli_path_environment());
-    let run = match run_bounded(command, Duration::from_secs(5), &AtomicBool::new(false)) {
-        Ok(run) => run,
-        Err(_) => return false,
-    };
-    let text = login_status_text(
-        provider,
-        &String::from_utf8_lossy(&run.stdout),
-        &String::from_utf8_lossy(&run.stderr),
-    );
-    login_status_is_authenticated(provider, run.status.success(), &text)
-}
-
-fn login_status_text(provider: &Provider, stdout: &str, stderr: &str) -> String {
-    // Claude prints JSON on stdout; any stderr warning would break parsing.
-    if provider == &Provider::Claude {
-        return stdout.to_string();
-    }
-    format!("{stdout}{stderr}")
+#[derive(Serialize)]
+struct ApiKeyStatus {
+    codex: bool,
+    claude: bool,
+    gemini: bool,
 }
 
 #[tauri::command]
-async fn provider_status(
-    provider: Provider,
-    health: State<'_, ProviderHealthState>,
-) -> Result<ProviderStatus, String> {
-    let usability = health.usability(provider);
-    let (installed, authenticated) = tauri::async_runtime::spawn_blocking(move || {
-        let installed = command_available(provider.cmd());
-        (installed, installed && provider_authenticated(&provider))
-    })
-    .await
-    .map_err(|_| "ログイン状態の確認が中断されました。".to_string())?;
-    Ok(ProviderStatus {
-        provider: provider.cmd().into(),
-        installed,
-        authenticated,
-        usability,
-    })
+fn api_key_status(app: AppHandle) -> ApiKeyStatus {
+    let markers = load_api_key_markers(&app);
+    ApiKeyStatus {
+        codex: markers.contains(&Provider::Codex),
+        claude: markers.contains(&Provider::Claude),
+        gemini: markers.contains(&Provider::Gemini),
+    }
 }
+
 #[tauri::command]
-async fn start_official_login(
-    app: AppHandle,
-    provider: Provider,
-    health: State<'_, ProviderHealthState>,
-) -> Result<(), String> {
-    health.reset(provider);
+async fn save_api_key(app: AppHandle, provider: Provider, key: String) -> Result<(), String> {
+    let key = api_cloud::normalize_key(&key)?;
+    api_cloud::verify_key(&api_cloud::http_client()?, provider, &key).await?;
     tauri::async_runtime::spawn_blocking(move || {
-        app.state::<CloudRuntime>().reset(cloud_kind(provider));
-        match provider {
-            Provider::Codex => launch_codex_login(),
-            Provider::Claude => launch_claude_login(),
-            Provider::Gemini => launch_gemini_login(),
-        }
+        let _guard = API_KEY_LOCK
+            .lock()
+            .map_err(|_| "APIキーを保存できませんでした。".to_string())?;
+        // 先に記録し、キーの保存に失敗したら記録だけ元に戻す。保存済みの
+        // 古いキーは、新しいキーを書き込めた時にだけ置き換わる。
+        let had_marker = load_api_key_markers(&app).contains(&provider);
+        set_api_key_marker(&app, provider, true)?;
+        api_cloud::store_key(provider, &key).inspect_err(|_| {
+            if !had_marker {
+                let _ = set_api_key_marker(&app, provider, false);
+            }
+        })
     })
     .await
-    .map_err(|_| "ログインの準備が中断されました。".to_string())?
+    .map_err(|_| "APIキーを保存できませんでした。".to_string())?
 }
+
+#[tauri::command]
+async fn delete_api_key(app: AppHandle, provider: Provider) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = API_KEY_LOCK
+            .lock()
+            .map_err(|_| "APIキーを削除できませんでした。".to_string())?;
+        api_cloud::delete_key(provider)?;
+        set_api_key_marker(&app, provider, false)
+    })
+    .await
+    .map_err(|_| "APIキーを削除できませんでした。".to_string())?
+}
+
 #[tauri::command]
 async fn local_llm_status() -> LocalLlmStatus {
     let names = match client() {
@@ -3250,97 +3091,61 @@ fn local_connection_error(error: &reqwest::Error) -> String {
     }
     "ローカルAIと通信できませんでした。接続と設定から状態を確認してください。".into()
 }
-fn command_error(stderr: &[u8]) -> String {
-    let detail = String::from_utf8_lossy(stderr);
-    let lower = detail.to_ascii_lowercase();
-    if lower.contains("malware")
-        || lower.contains("cannot be opened")
-        || lower.contains("damaged")
-        || lower.contains("operation not permitted")
-    {
-        return "macOSがCodex CLIの起動をブロックしました。DOON Voiceは保護機能を迂回しません。公式のCodex CLIを最新版へ更新してから、もう一度接続してください。".into();
-    }
-    if detail.contains("not logged") || detail.contains("log in") || detail.contains("login") {
-        return "公式ログインを完了してから、もう一度試してください。".into();
-    }
-    if detail.contains("not found") || detail.contains("No such file") {
-        return "選択したAIのコマンドが見つかりません。接続と設定から確認してください。".into();
-    }
-    "文章を整えられませんでした。接続と設定を確認して、もう一度試してください。".into()
-}
-
-fn provider_command_error(provider: &Provider, stderr: &[u8]) -> String {
-    let detail = String::from_utf8_lossy(stderr).to_ascii_lowercase();
-    if provider == &Provider::Claude
-        && (detail.contains("disabled claude subscription access")
-            || detail.contains("use an anthropic api key instead"))
-    {
-        return CLAUDE_SUBSCRIPTION_UNAVAILABLE.into();
-    }
-    command_error(stderr)
-}
-
-fn provider_preflight(health: &ProviderHealthState, provider: Provider) -> Result<(), String> {
-    if health.usability(provider) == ProviderUsability::Unavailable {
-        let message = match provider {
-            Provider::Claude => CLAUDE_SUBSCRIPTION_UNAVAILABLE,
-            Provider::Codex => "ChatGPTは現在利用できません。再ログインしてからお試しください。",
-            Provider::Gemini => {
-                "Geminiは現在利用できません。Antigravityへ再ログインしてからお試しください。"
-            }
-        };
-        return Err(message.into());
-    }
-    Ok(())
-}
-
-fn provider_runtime_error(provider: Provider, error: String) -> String {
-    let lower = error.to_ascii_lowercase();
-    if lower.contains("authentication")
-        || lower.contains("oauth")
-        || lower.contains("session expired")
-    {
-        return match provider {
-            Provider::Codex => "ChatGPTのログイン期限が切れています。再ログインしてから、もう一度試してください。",
-            Provider::Claude => "Claudeのログイン期限が切れています。再ログインしてから、もう一度試してください。",
-            Provider::Gemini => "Geminiのログイン期限が切れています。Antigravityへ再ログインしてから、もう一度試してください。",
-        }
-        .into();
-    }
-    if provider == Provider::Gemini
-        && (lower.contains("credit")
-            || lower.contains("quota")
-            || lower.contains("resource_exhausted"))
-    {
-        return "Geminiの利用枠を確認してから、もう一度試してください。".into();
-    }
-    if provider == Provider::Gemini
-        && (lower.contains("authentication") || lower.contains("sign in"))
-    {
-        return "Antigravityへログインしてから、もう一度試してください。".into();
-    }
-    provider_command_error(&provider, error.as_bytes())
-}
-
-fn provider_error_requires_login(error: &str) -> bool {
-    let lower = error.to_ascii_lowercase();
-    lower.contains("ログイン期限") || lower.contains("再ログイン")
-}
-
-fn process_with_cloud(
+async fn process_with_cloud(
     app: &AppHandle,
     provider: Provider,
     prompt: &str,
-    cancelled: Arc<AtomicBool>,
+    cancelled: &AtomicBool,
     question_mode: bool,
-    image_data_url: Option<String>,
+    image_data_url: Option<&str>,
 ) -> Result<String, String> {
-    let mut spec = cloud_spec(app, provider, question_mode, image_data_url)?;
-    spec.cancelled = cancelled;
-    app.state::<CloudRuntime>()
-        .rewrite(spec, prompt)
-        .map_err(|error| provider_runtime_error(provider, error))
-        .and_then(|text| clean_ai_output(&text))
+    let label = api_cloud::provider_label(provider);
+    // キーの正本はOSの資格情報ストア。読み出し結果で記録のずれを直す。
+    // OSの確認画面を待っている間も中止できるようにする。
+    let worker_app = app.clone();
+    let key = until_cancelled(
+        async move {
+            tauri::async_runtime::spawn_blocking(move || {
+                // 保存・削除と同じ鍵で読み出し、古い読出し結果で記録を戻さない。
+                let _guard = API_KEY_LOCK
+                    .lock()
+                    .map_err(|_| format!("{label}のAPIキーを読み出せませんでした。"))?;
+                let key = api_cloud::load_key(provider)?;
+                if load_api_key_markers(&worker_app).contains(&provider) != key.is_some() {
+                    let _ = set_api_key_marker(&worker_app, provider, key.is_some());
+                }
+                Ok::<_, String>(key)
+            })
+            .await
+            .map_err(|_| format!("{label}のAPIキーを読み出せませんでした。"))?
+        },
+        cancelled,
+    )
+    .await?
+    .ok_or_else(|| {
+        format!("{label}のAPIキーが未設定です。「接続と設定」でキーを入れてください。")
+    })?;
+    let client = api_cloud::http_client()?;
+    let request = api_cloud::CloudRequest {
+        prompt,
+        question_mode,
+        image_data_url,
+    };
+    until_cancelled(
+        api_cloud::generate(&client, provider, &key, &request),
+        cancelled,
+    )
+    .await
+    .and_then(|text| clean_ai_output(&text))
+}
+
+fn cloud_provider(target: OutputTarget) -> Option<Provider> {
+    match target {
+        OutputTarget::Codex => Some(Provider::Codex),
+        OutputTarget::Claude => Some(Provider::Claude),
+        OutputTarget::Gemini => Some(Provider::Gemini),
+        OutputTarget::Local | OutputTarget::Raw => None,
+    }
 }
 
 fn check_cancelled(cancelled: &AtomicBool) -> Result<(), String> {
@@ -3396,21 +3201,8 @@ async fn process_voice_text_cancellable(
         return Ok(transcript);
     }
     let p = prompt(&transcript, &dictionary);
-    let provider = match target {
-        OutputTarget::Codex => Some(Provider::Codex),
-        OutputTarget::Claude => Some(Provider::Claude),
-        OutputTarget::Gemini => Some(Provider::Gemini),
-        OutputTarget::Local | OutputTarget::Raw => None,
-    };
-    let polished = if let Some(provider) = provider {
-        provider_preflight(&app.state::<ProviderHealthState>(), provider)?;
-        let worker_app = app.clone();
-        let worker_cancelled = cancelled.clone();
-        tokio::task::spawn_blocking(move || {
-            process_with_cloud(&worker_app, provider, &p, worker_cancelled, false, None)
-        })
-        .await
-        .map_err(|_| "AIでの文章整形が中断されました。".to_string())?
+    let polished = if let Some(provider) = cloud_provider(target) {
+        process_with_cloud(&app, provider, &p, &cancelled, false, None).await
     } else {
         until_cancelled(
             async {
@@ -3438,19 +3230,6 @@ async fn process_voice_text_cancellable(
         .await
     };
     check_cancelled(&cancelled)?;
-    if let Some(provider) = provider {
-        let health = app.state::<ProviderHealthState>();
-        match &polished {
-            Ok(_) => health.mark_available(provider),
-            Err(error) if error == CLAUDE_SUBSCRIPTION_UNAVAILABLE => {
-                health.mark_unavailable(provider)
-            }
-            Err(error) if provider_error_requires_login(error) => {
-                health.mark_login_required(provider)
-            }
-            Err(_) => {}
-        }
-    }
     use_ai_output_or_transcript(&transcript, polished).map(|text| {
         let text = normalize_registered_term_spelling(&transcript, &text, &dictionary);
         format_long_voice_text(&format_spoken_enumeration(&text))
@@ -3498,21 +3277,8 @@ async fn answer_selection_question_cancellable(
         return Err(format!("質問は{QUESTION_MAX_TEXT}文字以内にしてください。"));
     }
     let prompt = selection_question_prompt(&selection, &question);
-    let provider = match target {
-        OutputTarget::Codex => Some(Provider::Codex),
-        OutputTarget::Claude => Some(Provider::Claude),
-        OutputTarget::Gemini => Some(Provider::Gemini),
-        OutputTarget::Local | OutputTarget::Raw => None,
-    };
-    let answer = if let Some(provider) = provider {
-        provider_preflight(&app.state::<ProviderHealthState>(), provider)?;
-        let worker_app = app.clone();
-        let worker_cancelled = cancelled.clone();
-        tokio::task::spawn_blocking(move || {
-            process_with_cloud(&worker_app, provider, &prompt, worker_cancelled, true, None)
-        })
-        .await
-        .map_err(|_| "回答の生成が中断されました。".to_string())?
+    let answer = if let Some(provider) = cloud_provider(target) {
+        process_with_cloud(&app, provider, &prompt, &cancelled, true, None).await
     } else {
         until_cancelled(
             async {
@@ -3538,19 +3304,6 @@ async fn answer_selection_question_cancellable(
         .await
     };
     check_cancelled(&cancelled)?;
-    if let Some(provider) = provider {
-        let health = app.state::<ProviderHealthState>();
-        match &answer {
-            Ok(_) => health.mark_available(provider),
-            Err(error) if error == CLAUDE_SUBSCRIPTION_UNAVAILABLE => {
-                health.mark_unavailable(provider)
-            }
-            Err(error) if provider_error_requires_login(error) => {
-                health.mark_login_required(provider)
-            }
-            Err(_) => {}
-        }
-    }
     answer
 }
 
@@ -3587,28 +3340,16 @@ async fn answer_screen_question(
         return Err(format!("質問は{QUESTION_MAX_TEXT}文字以内にしてください。"));
     }
     let prompt = screen_question_prompt(&question);
-    let provider = match target {
-        OutputTarget::Codex => Some(Provider::Codex),
-        OutputTarget::Claude => Some(Provider::Claude),
-        OutputTarget::Gemini => Some(Provider::Gemini),
-        OutputTarget::Local | OutputTarget::Raw => None,
-    };
-    let answer = if let Some(provider) = provider {
-        provider_preflight(&app.state::<ProviderHealthState>(), provider)?;
-        let worker_app = app.clone();
-        let worker_cancelled = cancelled.clone();
-        tokio::task::spawn_blocking(move || {
-            process_with_cloud(
-                &worker_app,
-                provider,
-                &prompt,
-                worker_cancelled,
-                true,
-                Some(image_data_url),
-            )
-        })
+    let answer = if let Some(provider) = cloud_provider(target) {
+        process_with_cloud(
+            &app,
+            provider,
+            &prompt,
+            &cancelled,
+            true,
+            Some(&image_data_url),
+        )
         .await
-        .map_err(|_| "回答の生成が中断されました。".to_string())?
     } else {
         until_cancelled(
             async {
@@ -3633,19 +3374,6 @@ async fn answer_screen_question(
         .await
     };
     check_cancelled(&cancelled)?;
-    if let Some(provider) = provider {
-        let health = app.state::<ProviderHealthState>();
-        match &answer {
-            Ok(_) => health.mark_available(provider),
-            Err(error) if error == CLAUDE_SUBSCRIPTION_UNAVAILABLE => {
-                health.mark_unavailable(provider)
-            }
-            Err(error) if provider_error_requires_login(error) => {
-                health.mark_login_required(provider)
-            }
-            Err(_) => {}
-        }
-    }
     answer
 }
 
@@ -4210,86 +3938,6 @@ fn schedule_overlay_hide(app: AppHandle, generation: u64, delay: Duration) {
         set_voice_overlay_if_current(&app, generation, BackgroundVoicePhase::Idle, "hidden");
     });
 }
-#[cfg(target_os = "macos")]
-fn launch_codex_login() -> Result<(), String> {
-    let command = command_path("codex");
-    // Open the official `codex login` flow in Terminal so authentication stays
-    // under the provider CLI rather than inside DOON Voice.
-    Command::new("osascript")
-        .args([
-            "-e",
-            &format!(
-                "tell application \"Terminal\" to do script \"'{}' login\"",
-                command.display()
-            ),
-        ])
-        .spawn()
-        .map(|_| ())
-        .map_err(|_| "Codexを開始できませんでした。".into())
-}
-#[cfg(target_os = "windows")]
-fn launch_codex_login() -> Result<(), String> {
-    cli_command::login_command(&command_path("codex"), &cli_path_environment(), &["login"])?
-        .spawn()
-        .map(|_| ())
-        .map_err(|_| "Codexを開始できませんでした。".into())
-}
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn launch_codex_login() -> Result<(), String> {
-    Err("このOSでは対応していません。".into())
-}
-#[cfg(target_os = "macos")]
-fn launch_claude_login() -> Result<(), String> {
-    let command = command_path("claude");
-    Command::new("osascript")
-        .args([
-            "-e",
-            &format!(
-                "tell application \"Terminal\" to do script \"'{}'\"",
-                command.display()
-            ),
-        ])
-        .spawn()
-        .map(|_| ())
-        .map_err(|_| "Claude Codeを開始できませんでした。".into())
-}
-#[cfg(target_os = "macos")]
-fn launch_gemini_login() -> Result<(), String> {
-    let command = command_path("agy");
-    Command::new("osascript")
-        .args([
-            "-e",
-            &format!(
-                "tell application \"Terminal\" to do script \"'{}'\"",
-                command.display()
-            ),
-        ])
-        .spawn()
-        .map(|_| ())
-        .map_err(|_| "Antigravityを開始できませんでした。".into())
-}
-#[cfg(target_os = "windows")]
-fn launch_gemini_login() -> Result<(), String> {
-    cli_command::login_command(&command_path("agy"), &cli_path_environment(), &[])?
-        .spawn()
-        .map(|_| ())
-        .map_err(|_| "Antigravityを開始できませんでした。".into())
-}
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn launch_gemini_login() -> Result<(), String> {
-    Err("このOSでは対応していません。".into())
-}
-#[cfg(target_os = "windows")]
-fn launch_claude_login() -> Result<(), String> {
-    cli_command::login_command(&command_path("claude"), &cli_path_environment(), &[])?
-        .spawn()
-        .map(|_| ())
-        .map_err(|_| "Claude Codeを開始できませんでした。".into())
-}
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn launch_claude_login() -> Result<(), String> {
-    Err("このOSでは対応していません。".into())
-}
 fn show_main_window(app: &AppHandle) -> Result<(), String> {
     let window = app
         .get_webview_window("main")
@@ -4485,8 +4133,6 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
         .manage(VoiceShortcutState::default())
-        .manage(ProviderHealthState::default())
-        .manage(CloudRuntime::default())
         .manage(SelectionQuestionPopupState::default())
         .manage(BackgroundVoiceState(Mutex::new(
             BackgroundVoiceRuntime::new(VoiceRuntimeConfig::default()),
@@ -4548,8 +4194,9 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
-            provider_status,
-            start_official_login,
+            api_key_status,
+            save_api_key,
+            delete_api_key,
             local_llm_status,
             open_local_llm_install,
             pull_local_model,
@@ -4764,27 +4411,6 @@ mod tests {
         let prompt = transcription_prompt(&["DOON Voice".into(), "要約".into(), " ".into()]);
         assert!(prompt.contains("DOON Voice、要約"));
         assert!(!prompt.ends_with("、。"));
-    }
-
-    #[test]
-    fn 高速モデルを明示する() {
-        assert_eq!(CODEX_FAST_MODEL, "gpt-5.6-luna");
-        assert_eq!(CLAUDE_FAST_MODEL, "haiku");
-        assert_eq!(LOCAL_MODEL, "gemma4:e2b");
-        assert_eq!(MODEL, "ggml-large-v3-turbo-q5_0.bin");
-    }
-
-    #[test]
-    fn chatgptとantigravityは録音前に起動できる() {
-        assert_eq!(
-            cloud_prewarm_timeout(Provider::Codex),
-            Some(Duration::from_secs(5))
-        );
-        assert_eq!(
-            cloud_prewarm_timeout(Provider::Gemini),
-            Some(Duration::from_secs(5))
-        );
-        assert_eq!(cloud_prewarm_timeout(Provider::Claude), None);
     }
 
     #[test]
@@ -5141,66 +4767,6 @@ mod tests {
     }
 
     #[test]
-    fn 公式cliの認証状態を判定する() {
-        assert!(login_status_is_authenticated(
-            &Provider::Codex,
-            true,
-            "Logged in using ChatGPT"
-        ));
-        assert!(login_status_is_authenticated(
-            &Provider::Claude,
-            true,
-            r#"{"loggedIn":true,"authMethod":"claude.ai"}"#
-        ));
-        assert!(!login_status_is_authenticated(
-            &Provider::Claude,
-            true,
-            r#"{"loggedIn":false}"#
-        ));
-        assert!(!login_status_is_authenticated(
-            &Provider::Codex,
-            false,
-            "Logged in using ChatGPT"
-        ));
-    }
-
-    #[test]
-    fn 公式cliごとの認証確認引数を返す() {
-        assert_eq!(login_status_args(&Provider::Codex), &["login", "status"]);
-        assert_eq!(login_status_args(&Provider::Claude), &["auth", "status"]);
-        assert_eq!(login_status_args(&Provider::Gemini), &["models"]);
-    }
-
-    #[test]
-    fn antigravityはflash_lowを使う() {
-        assert_eq!(ANTIGRAVITY_FLASH_MODEL, "Gemini 3.6 Flash (Low)");
-        assert!(login_status_is_authenticated(
-            &Provider::Gemini,
-            true,
-            "Gemini 3.6 Flash (Low)\nGemini 3.1 Pro (High)"
-        ));
-    }
-
-    #[test]
-    fn claudeの契約利用不可を明示して次回は即時停止する() {
-        let health = ProviderHealthState::default();
-        let error = provider_command_error(
-            &Provider::Claude,
-            b"Your organization has disabled Claude subscription access for Claude Code",
-        );
-        assert_eq!(error, CLAUDE_SUBSCRIPTION_UNAVAILABLE);
-        health.mark_unavailable(Provider::Claude);
-        assert_eq!(
-            health.usability(Provider::Claude),
-            ProviderUsability::Unavailable
-        );
-        assert_eq!(
-            provider_preflight(&health, Provider::Claude),
-            Err(CLAUDE_SUBSCRIPTION_UNAVAILABLE.to_string())
-        );
-    }
-
-    #[test]
     fn 中止された質問は待機中のローカルai応答を打ち切る() {
         let cancelled = Arc::new(AtomicBool::new(false));
         let flag = cancelled.clone();
@@ -5410,26 +4976,6 @@ mod tests {
     }
 
     #[test]
-    fn claudeの認証状態は標準出力のjsonだけで判定する() {
-        let json = r#"{"loggedIn": true, "authMethod": "claude.ai"}"#;
-        let text = login_status_text(&Provider::Claude, json, "warning: update available\n");
-        assert!(login_status_is_authenticated(
-            &Provider::Claude,
-            true,
-            &text
-        ));
-        let text = login_status_text(&Provider::Claude, r#"{"loggedIn": false}"#, "loggedIn");
-        assert!(!login_status_is_authenticated(
-            &Provider::Claude,
-            true,
-            &text
-        ));
-        // Other CLIs print their status on either stream.
-        let text = login_status_text(&Provider::Codex, "", "Logged in using ChatGPT");
-        assert!(login_status_is_authenticated(&Provider::Codex, true, &text));
-    }
-
-    #[test]
     fn 起動時のショートカット登録が途中で失敗しても成功分は記録する() {
         let config = VoiceRuntimeConfig::default();
         let registrations = Mutex::new(VoiceShortcutRegistrations::default());
@@ -5442,55 +4988,6 @@ mod tests {
         let registered = registrations.lock().unwrap();
         assert_eq!(registered.input.as_deref(), Some(config.shortcut.as_str()));
         assert_eq!(registered.selection_question, None);
-    }
-
-    #[test]
-    fn ログイン期限切れの利用不可は一定時間後に再試行できる() {
-        let health = ProviderHealthState::default();
-        health.mark_login_required(Provider::Codex);
-        let now = Instant::now();
-        assert_eq!(
-            health.usability_at(Provider::Codex, now + Duration::from_secs(10)),
-            ProviderUsability::Unavailable
-        );
-        assert!(provider_preflight(&health, Provider::Codex).is_err());
-        assert_eq!(
-            health.usability_at(
-                Provider::Codex,
-                now + PROVIDER_RETRY_AFTER + Duration::from_secs(1)
-            ),
-            ProviderUsability::Unknown
-        );
-        // Claude's disabled subscription is a policy decision, not an expired login.
-        health.mark_unavailable(Provider::Claude);
-        assert_eq!(
-            health.usability_at(Provider::Claude, now + Duration::from_secs(3600)),
-            ProviderUsability::Unavailable
-        );
-    }
-
-    #[test]
-    fn 認証期限切れは再ログインを案内する() {
-        let message = provider_runtime_error(
-            Provider::Claude,
-            "Failed to authenticate: OAuth session expired and could not be refreshed".into(),
-        );
-        assert!(message.contains("再ログイン"));
-        assert!(provider_error_requires_login(&message));
-    }
-
-    #[test]
-    fn 実行成功後だけ利用可能として扱う() {
-        let health = ProviderHealthState::default();
-        assert_eq!(
-            health.usability(Provider::Codex),
-            ProviderUsability::Unknown
-        );
-        health.mark_available(Provider::Codex);
-        assert_eq!(
-            health.usability(Provider::Codex),
-            ProviderUsability::Available
-        );
     }
 
     #[test]
@@ -5706,12 +5203,6 @@ mod tests {
         }
         assert!(normalize_transcription(" ").is_err());
     }
-    #[test]
-    fn macosのcliブロックを利用者へ説明する() {
-        let message = command_error(b"codex cannot be opened because it contains malware");
-        assert!(message.contains("macOSがCodex CLIの起動をブロックしました"));
-    }
-
     #[test]
     fn windowsのサインアップ不要なollamaはdoon_voice専用フォルダへ置く() {
         assert_eq!(

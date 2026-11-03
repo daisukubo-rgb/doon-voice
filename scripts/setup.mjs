@@ -98,7 +98,7 @@ if (missing.length > 0) {
   } else if (process.platform === "darwin") {
     console.error("macOSではRustとXcode Command Line Toolsを準備してください。");
   }
-  console.error("Ollama、Codex CLI、Claude Code、Gemini用agy、AIモデルはDOON Voiceの接続と設定から別途準備します。");
+  console.error("ローカルAI（Ollama）とAIモデル、各社のAPIキーはDOON Voiceの接続と設定から別途準備します。");
   process.exit(1);
 }
 

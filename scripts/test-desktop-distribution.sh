@@ -93,8 +93,8 @@ if rg -F -q 'shell:allow-execute' "$SHORTCUT_CAPABILITY"; then
   exit 1
 fi
 
-if ! rg -F -q 'codex login' "$RUST_SOURCE" || ! rg -F -q 'claude' "$RUST_SOURCE"; then
-  print -u2 'FAIL: 公式CLIのログイン導線がありません'
+if ! rg -F -q 'fn save_api_key' "$RUST_SOURCE" || rg -F -q 'codex login' "$RUST_SOURCE"; then
+  print -u2 'FAIL: APIキーで各社AIへつなぐ導線がありません'
   exit 1
 fi
 
@@ -128,4 +128,4 @@ if ! rg -F -q 'macos-14' "$WORKFLOW" || ! rg -F -q 'x86_64-apple-darwin' "$WORKF
   exit 1
 fi
 
-print 'PASS: GitHub Releases向けのmacOS/Windows配布と公式ログイン導線が定義されています'
+print 'PASS: GitHub Releases向けのmacOS/Windows配布とAPIキーの導線が定義されています'

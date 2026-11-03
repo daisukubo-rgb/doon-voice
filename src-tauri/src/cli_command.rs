@@ -20,18 +20,6 @@ pub(crate) fn hide_console(_command: &mut Command) {
     }
 }
 
-#[cfg(windows)]
-pub(crate) fn login_command(
-    executable: &Path,
-    path: &OsStr,
-    args: &[&str],
-) -> Result<Command, String> {
-    use std::os::windows::process::CommandExt;
-    let mut command = cli_command(executable, path)?;
-    command.args(args).creation_flags(0x0000_0010); // CREATE_NEW_CONSOLE
-    Ok(command)
-}
-
 #[cfg(any(windows, test))]
 fn windows_cli_command(executable: &Path, dirs: &[std::path::PathBuf]) -> Result<Command, String> {
     let bases = if executable.components().count() > 1 {

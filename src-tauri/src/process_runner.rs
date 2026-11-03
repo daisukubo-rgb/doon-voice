@@ -340,30 +340,6 @@ mod tests {
         assert!(String::from_utf8_lossy(&output.stdout).contains("has-console=false"));
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn windows_explicit_login_opens_a_console() {
-        let fixture_name = concat!(module_path!(), "::fake_cli_fixture")
-            .split_once("::")
-            .unwrap()
-            .1;
-        let mut command = crate::cli_command::login_command(
-            &std::env::current_exe().unwrap(),
-            &std::env::var_os("PATH").unwrap_or_default(),
-            &["--exact", fixture_name, "--nocapture"],
-        )
-        .unwrap();
-        let output = command
-            .env("DOON_PROCESS_TEST_MODE", "console")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .unwrap();
-        assert!(output.status.success());
-        assert!(String::from_utf8_lossy(&output.stdout).contains("has-console=true"));
-    }
-
     #[test]
     fn preserves_nonzero_status_and_stderr() {
         let result = run_bounded(

@@ -220,21 +220,13 @@ assert(
 assert(!app.includes('listen("doon-voice-shortcut"'), "グローバルショートカットの実処理をWebViewに依存させない");
 assert(app.includes('appInvoke("toggle_background_voice")'), "本体の録音ボタンも常駐ランタイムを使う");
 assert(app.includes('appInvoke("configure_background_voice"'), "選択AIと辞書を常駐ランタイムへ同期する");
-assert(!app.includes('label: "接続済み"'), "CLIログインだけを接続済みと誤表示しない");
-assert(app.includes('label: "ログイン済み"'), "公式CLIの認証状態はログイン済みと正確に表示する");
-assert(app.includes('label: "利用可能"'), "実際の整形成功後は利用可能と表示する");
-assert(app.includes('label: "利用不可"'), "契約などで実行できないAIは利用不可と表示する");
-assert(app.includes("connectedProviders"), "DOON Voice内でログインしたAIをサービス別に記憶する");
-assert(
-  app.includes("connectedProviders[id] && statuses[id]?.authenticated"),
-  "別サービスのCLI認証をDOON Voiceの接続済み状態へ流用しない",
-);
-assert(
-  app.includes("({ ...current, [provider]: true })"),
-  "ログイン完了時は操作したサービスだけを接続済みにする",
-);
+assert(!app.includes("start_official_login"), "公式CLIのログイン導線を残さない");
+assert(app.includes('appInvoke("save_api_key"'), "APIキーは本体へ渡して保存する");
+assert(app.includes('type="password"'), "APIキーの入力欄は文字を伏せて表示する");
+assert(!app.includes("localStorage.setItem(\"doon-voice-api"), "APIキーを画面側の保存領域へ書かない");
+assert(app.includes('label: "キー設定済み"') && app.includes('label: "キー未設定"'), "AIごとにキーの有無を表示する");
 assert(app.includes('type ProviderId = "codex" | "claude" | "gemini"'), "Geminiの接続状態を他AIと分離する");
-assert(app.includes("Gemini 3.6 Flash (Low)"), "Geminiの文章整形はFlash Lowへ固定する");
+assert(backend.includes("fn api_key_status") && !backend.includes("fn start_official_login"), "本体はAPIキーの状態だけを返す");
 assert(app.includes("現在の版:"), "更新欄に現在のアプリ版を表示する");
 assert(app.includes("確認した最新版:"), "更新欄に確認した最新版を表示する");
 assert(app.includes("showRefreshToast"), "右上の状態更新は完了通知を表示する");

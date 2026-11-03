@@ -5,7 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { currentMonitor, getCurrentWindow, primaryMonitor } from "@tauri-apps/api/window";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check } from "@tauri-apps/plugin-updater";
-import { Check, CircleAlert, Download, ExternalLink, Mic, Plus, RefreshCw, WifiOff, X } from "lucide-react";
+import { Check, CircleAlert, Download, ExternalLink, KeyRound, Mic, Plus, RefreshCw, Trash2, WifiOff, X } from "lucide-react";
 import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
 import { AudioRecorder, requestMicrophoneAccess, startAudioRecorder } from "./audio-recorder";
 import { DEFAULT_OUTPUT_TARGET, DEFAULT_SELECTION_QUESTION_TARGET, isOutputTarget, isSelectionQuestionTarget, OutputTarget, outputTargetLabel, SelectionQuestionTarget } from "./output-target";
@@ -14,14 +14,8 @@ import { fitWindowPositionToWorkArea, fitWindowSizeToWorkArea } from "./window-f
 import { createLocalStatusMonitor } from "./local-status";
 
 type ProviderId = "codex" | "claude" | "gemini";
-type ProviderConnections = Record<ProviderId, boolean>;
+type ApiKeyStatus = Record<ProviderId, boolean>;
 type View = "home" | "dictionary" | "settings";
-type ProviderStatus = {
-  installed: boolean;
-  authenticated: boolean;
-  provider: ProviderId;
-  usability: "unknown" | "available" | "unavailable";
-};
 type LocalModel = { id: "gemma4_e2b"; name: string; size: string; installed: boolean };
 type LocalLlmStatus = { installed: boolean; running: boolean; models: LocalModel[] };
 type TranscriptionStatus = { downloaded: boolean; name: string; size: string };
@@ -54,9 +48,9 @@ function dictionaryError(terms: readonly unknown[]): string {
 }
 
 const providers: Array<{ id: ProviderId; label: string; detail: string; glyph: BrandGlyphName }> = [
-  { id: "codex", label: "ChatGPT", detail: "Codexで接続", glyph: "spark" },
-  { id: "claude", label: "Claude", detail: "Claude Codeで接続", glyph: "coach" },
-  { id: "gemini", label: "Gemini", detail: "Antigravityで接続", glyph: "loop" },
+  { id: "codex", label: "ChatGPT", detail: "OpenAIのAPIキー（gpt-6-lunaで整形）", glyph: "spark" },
+  { id: "claude", label: "Claude", detail: "AnthropicのAPIキー（Claude Haiku 5.5で整形）", glyph: "coach" },
+  { id: "gemini", label: "Gemini", detail: "GoogleのAPIキー（Gemini 3.6 Flashで整形）", glyph: "loop" },
 ];
 
 function BrandGlyph({ name, className = "" }: { name: BrandGlyphName; className?: string }) {
@@ -67,7 +61,7 @@ function BrandGlyph({ name, className = "" }: { name: BrandGlyphName; className?
 function appInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   if (isTauriApp()) return invoke<T>(command, args);
   const preview: Record<string, unknown> = {
-    provider_status: { installed: true, authenticated: false, usability: "unknown" },
+    api_key_status: { codex: false, claude: false, gemini: false },
     local_llm_status: { installed: true, running: true, models: [{ id: "gemma4_e2b", name: "Gemma 4 E2B", size: "7.2 GB", installed: true }] },
     transcription_status: { downloaded: true, name: "DOON Voice 高精度音声認識", size: "約574 MB" },
     direct_input_status: true,
@@ -156,16 +150,6 @@ function savedSelectionQuestionTarget(): SelectionQuestionTarget {
   } catch { return DEFAULT_SELECTION_QUESTION_TARGET; }
 }
 
-function savedProviderConnections(key = "doon-voice-provider-connections"): ProviderConnections {
-  try {
-    const saved = JSON.parse(window.localStorage.getItem(key) || "null");
-    if (saved && typeof saved === "object") {
-      return { codex: saved.codex === true, claude: saved.claude === true, gemini: saved.gemini === true };
-    }
-  } catch { /* 明示的な接続の記録がない場合は接続済みと推測しない */ }
-  return { codex: false, claude: false, gemini: false };
-}
-
 function savedDictionary(): { terms: unknown[]; unreadable: boolean } {
   try {
     const value: unknown = JSON.parse(window.localStorage.getItem("doon-voice-dictionary") ?? "[]");
@@ -213,9 +197,7 @@ function MainApp() {
   const initialSelectionQuestionTarget = useRef(savedSelectionQuestionTarget()).current;
   const initialDictionary = useRef(savedDictionary()).current;
   const [view, setView] = useState<View>("home");
-  const [statuses, setStatuses] = useState<Record<ProviderId, ProviderStatus | null>>({ codex: null, claude: null, gemini: null });
-  const [connectedProviders, setConnectedProviders] = useState<ProviderConnections>(() => savedProviderConnections());
-  const pendingConnectionsRef = useRef(savedProviderConnections("doon-voice-pending-connections"));
+  const [apiKeys, setApiKeys] = useState<ApiKeyStatus | null>(null);
   const [local, setLocal] = useState<LocalLlmStatus | null>(null);
   const [installingOllama, setInstallingOllama] = useState(false);
   const [pullingLocalModel, setPullingLocalModel] = useState(false);
@@ -264,8 +246,10 @@ function MainApp() {
   const resultGenerationRef = useRef(0);
   const voiceStateRef = useRef<BackgroundVoiceSnapshot["state"]>("idle");
   const [directInputAllowed, setDirectInputAllowed] = useState<boolean | null>(null);
-  const [connectingProviders, setConnectingProviders] = useState<Record<ProviderId, boolean>>({ codex: false, claude: false, gemini: false });
-  // ログイン結果は押したボタンの行に出す。設定画面の最下部だと画面外になり、押しても反応がないように見える
+  const [keyDrafts, setKeyDrafts] = useState<Record<ProviderId, string>>({ codex: "", claude: "", gemini: "" });
+  const [savingKeys, setSavingKeys] = useState<Record<ProviderId, boolean>>({ codex: false, claude: false, gemini: false });
+  const [confirmingKeyDelete, setConfirmingKeyDelete] = useState<ProviderId | null>(null);
+  // APIキーの確認結果は押したボタンの行に出す。設定画面の最下部だと画面外になり、押しても反応がないように見える
   const [providerNotices, setProviderNotices] = useState<Partial<Record<ProviderId, { text: string; error: boolean }>>>({});
   const [questionOpen, setQuestionOpen] = useState(false);
   const [questionSelection, setQuestionSelection] = useState("");
@@ -490,15 +474,7 @@ function MainApp() {
     setRefreshing(true);
     try {
       await Promise.all([
-        ...providers.map(async ({ id }) => {
-          try {
-            const status = await appInvoke<ProviderStatus>("provider_status", { provider: id });
-            setStatuses((current) => ({ ...current, [id]: status }));
-            completePendingConnection(id, status);
-          } catch {
-            setStatuses((current) => ({ ...current, [id]: null }));
-          }
-        }),
+        appInvoke<ApiKeyStatus>("api_key_status").then(setApiKeys).catch(() => setApiKeys(null)),
         localStatusMonitorRef.current?.refresh(),
         appInvoke<TranscriptionStatus>("transcription_status").then(setTranscription).catch(() => setTranscription(null)),
         appInvoke<boolean>("direct_input_status").then(setDirectInputAllowed).catch(() => setDirectInputAllowed(null)),
@@ -567,24 +543,6 @@ function MainApp() {
     } finally {
       setUpdatingApp(false);
     }
-  }
-
-  function setPendingConnection(provider: ProviderId, pending: boolean) {
-    pendingConnectionsRef.current = { ...pendingConnectionsRef.current, [provider]: pending };
-    window.localStorage.setItem("doon-voice-pending-connections", JSON.stringify(pendingConnectionsRef.current));
-  }
-
-  function completePendingConnection(provider: ProviderId, status: ProviderStatus) {
-    if (!status.authenticated || !pendingConnectionsRef.current[provider]) return false;
-    setPendingConnection(provider, false);
-    setConnectedProviders((current) => {
-      const next = ({ ...current, [provider]: true });
-      window.localStorage.setItem("doon-voice-provider-connections", JSON.stringify(next));
-      return next;
-    });
-    setConnectingProviders((current) => ({ ...current, [provider]: false }));
-    setProviderNotice(provider, null);
-    return true;
   }
 
   async function toggleRecording() {
@@ -865,38 +823,41 @@ function MainApp() {
     setProviderNotices((current) => ({ ...current, [provider]: text === null ? undefined : { text, error } }));
   }
 
-  async function connect(provider: ProviderId) {
-    if (!statuses[provider]?.installed) {
-      setProviderNotice(provider, provider === "codex" ? "このPCにCodex CLIが見つかりません。Codex CLIを入れてから、もう一度ログインしてください" : provider === "claude" ? "このPCにClaude Codeが見つかりません。Claude Codeを入れてから、もう一度ログインしてください" : "このPCにAntigravity CLIが見つかりません。Antigravity CLIを入れてから、もう一度ログインしてください", true);
+  async function saveApiKey(provider: ProviderId) {
+    const key = keyDrafts[provider].trim();
+    if (!key) {
+      setProviderNotice(provider, "APIキーを入力してください", true);
       return;
     }
+    setSavingKeys((current) => ({ ...current, [provider]: true }));
+    setProviderNotice(provider, null);
     try {
-      setConnectingProviders((current) => ({ ...current, [provider]: true }));
-      setProviderNotice(provider, null);
-      await appInvoke("start_official_login", { provider });
-      setPendingConnection(provider, true);
-      setProviderNotice(provider, "別のウィンドウでログイン画面を開きました。ログインが終わると自動で切り替わります");
-      void waitForProviderConnection(provider);
+      await appInvoke("save_api_key", { provider, key });
+      setKeyDrafts((current) => ({ ...current, [provider]: "" }));
+      setApiKeys((current) => ({ ...(current ?? { codex: false, claude: false, gemini: false }), [provider]: true }));
+      showRefreshToast(`${outputTargetLabel(provider)}のAPIキーを保存しました`);
     } catch (error) {
-      setConnectingProviders((current) => ({ ...current, [provider]: false }));
-      setProviderNotice(provider, errorMessage(error, "ログイン画面を開けませんでした"), true);
+      setProviderNotice(provider, errorMessage(error, "APIキーを確認できませんでした"), true);
+      window.requestAnimationFrame(() => document.getElementById(`api-key-notice-${provider}`)?.scrollIntoView({ block: "nearest" }));
+    } finally {
+      setSavingKeys((current) => ({ ...current, [provider]: false }));
     }
   }
 
-  async function waitForProviderConnection(provider: ProviderId) {
-    const label = provider === "codex" ? "ChatGPT" : provider === "claude" ? "Claude" : "Gemini";
-    for (let attempt = 0; attempt < 60; attempt += 1) {
-      await new Promise((resolve) => window.setTimeout(resolve, 1500));
-      if (!pendingConnectionsRef.current[provider]) return;
-      try {
-        const status = await appInvoke<ProviderStatus>("provider_status", { provider });
-        setStatuses((current) => ({ ...current, [provider]: status }));
-        if (completePendingConnection(provider, status)) return;
-      } catch { /* 接続画面を開いたまま次の確認を続ける */ }
+  async function deleteApiKey(provider: ProviderId) {
+    if (confirmingKeyDelete !== provider) {
+      setConfirmingKeyDelete(provider);
+      return;
     }
-    if (!pendingConnectionsRef.current[provider]) return;
-    setConnectingProviders((current) => ({ ...current, [provider]: false }));
-    setProviderNotice(provider, `${label}のログインを確認できませんでした。ログイン画面を確認してから状態を更新してください`, true);
+    setConfirmingKeyDelete(null);
+    try {
+      await appInvoke("delete_api_key", { provider });
+      setApiKeys((current) => ({ ...(current ?? { codex: false, claude: false, gemini: false }), [provider]: false }));
+      setProviderNotice(provider, null);
+      showRefreshToast(`${outputTargetLabel(provider)}のAPIキーを削除しました`);
+    } catch (error) {
+      setProviderNotice(provider, errorMessage(error, "APIキーを削除できませんでした"), true);
+    }
   }
 
   function chooseOutputTarget(target: OutputTarget) {
@@ -1099,23 +1060,19 @@ function MainApp() {
     return () => window.clearInterval(timer);
   }, [isMac, view]);
   function providerDisplayState(id: ProviderId, selected: boolean) {
-    if (statuses[id]?.usability === "unavailable") return { label: "利用不可", className: "state-unavailable" };
     if (selected) return { label: "選択中", className: "state-selected" };
-    if (connectingProviders[id]) return { label: "ログイン中", className: "state-connecting" };
-    if (connectedProviders[id] && statuses[id]?.usability === "available") return { label: "利用可能", className: "state-connected" };
-    if (connectedProviders[id] && statuses[id]?.authenticated) return { label: "ログイン済み", className: "state-available" };
-    if (statuses[id]?.installed) return { label: "ログイン可能", className: "state-available" };
-    return { label: "未導入", className: "state-unavailable" };
+    if (apiKeys?.[id]) return { label: "キー設定済み", className: "state-connected" };
+    return { label: "キー未設定", className: "state-unavailable" };
   }
   const codexDisplay = providerDisplayState("codex", outputTarget === "codex");
   const claudeDisplay = providerDisplayState("claude", outputTarget === "claude");
   const geminiDisplay = providerDisplayState("gemini", outputTarget === "gemini");
   const selectedOutput = outputTarget === "codex"
-    ? { label: "ChatGPT", detail: "GPT-5.6 Luna", ready: statuses.codex?.usability === "available" }
+    ? { label: "ChatGPT", detail: "gpt-6-luna", ready: apiKeys?.codex === true }
     : outputTarget === "claude"
-      ? { label: "Claude", detail: "Haiku", ready: statuses.claude?.usability === "available" }
+      ? { label: "Claude", detail: "Haiku 5.5", ready: apiKeys?.claude === true }
       : outputTarget === "gemini"
-        ? { label: "Gemini", detail: "Flash Low", ready: statuses.gemini?.usability === "available" }
+        ? { label: "Gemini", detail: "3.6 Flash", ready: apiKeys?.gemini === true }
         : outputTarget === "raw"
           ? { label: "AIなし", detail: "音声認識のみ", ready: Boolean(transcription?.downloaded) }
           : { label: "このPCのAI", detail: localModel?.name || "未準備", ready: localReady };
@@ -1195,9 +1152,9 @@ function MainApp() {
           <p className="settings-help">おすすめはこのPCのAIです。通信せず、このPC内で文章を整えます。</p>
           <div className="output-choice-list" role="radiogroup" aria-label="文章を整えるAI">
             <button className={outputTarget === "raw" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "raw"} disabled={busy} onClick={() => chooseOutputTarget("raw")}><Mic size={27} strokeWidth={1.8} /><span><strong>AIなし</strong><small>音声認識のみ</small></span>{outputTarget === "raw" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
-            <button className={outputTarget === "codex" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "codex"} disabled={busy} onClick={() => chooseOutputTarget("codex")}><BrandGlyph name="spark" /><span><strong>ChatGPT</strong><small>Codexで整える</small></span>{outputTarget === "codex" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
-            <button className={outputTarget === "claude" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "claude"} disabled={busy} onClick={() => chooseOutputTarget("claude")}><BrandGlyph name="coach" /><span><strong>Claude</strong><small>Claude Codeで整える</small></span>{outputTarget === "claude" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
-            <button className={outputTarget === "gemini" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "gemini"} disabled={busy} onClick={() => chooseOutputTarget("gemini")}><BrandGlyph name="loop" /><span><strong>Gemini</strong><small>Antigravity Flashで整える</small></span>{outputTarget === "gemini" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
+            <button className={outputTarget === "codex" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "codex"} disabled={busy} onClick={() => chooseOutputTarget("codex")}><BrandGlyph name="spark" /><span><strong>ChatGPT</strong><small>OpenAIのAPIで整える</small></span>{outputTarget === "codex" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
+            <button className={outputTarget === "claude" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "claude"} disabled={busy} onClick={() => chooseOutputTarget("claude")}><BrandGlyph name="coach" /><span><strong>Claude</strong><small>AnthropicのAPIで整える</small></span>{outputTarget === "claude" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
+            <button className={outputTarget === "gemini" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "gemini"} disabled={busy} onClick={() => chooseOutputTarget("gemini")}><BrandGlyph name="loop" /><span><strong>Gemini</strong><small>GoogleのAPIで整える</small></span>{outputTarget === "gemini" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
             <button className={outputTarget === "local" ? "is-selected" : ""} type="button" role="radio" aria-checked={outputTarget === "local"} disabled={busy} onClick={() => chooseOutputTarget("local")}><BrandGlyph name="dx" /><span><strong>このPCのAI</strong><small>おすすめ · Gemma 4 E2Bで整える</small></span>{outputTarget === "local" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
           </div>
           {configurationNotice}
@@ -1207,8 +1164,8 @@ function MainApp() {
           <p className="settings-help">おすすめはChatGPT、Claude、Geminiです。質問、要約、翻訳、文体調整にはクラウドAIを選びます。</p>
           <div className="output-choice-list" role="radiogroup" aria-label="選択文・画面を質問・編集するAI">
             <button className={selectionQuestionTarget === "codex" ? "is-selected" : ""} type="button" role="radio" aria-checked={selectionQuestionTarget === "codex"} disabled={busy} onClick={() => chooseSelectionQuestionTarget("codex")}><BrandGlyph name="spark" /><span><strong>ChatGPT</strong><small>クラウドAIで調べて答える</small></span>{selectionQuestionTarget === "codex" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
-            <button className={selectionQuestionTarget === "claude" ? "is-selected" : ""} type="button" role="radio" aria-checked={selectionQuestionTarget === "claude"} disabled={busy} onClick={() => chooseSelectionQuestionTarget("claude")}><BrandGlyph name="coach" /><span><strong>Claude</strong><small>Claude Codeで答える</small></span>{selectionQuestionTarget === "claude" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
-            <button className={selectionQuestionTarget === "gemini" ? "is-selected" : ""} type="button" role="radio" aria-checked={selectionQuestionTarget === "gemini"} disabled={busy} onClick={() => chooseSelectionQuestionTarget("gemini")}><BrandGlyph name="loop" /><span><strong>Gemini</strong><small>Antigravityで答える</small></span>{selectionQuestionTarget === "gemini" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
+            <button className={selectionQuestionTarget === "claude" ? "is-selected" : ""} type="button" role="radio" aria-checked={selectionQuestionTarget === "claude"} disabled={busy} onClick={() => chooseSelectionQuestionTarget("claude")}><BrandGlyph name="coach" /><span><strong>Claude</strong><small>AnthropicのAPIで答える</small></span>{selectionQuestionTarget === "claude" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
+            <button className={selectionQuestionTarget === "gemini" ? "is-selected" : ""} type="button" role="radio" aria-checked={selectionQuestionTarget === "gemini"} disabled={busy} onClick={() => chooseSelectionQuestionTarget("gemini")}><BrandGlyph name="loop" /><span><strong>Gemini</strong><small>GoogleのAPIで答える</small></span>{selectionQuestionTarget === "gemini" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
             <button className={selectionQuestionTarget === "local" ? "is-selected" : ""} type="button" role="radio" aria-checked={selectionQuestionTarget === "local"} disabled={busy} onClick={() => chooseSelectionQuestionTarget("local")}><BrandGlyph name="dx" /><span><strong>このPCのAI</strong><small>Gemma 4 E2Bで答える</small></span>{selectionQuestionTarget === "local" ? <Check size={17} strokeWidth={2.2} /> : <span>選ぶ</span>}</button>
           </div>
         </section>
@@ -1216,7 +1173,7 @@ function MainApp() {
         <div className="settings-list direct-input-settings"><article><span className="setting-icon"><BrandGlyph name="move" /></span><div><h2>カーソル位置へ入力</h2><p>{directInputAllowed ? "ほかのアプリへ直接入力できます。" : "macOSのアクセシビリティ許可が必要です。"}</p></div><span className={directInputAllowed ? "setting-state state-permitted" : "setting-state state-unavailable"}>{directInputAllowed ? <Check size={15} strokeWidth={2.3} /> : <CircleAlert size={15} strokeWidth={2} />}{directInputAllowed ? "許可済み" : "未許可"}</span>{isMac ? <button className="outline-action" type="button" onClick={() => void (directInputAllowed ? openDirectInputSettings() : requestDirectInputPermission())}>{directInputAllowed ? "設定を開く" : "許可する"} <ExternalLink size={15} /></button> : <span />}</article></div>
         <div className="settings-list microphone-settings"><article><span className="setting-icon"><Mic size={22} strokeWidth={1.8} /></span><div><h2>マイク</h2><p>{microphoneReady === true ? "許可と実際のマイク接続を確認しました。" : microphoneReady === false ? "許可だけでは録音できない場合があります。マイク接続を確認して、もう一度試してください。" : microphonePermissionState === "granted" ? "許可済みです。実際に録音できるか確認してください。" : microphonePermissionState === "unsupported" ? "この環境ではマイクを使えません。" : "初回にこのボタンからマイクを許可・確認します。"}</p></div><span className={microphoneReady === true ? "setting-state state-permitted" : "setting-state state-unavailable"}>{microphoneReady === true ? <Check size={15} strokeWidth={2.3} /> : <CircleAlert size={15} strokeWidth={2} />}{microphoneReady === true ? "接続確認済み" : microphonePermissionState === "unsupported" ? "利用不可" : microphonePermissionState === "granted" ? "確認が必要" : "許可が必要"}</span><button className="outline-action" type="button" onClick={() => void requestMicrophonePermission()} disabled={checkingMicrophone || microphonePermissionState === "unsupported"}>{checkingMicrophone ? "確認中" : microphoneReady === true ? "もう一度確認" : "マイクを許可・確認"} <Mic size={15} /></button></article></div>
         <div className="settings-list transcription-settings"><article><span className="setting-icon"><BrandGlyph name="work" /></span><div><h2>音声認識</h2><p>{transcription?.downloaded ? "日本語音声認識をこのPCで行います。" : "話した言葉を文字にする日本語モデルです。"}</p>{progressFor("transcription") && <div className="installation-progress" role="status"><span>{progressFor("transcription")?.phase}</span><strong>{installationProgressLabel(progressFor("transcription")!, installationNow)}</strong><i aria-hidden="true"><b style={{ width: `${progressPercent("transcription") ?? 8}%` }} /></i></div>}</div><span className={transcription?.downloaded ? "setting-state state-installed" : "setting-state state-unavailable"}>{transcription?.downloaded ? <Check size={15} strokeWidth={2.3} /> : <Download size={15} strokeWidth={2} />}{transcription?.downloaded ? "モデル取得済み" : downloadingTranscription ? `${progressPercent("transcription") ?? "…"}%` : transcription?.size || "未取得"}</span>{transcription?.downloaded ? <span /> : <button className="outline-action" type="button" onClick={() => void downloadTranscriptionModel()} disabled={downloadingTranscription}>{downloadingTranscription ? "取得中" : "モデルを取得"} <Download size={15} /></button>}</article></div>
-        <div className="settings-list">{providers.map(({ id, label, glyph }) => { const status = providerDisplayState(id, false); const connecting = connectingProviders[id]; const loggedIn = connectedProviders[id] && statuses[id]?.authenticated; const unavailable = statuses[id]?.usability === "unavailable"; const detail = id === "codex" ? "GPT-5.6 Lunaで高速整形" : id === "gemini" ? "Gemini 3.6 Flash (Low)で高速整形" : unavailable ? "現在の契約ではClaude Codeを利用できません" : "Claude Haikuで高速整形"; return <article key={id}><span className="setting-icon"><BrandGlyph name={glyph} /></span><div><h2>{label}</h2><p>{detail}</p>{providerNotices[id] && <p className={providerNotices[id].error ? "provider-notice is-error" : "provider-notice"} role={providerNotices[id].error ? "alert" : "status"}>{providerNotices[id].text}</p>}</div><span className={`setting-state ${status.className}`}>{connecting ? <span className="state-connecting-mark" aria-hidden="true" /> : unavailable ? <CircleAlert size={15} strokeWidth={2} /> : loggedIn ? <Check size={15} strokeWidth={2.3} /> : statuses[id]?.installed ? <span className="state-ring" aria-hidden="true" /> : <CircleAlert size={15} strokeWidth={2} />}{status.label}</span><button className="outline-action" type="button" onClick={() => void connect(id)} disabled={connecting}>{connecting ? "ログイン中" : loggedIn ? "再ログイン" : "ログインする"} {!connecting && <ExternalLink size={15} strokeWidth={1.9} />}</button></article>; })}<article><span className="setting-icon"><BrandGlyph name="dx" /></span><div><h2>ローカルAI</h2><p>{localReady ? "Gemma 4 E2BがこのPCで稼働中です。" : "Gemma 4 E2BをDOON Voice用に取得します。Ollamaアカウントは不要です。"}</p>{(progressFor("ollama") || progressFor("local_model")) && <div className="installation-progress" role="status"><span>{(progressFor("ollama") || progressFor("local_model"))?.phase}</span><strong>{installationProgressLabel((progressFor("ollama") || progressFor("local_model"))!, installationNow)}</strong><i aria-hidden="true"><b style={{ width: `${progressPercent("ollama") ?? progressPercent("local_model") ?? 8}%` }} /></i></div>}</div><span className={localReady ? "setting-state state-running" : "setting-state state-unavailable"}>{localReady ? <span className="state-live-dot" aria-hidden="true" /> : <WifiOff size={15} strokeWidth={2} />}{localReady ? "稼働中" : installingOllama || pullingLocalModel ? `${progressPercent("ollama") ?? progressPercent("local_model") ?? "…"}%` : local?.installed ? "起動待ち" : "未準備"}</span>{!local?.installed ? <button className="outline-action" type="button" onClick={() => void installOllama()} disabled={installingOllama}>{installingOllama ? "ローカルAIを準備中" : "サインアップ不要でローカルAIを準備"} <Download size={15} /></button> : !local.running ? <button className="outline-action" type="button" onClick={() => void installOllama()} disabled={installingOllama}>{installingOllama ? "ローカルAIを起動中" : "ローカルAIを起動"} <Download size={15} /></button> : !localModel?.installed ? <button className="outline-action" type="button" onClick={() => void pullModel()} disabled={pullingLocalModel}>{pullingLocalModel ? "取得中" : "Gemmaを取得"} <Download size={15} /></button> : <span />}</article><article className="shortcut-row"><span className="setting-icon"><BrandGlyph name="speed" /></span><div><h2>開始・停止キー</h2><p>{capturingShortcut ? "押した組み合わせを登録します。Escで取り消せます。" : "通常の音声入力の開始と停止"}</p></div><button ref={shortcutButtonRef} className={capturingShortcut ? "shortcut-key is-capturing" : "shortcut-key"} type="button" onClick={() => void beginShortcutCapture()} aria-label="開始・停止キーを変更" aria-pressed={capturingShortcut}>{capturingShortcut ? "キーを押す" : shortcutLabel(shortcut, navigator.userAgent.includes("Mac"))}</button><button className="outline-action" type="button" onClick={() => void applyShortcut(DEFAULT_SHORTCUT)}>標準に戻す</button></article><article className="shortcut-row"><span className="setting-icon"><BrandGlyph name="speed" /></span><div><h2>選択した文章を質問するキー</h2><p>{capturingSelectionQuestionShortcut ? "押した組み合わせを登録します。Escで取り消せます。" : "選択中の文章へ音声で質問"}</p></div><button ref={selectionQuestionShortcutButtonRef} className={capturingSelectionQuestionShortcut ? "shortcut-key is-capturing" : "shortcut-key"} type="button" onClick={() => void beginSelectionQuestionShortcutCapture()} aria-label="選択した文章を質問するキーを変更" aria-pressed={capturingSelectionQuestionShortcut}>{capturingSelectionQuestionShortcut ? "キーを押す" : shortcutLabel(selectionQuestionShortcut, navigator.userAgent.includes("Mac"))}</button><button className="outline-action" type="button" onClick={() => void applySelectionQuestionShortcut(DEFAULT_SELECTION_QUESTION_SHORTCUT)}>標準に戻す</button></article></div>{notice && <p className="notice" role="status">{notice}</p>}</section>}
+        <div className="settings-list">{providers.map(({ id, label, detail, glyph }) => { const status = providerDisplayState(id, false); const saving = savingKeys[id]; const hasKey = apiKeys?.[id] === true; return <article key={id} className="api-key-row"><span className="setting-icon"><BrandGlyph name={glyph} /></span><div><h2>{label}</h2><p>{detail}</p><form className="api-key-form" onSubmit={(event) => { event.preventDefault(); void saveApiKey(id); }}><input type="password" value={keyDrafts[id]} onChange={(event) => { const value = event.target.value; setKeyDrafts((current) => ({ ...current, [id]: value })); setProviderNotice(id, null); }} placeholder={hasKey ? "新しいキーに置き換える" : "APIキーを貼り付ける"} aria-label={`${label}のAPIキー`} autoComplete="off" spellCheck={false} disabled={saving} /><button className="outline-action" type="submit" disabled={saving || !keyDrafts[id].trim()}>{saving ? "確認中" : "確認して保存"} <KeyRound size={15} strokeWidth={1.9} /></button></form>{providerNotices[id] && <p id={`api-key-notice-${id}`} className={providerNotices[id].error ? "provider-notice is-error" : "provider-notice"} role={providerNotices[id].error ? "alert" : "status"}>{providerNotices[id].text}</p>}</div><span className={`setting-state ${status.className}`}>{saving ? <span className="state-connecting-mark" aria-hidden="true" /> : hasKey ? <Check size={15} strokeWidth={2.3} /> : <CircleAlert size={15} strokeWidth={2} />}{status.label}</span>{hasKey ? <button className="outline-action" type="button" onClick={() => void deleteApiKey(id)} onBlur={() => setConfirmingKeyDelete((current) => current === id ? null : current)} disabled={saving}>{confirmingKeyDelete === id ? "もう一度押すと削除" : "キーを削除"} <Trash2 size={15} strokeWidth={1.9} /></button> : <span />}</article>; })}<article><span className="setting-icon"><BrandGlyph name="dx" /></span><div><h2>ローカルAI</h2><p>{localReady ? "Gemma 4 E2BがこのPCで稼働中です。" : "Gemma 4 E2BをDOON Voice用に取得します。Ollamaアカウントは不要です。"}</p>{(progressFor("ollama") || progressFor("local_model")) && <div className="installation-progress" role="status"><span>{(progressFor("ollama") || progressFor("local_model"))?.phase}</span><strong>{installationProgressLabel((progressFor("ollama") || progressFor("local_model"))!, installationNow)}</strong><i aria-hidden="true"><b style={{ width: `${progressPercent("ollama") ?? progressPercent("local_model") ?? 8}%` }} /></i></div>}</div><span className={localReady ? "setting-state state-running" : "setting-state state-unavailable"}>{localReady ? <span className="state-live-dot" aria-hidden="true" /> : <WifiOff size={15} strokeWidth={2} />}{localReady ? "稼働中" : installingOllama || pullingLocalModel ? `${progressPercent("ollama") ?? progressPercent("local_model") ?? "…"}%` : local?.installed ? "起動待ち" : "未準備"}</span>{!local?.installed ? <button className="outline-action" type="button" onClick={() => void installOllama()} disabled={installingOllama}>{installingOllama ? "ローカルAIを準備中" : "サインアップ不要でローカルAIを準備"} <Download size={15} /></button> : !local.running ? <button className="outline-action" type="button" onClick={() => void installOllama()} disabled={installingOllama}>{installingOllama ? "ローカルAIを起動中" : "ローカルAIを起動"} <Download size={15} /></button> : !localModel?.installed ? <button className="outline-action" type="button" onClick={() => void pullModel()} disabled={pullingLocalModel}>{pullingLocalModel ? "取得中" : "Gemmaを取得"} <Download size={15} /></button> : <span />}</article><article className="shortcut-row"><span className="setting-icon"><BrandGlyph name="speed" /></span><div><h2>開始・停止キー</h2><p>{capturingShortcut ? "押した組み合わせを登録します。Escで取り消せます。" : "通常の音声入力の開始と停止"}</p></div><button ref={shortcutButtonRef} className={capturingShortcut ? "shortcut-key is-capturing" : "shortcut-key"} type="button" onClick={() => void beginShortcutCapture()} aria-label="開始・停止キーを変更" aria-pressed={capturingShortcut}>{capturingShortcut ? "キーを押す" : shortcutLabel(shortcut, navigator.userAgent.includes("Mac"))}</button><button className="outline-action" type="button" onClick={() => void applyShortcut(DEFAULT_SHORTCUT)}>標準に戻す</button></article><article className="shortcut-row"><span className="setting-icon"><BrandGlyph name="speed" /></span><div><h2>選択した文章を質問するキー</h2><p>{capturingSelectionQuestionShortcut ? "押した組み合わせを登録します。Escで取り消せます。" : "選択中の文章へ音声で質問"}</p></div><button ref={selectionQuestionShortcutButtonRef} className={capturingSelectionQuestionShortcut ? "shortcut-key is-capturing" : "shortcut-key"} type="button" onClick={() => void beginSelectionQuestionShortcutCapture()} aria-label="選択した文章を質問するキーを変更" aria-pressed={capturingSelectionQuestionShortcut}>{capturingSelectionQuestionShortcut ? "キーを押す" : shortcutLabel(selectionQuestionShortcut, navigator.userAgent.includes("Mac"))}</button><button className="outline-action" type="button" onClick={() => void applySelectionQuestionShortcut(DEFAULT_SELECTION_QUESTION_SHORTCUT)}>標準に戻す</button></article></div>{notice && <p className="notice" role="status">{notice}</p>}</section>}
     </section>
 
     {refreshToast && <div className="refresh-toast" role="status"><Check size={16} strokeWidth={2.2} />{refreshToast}</div>}

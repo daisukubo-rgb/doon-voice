@@ -16,16 +16,15 @@ const browser = await chromium.launch({ headless: true });
 let failures = 0;
 const browserErrors = [];
 
-function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, overlayStatus = "", authenticated = {}, transcription = { downloaded: true, name: "音声認識", size: "574 MB" }, local = { installed: false, running: false, models: [] }, selectionQuestionPopup, monitorSize = { width: 1440, height: 900 }, monitorPosition = { x: 0, y: 0 }, currentMonitorAvailable = true, primaryMonitorAvailable = true, primaryMonitorSize = monitorSize, primaryMonitorPosition = monitorPosition, initialWindowSize = { width: 1440, height: 900 }, initialWindowPosition = { x: 0, y: 0 }, windowFrame = { width: 0, height: 0 } } = {}) {
+function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, overlayStatus = "", apiKeys = {}, transcription = { downloaded: true, name: "音声認識", size: "574 MB" }, local = { installed: false, running: false, models: [] }, selectionQuestionPopup, monitorSize = { width: 1440, height: 900 }, monitorPosition = { x: 0, y: 0 }, currentMonitorAvailable = true, primaryMonitorAvailable = true, primaryMonitorSize = monitorSize, primaryMonitorPosition = monitorPosition, initialWindowSize = { width: 1440, height: 900 }, initialWindowPosition = { x: 0, y: 0 }, windowFrame = { width: 0, height: 0 } } = {}) {
   localStorage.clear();
   localStorage.setItem("doon-voice-dictionary", dictionaryRaw ?? JSON.stringify(dictionary));
-  localStorage.setItem("doon-voice-provider-connections", JSON.stringify({ codex: false, claude: false, gemini: false }));
   const callbacks = new Map();
   const listeners = new Map();
   let nextId = 1;
   const idle = { state: "idle", generation: 1, transcript: "", output: "", message: "", clipboard_saved: false, recovery_pending: false };
   window.fixture = {
-    calls: [], errors: [], authenticated, clipboard: "", clipboardFails: false,
+    calls: [], errors: [], apiKeys: { codex: false, claude: false, gemini: false, ...apiKeys }, clipboard: "", clipboardFails: false,
     windowSize: null, windowPosition: null, initialWindowPosition,
     selection: "この文章は選択された文脈です。", questionAnswer: "選択文を根拠にした回答です。", pastedAnswer: "",
     selectionQuestionPopup: selectionQuestionPopup || { selection: "選択された説明文です。", context_kind: "selection", question: "これは何ですか", answer: "選択文への自動回答です。", target: "codex" },
@@ -88,7 +87,7 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, overlaySta
         case "plugin:window|outer_size": { const size = f.windowSize || initialWindowSize; return { width: size.width + windowFrame.width, height: size.height + windowFrame.height }; }
         case "plugin:window|set_size": { const size = args.value.size; f.windowSize = { width: size.width, height: size.height }; return; }
         case "plugin:window|set_position": f.windowPosition = { x: args.value.position.x, y: args.value.position.y }; return;
-        case "provider_status": return { provider: args.provider, installed: !(f.missingProviders ?? []).includes(args.provider), authenticated: Boolean(f.authenticated[args.provider]), usability: "unknown" };
+        case "api_key_status": return { ...f.apiKeys };
         case "local_llm_status": return f.local;
         case "transcription_status": return f.transcription;
         case "download_transcription_model": return new Promise((resolve) => { f.pendingTranscriptionDownload = resolve; });
@@ -117,7 +116,8 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, overlaySta
           f.registeredShortcut = null;
           if (f.deferNextClear) { f.deferNextClear = false; return new Promise((resolve) => { f.pendingClear = resolve; }); }
           return;
-        case "start_official_login": if (f.loginError) throw f.loginError; return;
+        case "save_api_key": if (f.keyError) throw f.keyError; f.apiKeys[args.provider] = true; return;
+        case "delete_api_key": f.apiKeys[args.provider] = false; return;
         case "toggle_background_voice": f.publish({ state: "starting" }); return;
         case "cancel_voice_processing": f.publish({ state: "idle", message: "処理を取り消しました" }); return;
         case "retry_voice_processing": f.publish({ state: "processing" }); return;
@@ -668,43 +668,61 @@ try {
     });
   }
 
-  for (const resume of ["refresh", "focus"]) {
-    await check(`RCS-010: late login completes on ${resume}, only for the requested provider`, async () => {
-      const page = await pageFor();
-      await page.getByRole("button", { name: "接続と設定", exact: true }).click();
-      const claude = page.locator("article").filter({ has: page.getByRole("heading", { name: "Claude", exact: true }) });
-      await claude.getByRole("button", { name: "ログインする" }).click();
-      await claude.getByRole("alert").filter({ hasText: "ログインを確認できませんでした" }).waitFor();
-      await page.evaluate(() => { window.fixture.authenticated = { codex: true, claude: true, gemini: true }; });
-      if (resume === "focus") await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-      else await page.getByRole("button", { name: "状態を更新" }).click();
-      await claude.getByRole("button", { name: "再ログイン" }).waitFor();
-      assert.doesNotMatch(await page.locator("main").innerText(), /ログインを確認できませんでした/);
-      assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem("doon-voice-provider-connections"))), { codex: false, claude: true, gemini: false });
-      await page.close();
-    });
-  }
+  await check("APIキーを確認して保存し、画面側には残さない", async () => {
+    const page = await pageFor({}, "", { width: 1180, height: 760 });
+    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    const chatgpt = page.locator("article").filter({ has: page.getByRole("heading", { name: "ChatGPT", exact: true }) });
+    await chatgpt.getByText("キー未設定").waitFor();
+    assert.equal(await chatgpt.getByRole("button", { name: "確認して保存" }).isDisabled(), true);
+    await chatgpt.getByLabel("ChatGPTのAPIキー").fill("  sk-test-secret-123  ");
+    await chatgpt.getByRole("button", { name: "確認して保存" }).click();
+    await page.getByRole("status").filter({ hasText: "ChatGPTのAPIキーを保存しました" }).waitFor();
+    await chatgpt.getByText("キー設定済み").waitFor();
+    assert.equal(await chatgpt.getByLabel("ChatGPTのAPIキー").inputValue(), "");
+    assert.equal(await chatgpt.getByLabel("ChatGPTのAPIキー").getAttribute("type"), "password");
+    const saved = await page.evaluate(() => window.fixture.calls.filter(({ command }) => command === "save_api_key"));
+    assert.deepEqual(saved.map(({ args }) => args), [{ provider: "codex", key: "sk-test-secret-123" }]);
+    assert.doesNotMatch(await page.evaluate(() => JSON.stringify(localStorage)), /sk-test-secret/);
+    await page.screenshot({ path: path.join(artifacts, "settings-api-key-saved-desktop.png") });
+    await page.close();
+  });
 
-  for (const [name, setup, expected] of [
-    ["CLI未導入", (f) => { f.missingProviders = ["codex"]; }, "このPCにCodex CLIが見つかりません"],
-    ["起動エラー", (f) => { f.loginError = "CLIが見つかりません: codex"; }, "CLIが見つかりません: codex"],
-  ]) {
-    await check(`ログインできない理由（${name}）を押したボタンの行に表示する`, async () => {
-      const page = await pageFor({}, "", { width: 1180, height: 760 });
-      await page.evaluate(`(${setup})(window.fixture)`);
-      await page.getByRole("button", { name: "状態を更新" }).click();
-      await page.getByRole("button", { name: "接続と設定", exact: true }).click();
-      const chatgpt = page.locator("article").filter({ has: page.getByRole("heading", { name: "ChatGPT", exact: true }) });
-      await chatgpt.getByRole("button", { name: "ログインする" }).click();
-      const message = chatgpt.getByRole("alert").filter({ hasText: expected });
-      await message.waitFor();
-      const box = await message.boundingBox();
-      const viewport = page.viewportSize();
-      assert.ok(box && box.y >= 0 && box.y + box.height <= viewport.height, "ログインの結果がボタンと同じ画面内に見える");
-      await page.screenshot({ path: path.join(artifacts, `settings-login-${name === "CLI未導入" ? "missing-cli" : "start-error"}-desktop.png`) });
-      await page.close();
-    });
-  }
+  await check("キーが使えない理由を押したボタンの行に表示する", async () => {
+    const page = await pageFor({}, "", { width: 1180, height: 760 });
+    await page.evaluate(() => { window.fixture.keyError = "ChatGPTのAPIキーが正しくないか、無効になっています。「接続と設定」でキーを入れ直してください。"; });
+    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    const chatgpt = page.locator("article").filter({ has: page.getByRole("heading", { name: "ChatGPT", exact: true }) });
+    await chatgpt.getByLabel("ChatGPTのAPIキー").fill("sk-wrong");
+    await chatgpt.getByLabel("ChatGPTのAPIキー").press("Enter");
+    const message = chatgpt.getByRole("alert").filter({ hasText: "APIキーが正しくない" });
+    await message.waitFor();
+    const box = await message.boundingBox();
+    assert.ok(box && box.y >= 0 && box.y + box.height <= page.viewportSize().height, "キーの確認結果がボタンと同じ画面内に見える");
+    await chatgpt.getByText("キー未設定").waitFor();
+    assert.equal(await chatgpt.getByLabel("ChatGPTのAPIキー").inputValue(), "sk-wrong");
+    await page.screenshot({ path: path.join(artifacts, "settings-api-key-error-desktop.png") });
+    await page.close();
+  });
+
+  await check("APIキーの削除は確認してから行う", async () => {
+    const page = await pageFor({ apiKeys: { claude: true } });
+    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    const claude = page.locator("article").filter({ has: page.getByRole("heading", { name: "Claude", exact: true }) });
+    await claude.getByText("キー設定済み").waitFor();
+    await claude.screenshot({ path: path.join(artifacts, "settings-api-key-row-desktop.png") });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await claude.screenshot({ path: path.join(artifacts, "settings-api-key-row-mobile.png") });
+    await page.setViewportSize({ width: 2560, height: 1440 });
+    await claude.screenshot({ path: path.join(artifacts, "settings-api-key-row-wide.png") });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await claude.getByRole("button", { name: "キーを削除" }).click();
+    await claude.getByRole("button", { name: "もう一度押すと削除" }).waitFor();
+    assert.equal(await page.evaluate(() => window.fixture.calls.filter(({ command }) => command === "delete_api_key").length), 0);
+    await claude.getByRole("button", { name: "もう一度押すと削除" }).click();
+    await claude.getByText("キー未設定").waitFor();
+    await page.getByRole("status").filter({ hasText: "ClaudeのAPIキーを削除しました" }).waitFor();
+    await page.close();
+  });
 
   await check("状態更新ボタンは再確認の完了を通知する", async () => {
     const page = await pageFor();

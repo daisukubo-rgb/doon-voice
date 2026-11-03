@@ -405,6 +405,12 @@
           "markdownDescription": "Enables the answer_selection_question command without any pre-configured scope."
         },
         {
+          "description": "Enables the api_key_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-api-key-status",
+          "markdownDescription": "Enables the api_key_status command without any pre-configured scope."
+        },
+        {
           "description": "Enables the background_voice_status command without any pre-configured scope.",
           "type": "string",
           "const": "allow-background-voice-status",
@@ -457,6 +463,12 @@
           "type": "string",
           "const": "allow-configure-background-voice",
           "markdownDescription": "Enables the configure_background_voice command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the delete_api_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-delete-api-key",
+          "markdownDescription": "Enables the delete_api_key command without any pre-configured scope."
         },
         {
           "description": "Enables the direct_input_status command without any pre-configured scope.",
@@ -513,12 +525,6 @@
           "markdownDescription": "Enables the process_voice_text command without any pre-configured scope."
         },
         {
-          "description": "Enables the provider_status command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-provider-status",
-          "markdownDescription": "Enables the provider_status command without any pre-configured scope."
-        },
-        {
           "description": "Enables the pull_local_model command without any pre-configured scope.",
           "type": "string",
           "const": "allow-pull-local-model",
@@ -537,6 +543,12 @@
           "markdownDescription": "Enables the retry_voice_processing command without any pre-configured scope."
         },
         {
+          "description": "Enables the save_api_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-save-api-key",
+          "markdownDescription": "Enables the save_api_key command without any pre-configured scope."
+        },
+        {
           "description": "Enables the selection_question_popup_payload command without any pre-configured scope.",
           "type": "string",
           "const": "allow-selection-question-popup-payload",
@@ -553,12 +565,6 @@
           "type": "string",
           "const": "allow-set-voice-shortcut",
           "markdownDescription": "Enables the set_voice_shortcut command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the start_official_login command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-start-official-login",
-          "markdownDescription": "Enables the start_official_login command without any pre-configured scope."
         },
         {
           "description": "Enables the toggle_background_voice command without any pre-configured scope.",
@@ -601,6 +607,12 @@
           "type": "string",
           "const": "deny-answer-selection-question",
           "markdownDescription": "Denies the answer_selection_question command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the api_key_status command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-api-key-status",
+          "markdownDescription": "Denies the api_key_status command without any pre-configured scope."
         },
         {
           "description": "Denies the background_voice_status command without any pre-configured scope.",
@@ -657,6 +669,12 @@
           "markdownDescription": "Denies the configure_background_voice command without any pre-configured scope."
         },
         {
+          "description": "Denies the delete_api_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-delete-api-key",
+          "markdownDescription": "Denies the delete_api_key command without any pre-configured scope."
+        },
+        {
           "description": "Denies the direct_input_status command without any pre-configured scope.",
           "type": "string",
           "const": "deny-direct-input-status",
@@ -711,12 +729,6 @@
           "markdownDescription": "Denies the process_voice_text command without any pre-configured scope."
         },
         {
-          "description": "Denies the provider_status command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-provider-status",
-          "markdownDescription": "Denies the provider_status command without any pre-configured scope."
-        },
-        {
           "description": "Denies the pull_local_model command without any pre-configured scope.",
           "type": "string",
           "const": "deny-pull-local-model",
@@ -735,6 +747,12 @@
           "markdownDescription": "Denies the retry_voice_processing command without any pre-configured scope."
         },
         {
+          "description": "Denies the save_api_key command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-save-api-key",
+          "markdownDescription": "Denies the save_api_key command without any pre-configured scope."
+        },
+        {
           "description": "Denies the selection_question_popup_payload command without any pre-configured scope.",
           "type": "string",
           "const": "deny-selection-question-popup-payload",
@@ -751,12 +769,6 @@
           "type": "string",
           "const": "deny-set-voice-shortcut",
           "markdownDescription": "Denies the set_voice_shortcut command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the start_official_login command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-start-official-login",
-          "markdownDescription": "Denies the start_official_login command without any pre-configured scope."
         },
         {
           "description": "Denies the toggle_background_voice command without any pre-configured scope.",

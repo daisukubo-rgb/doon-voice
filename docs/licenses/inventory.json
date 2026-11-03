@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "locks": {
-    "package-lock.json": "43288949aeb0a9ad794b93f0ba825f01b074385105c7f6cdf9a4fac479ef08ca",
-    "src-tauri/Cargo.lock": "a8b19c134a370258e9f49d44994725af3b393ebd4afdfdc196c0baca4a0948c1"
+    "package-lock.json": "dcf0c70430196c54cfb4556d809ad1f1cfc07a98564fc2459f3a3b47d23aabbf",
+    "src-tauri/Cargo.lock": "4d0ba92ba626280fc306ea0c708c390ba5da16d84ab88c2208e31d826f717aeb"
   },
   "packages": [
     {
@@ -2587,6 +2587,24 @@
           "path": "cargo/keyboard-types-0.7.0/LICENSE-MIT",
           "sha256": "31dbbab009f1b2e59a1622d5955dfafc38ebe834000215b49d954c6f85fe927c",
           "source": "https://crates.io/api/v1/crates/keyboard-types/0.7.0/download#LICENSE-MIT"
+        }
+      ]
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "keyring",
+      "version": "3.6.3",
+      "license": "MIT OR Apache-2.0",
+      "files": [
+        {
+          "path": "cargo/keyring-3.6.3/LICENSE-APACHE",
+          "sha256": "78ebc2ea2a1cec9cbec2e1a6fc15e73474fe22bdad7575518e7f4628651d49c4",
+          "source": "https://crates.io/api/v1/crates/keyring/3.6.3/download#LICENSE-APACHE"
+        },
+        {
+          "path": "cargo/keyring-3.6.3/LICENSE-MIT",
+          "sha256": "157cc607717b1b372a69f6b4526f6ad18c1279af9f3267835cca2943f37bc07d",
+          "source": "https://crates.io/api/v1/crates/keyring/3.6.3/download#LICENSE-MIT"
         }
       ]
     },

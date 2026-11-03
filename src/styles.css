@@ -94,6 +94,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .destination-list small.state-unavailable { color: var(--faint); }
 
 .notice { margin: 18px 0 0; color: var(--coral); font-size: 11px; line-height: 1.6; }
+.api-key-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; max-width: 520px; margin-top: 10px; }
+.api-key-form input { min-width: 0; border: 1px solid var(--line-strong); border-radius: 4px; padding: 9px 12px; color: var(--ink); background: var(--background); font-size: 12px; }
+.api-key-form input::placeholder { color: var(--faint); }
+.settings-list .api-key-row { padding: 16px 0; }
 .settings-list .provider-notice { margin-top: 4px; color: #416359; font-size: 11px; line-height: 1.6; }
 .settings-list .provider-notice.is-error { color: var(--coral); }
 .selection-question-popup-shell { min-height: 100vh; padding: 18px; background: var(--background); }
