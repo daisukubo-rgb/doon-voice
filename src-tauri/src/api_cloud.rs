@@ -350,9 +350,13 @@ pub(crate) fn status_error(provider: Provider, status: u16, body: &str) -> Strin
     let invalid_gemini_key = provider == Provider::Gemini
         && status == 400
         && (body.contains("API_KEY_INVALID") || body.contains("API key not valid"));
+    let low_credit =
+        provider == Provider::Claude && status == 400 && body.contains("credit balance");
     match status {
-        401 | 403 => invalid_key_message(label),
+        401 => invalid_key_message(label),
         _ if invalid_gemini_key => invalid_key_message(label),
+        403 => format!("{label}のAPIキーに、このモデルを使う権限がありません。各社の管理画面でキーの権限と利用できるモデルを確認してください。"),
+        _ if low_credit => format!("{label}のAPIの残高が足りません。Anthropicの管理画面でクレジットを追加してください。"),
         429 => format!("{label}の利用上限に達したか、残高が足りません。各社の管理画面で利用状況を確認してください。"),
         404 => format!("{label}のモデルをこのAPIキーで使えません。キーの権限を確認してください。"),
         500..=599 => format!("{label}が一時的に応答できません。少し待ってからもう一度試してください。"),
@@ -362,6 +366,23 @@ pub(crate) fn status_error(provider: Provider, status: u16, body: &str) -> Strin
 
 fn invalid_key_message(label: &str) -> String {
     format!("{label}のAPIキーが正しくないか、無効になっています。「接続と設定」でキーを入れ直してください。")
+}
+
+/// 各社のキーの形と違う場合だけ、確認に失敗した理由の手がかりを返す。
+/// 形が将来変わっても保存を止めないよう、判定には使わない。
+pub(crate) fn key_shape_hint(provider: Provider, key: &str) -> Option<String> {
+    let (company, prefix) = match provider {
+        Provider::Codex => ("OpenAI", "sk-"),
+        Provider::Claude => ("Anthropic", "sk-ant-"),
+        Provider::Gemini => ("Google", "AIza"),
+    };
+    if !key.starts_with(prefix) {
+        return Some(format!("貼り付けた文字列は{company}のAPIキーの形（{prefix}…）ではありません。{company}の管理画面で発行したAPIキーを貼り付けてください。"));
+    }
+    if provider == Provider::Claude && key.chars().count() < 90 {
+        return Some("キーが途中までしかコピーされていない可能性があります。Anthropicの管理画面で新しいキーを作り、表示されたキーを丸ごとコピーしてください。".into());
+    }
+    None
 }
 
 fn transport_error(provider: Provider, error: &reqwest::Error) -> String {
@@ -429,7 +450,14 @@ pub(crate) async fn verify_key(
         return Ok(());
     }
     let text = response.text().await.unwrap_or_default();
-    Err(status_error(provider, status.as_u16(), &text))
+    let code = status.as_u16();
+    let invalid = code == 401 || (provider == Provider::Gemini && code == 400);
+    let hint = invalid.then(|| key_shape_hint(provider, key)).flatten();
+    Err(match hint {
+        Some(hint) => format!("{}がこのキーを受け付けませんでした。{hint}", provider_label(provider)),
+        None if invalid => format!("{}がこのキーを受け付けませんでした。キーが削除・無効化されていないか、管理画面で確認してください。", provider_label(provider)),
+        None => status_error(provider, code, &text),
+    })
 }
 
 #[cfg(test)]
@@ -636,10 +664,16 @@ mod tests {
         tauri::async_runtime::block_on(async {
             let client = http_client().unwrap();
             verify_key(&client, provider, &key).await.unwrap();
+            if provider == Provider::Claude {
+                let truncated: String = key.chars().take(53).collect();
+                let message = verify_key(&client, provider, &truncated).await.unwrap_err();
+                println!("途中までのキー: {message}");
+                assert!(message.contains("途中まで"));
+            }
             assert!(verify_key(&client, provider, "invalid-key")
                 .await
                 .unwrap_err()
-                .contains("APIキー"));
+                .contains("キー"));
             let prompt = "次の音声文字起こしを、話し手の口調を保ったまま句読点を入れて整える。本文だけを返す。\n\n入力: えっとさあ明日の打ち合わせなんだけど資料まだできてないからちょっと遅らせてもらえるかな\n出力:";
             let text = generate(
                 &client,
@@ -695,6 +729,32 @@ mod tests {
             println!("検索質問: {searched}");
             assert!(searched.contains("https://"));
         });
+    }
+
+    #[test]
+    fn キーの形が違う時は理由の手がかりを出す() {
+        assert!(key_shape_hint(Provider::Claude, "sk-proj-abc")
+            .unwrap()
+            .contains("sk-ant-"));
+        assert!(key_shape_hint(
+            Provider::Claude,
+            &format!("sk-ant-api03-{}", "a".repeat(30))
+        )
+        .unwrap()
+        .contains("途中まで"));
+        assert!(key_shape_hint(
+            Provider::Claude,
+            &format!("sk-ant-api03-{}", "a".repeat(95))
+        )
+        .is_none());
+        assert!(key_shape_hint(Provider::Gemini, "sk-abc")
+            .unwrap()
+            .contains("AIza"));
+        assert!(key_shape_hint(Provider::Codex, "sk-proj-abc").is_none());
+        assert!(status_error(Provider::Claude, 403, "").contains("権限"));
+        assert!(
+            status_error(Provider::Claude, 400, "Your credit balance is too low").contains("残高")
+        );
     }
 
     #[test]
