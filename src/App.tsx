@@ -530,7 +530,7 @@ function MainApp() {
     try {
       const update = await findAppUpdate();
       if (!update) {
-        setNotice("DOON Voiceは最新版です");
+        showRefreshToast("DOON Voiceは最新版です");
         return;
       }
       setNotice(`v${update.version}を取得しています`);
@@ -679,7 +679,7 @@ function MainApp() {
     try {
       await navigator.clipboard.writeText(questionAnswer);
       setQuestionError("");
-      setNotice("回答をクリップボードにコピーしました");
+      showRefreshToast("回答をクリップボードにコピーしました");
     } catch {
       setQuestionError("回答をコピーできませんでした。文章を選択してコピーしてください");
     }
@@ -715,7 +715,7 @@ function MainApp() {
       window.localStorage.setItem("doon-voice-shortcut", next);
       setShortcut(next);
       capturedFromShortcutRef.current = null;
-      if (notify) setNotice(`開始・停止キーを ${shortcutLabel(next, navigator.userAgent.includes("Mac"))} に変更しました`);
+      if (notify) showRefreshToast(`開始・停止キーを ${shortcutLabel(next, navigator.userAgent.includes("Mac"))} に変更しました`);
     } catch {
       if (operation !== shortcutOperationRef.current) return;
       const restore = previous ?? capturedFromShortcutRef.current;
@@ -742,7 +742,7 @@ function MainApp() {
       window.localStorage.setItem("doon-voice-selection-question-shortcut", next);
       setSelectionQuestionShortcut(next);
       capturedFromSelectionQuestionShortcutRef.current = null;
-      if (notify) setNotice(`選択した文章を質問するキーを ${shortcutLabel(next, navigator.userAgent.includes("Mac"))} に変更しました`);
+      if (notify) showRefreshToast(`選択した文章を質問するキーを ${shortcutLabel(next, navigator.userAgent.includes("Mac"))} に変更しました`);
     } catch {
       if (operation !== selectionQuestionShortcutOperationRef.current) return;
       const restore = previous ?? capturedFromSelectionQuestionShortcutRef.current;
@@ -888,7 +888,7 @@ function MainApp() {
     }
     if (unreadableDictionary) { setConfigError("保存された辞書を読み取れません。辞書画面で確認してください"); return; }
     void saveConfiguration(target, undefined, terms).then((saved) => {
-      if (saved) setNotice(target === "raw" ? "AIなしの音声入力に変更しました" : `文章を整えるAIを ${outputTargetLabel(target)} に変更しました`);
+      if (saved) showRefreshToast(target === "raw" ? "AIなしの音声入力に変更しました" : `文章を整えるAIを ${outputTargetLabel(target)} に変更しました`);
     });
   }
 
@@ -899,7 +899,7 @@ function MainApp() {
     }
     if (unreadableDictionary) { setConfigError("保存された辞書を読み取れません。辞書画面で確認してください"); return; }
     void saveConfiguration(undefined, target, terms).then((saved) => {
-      if (saved) setNotice(`選択文・画面を質問するAIを ${outputTargetLabel(target)} に変更しました`);
+      if (saved) showRefreshToast(`選択文・画面を質問するAIを ${outputTargetLabel(target)} に変更しました`);
     });
   }
 
@@ -911,7 +911,7 @@ function MainApp() {
     try {
       await appInvoke("open_local_llm_install");
       if (await waitForLocalLlmStart()) {
-        setNotice("ローカルAIを準備しました。Ollamaアカウントは不要です。Gemmaを取得できます");
+        showRefreshToast("ローカルAIを準備しました。Ollamaアカウントは不要です。Gemmaを取得できます");
       } else {
         setNotice("ローカルAIの起動に時間がかかっています。少し待ってから状態を更新してください");
       }
@@ -931,7 +931,7 @@ function MainApp() {
       await appInvoke("check_microphone");
       setMicrophonePermissionState("granted");
       setMicrophoneReady(true);
-      setNotice("マイクの許可と接続を確認しました");
+      showRefreshToast("マイクの許可と接続を確認しました");
     } catch (error) {
       const status = await microphonePermission();
       setMicrophonePermissionState(status);
@@ -952,7 +952,7 @@ function MainApp() {
       const allowed = await appInvoke<boolean>("request_direct_input_permission");
       setDirectInputAllowed(allowed);
       if (allowed) {
-        setNotice("カーソル位置への入力を許可しました");
+        showRefreshToast("カーソル位置への入力を許可しました");
       } else {
         setNotice("アクセシビリティで現在のDOON Voiceをオンにしてください。2つある場合は古い方を削除すると反映されます");
       }
@@ -970,7 +970,7 @@ function MainApp() {
     try {
       await appInvoke("pull_local_model");
       await refreshAll();
-      setNotice("Gemma 4 E2Bを準備しました");
+      showRefreshToast("Gemma 4 E2Bを準備しました");
     } catch (error) {
       setNotice(errorMessage(error, "Gemma 4 E2Bを取得できませんでした"));
     } finally {
@@ -989,7 +989,7 @@ function MainApp() {
     try {
       await appInvoke("download_transcription_model");
       await refreshAll();
-      setNotice("日本語音声認識モデルを準備しました");
+      showRefreshToast("日本語音声認識モデルを準備しました");
     } catch (error) {
       setNotice(errorMessage(error, "音声認識モデルを取得できませんでした"));
     } finally {
@@ -1012,7 +1012,7 @@ function MainApp() {
         if (generation !== resultGenerationRef.current) return;
         setClipboardSaved(true);
         setRecoveryPending(false);
-        setNotice("クリップボードにコピーしました");
+        showRefreshToast("クリップボードにコピーしました");
       } catch {
         setNotice("コピーしましたが、回収状態を更新できませんでした。もう一度コピーしてください");
       }
@@ -1037,7 +1037,7 @@ function MainApp() {
         await appInvoke(command, { generation });
       }
       applyBackgroundVoiceSnapshot(await appInvoke<BackgroundVoiceSnapshot>("background_voice_status"));
-      if (command === "clear_voice_result") setNotice("文章を破棄しました");
+      if (command === "clear_voice_result") showRefreshToast("文章を破棄しました");
     } catch (error) {
       setNotice(errorMessage(error, "操作を完了できませんでした。内容はこの画面で確認できます"));
     } finally { resultActionPendingRef.current = false; setResultActionPending(false); }
@@ -1098,13 +1098,13 @@ function MainApp() {
           ? { label: "AIなし", detail: "音声認識のみ", ready: Boolean(transcription?.downloaded) }
           : { label: "このPCのAI", detail: localModel?.name || "未準備", ready: localReady };
   function renderOnboarding() {
-    const steps = ["マイク", "音声認識", "文章を整えるAI", "試しに話す", "完了"];
+    const steps = ["マイク", "音声認識", "AI", "キー", "試しに話す", "完了"];
     const micDone = microphoneReady === true;
     const modelDone = Boolean(transcription?.downloaded);
     const cloudTarget = outputTarget === "codex" || outputTarget === "claude" || outputTarget === "gemini";
     const aiDone = outputTarget === "raw" || (outputTarget === "local" && localReady) || (cloudTarget && apiKeys?.[outputTarget] === true);
     const tryDone = Boolean(output);
-    const done = [micDone, modelDone, aiDone, tryDone, true];
+    const done = [micDone, modelDone, aiDone, true, tryDone, true];
     const last = steps.length - 1;
     const choices: Array<{ id: OutputTarget; label: string; detail: string }> = [
       { id: "raw", label: "AIなし", detail: "話した内容をそのまま文字にします。料金はかかりません" },
@@ -1113,8 +1113,9 @@ function MainApp() {
       { id: "claude", label: "Claude", detail: "AnthropicのAPIキーで整えます。使った分だけAnthropicから請求されます" },
       { id: "gemini", label: "Gemini", detail: "GoogleのAPIキーで整えます。使った分だけGoogleから請求されます" },
     ];
-    const next = () => setOnboardingStep((current) => Math.min(last, current + 1));
-    const back = () => setOnboardingStep((current) => Math.max(0, current - 1));
+    // 手順を移る時は、前の手順の知らせを持ち越さない。
+    const next = () => { setNotice(""); setOnboardingStep((current) => Math.min(last, current + 1)); };
+    const back = () => { setNotice(""); setOnboardingStep((current) => Math.max(0, current - 1)); };
     const transcriptionProgress = progressFor("transcription");
     const localProgress = progressFor("ollama") || progressFor("local_model");
     const nextButton = (ready: boolean, label = "次へ") => <button className={ready ? "primary-action" : "outline-action"} type="button" onClick={next}>{ready ? label : "あとで設定して次へ"} <ArrowRight size={15} strokeWidth={1.9} /></button>;
@@ -1149,6 +1150,16 @@ function MainApp() {
           <div className="onboarding-actions"><button className="outline-action" type="button" onClick={back}><ArrowLeft size={15} strokeWidth={1.9} /> 戻る</button>{nextButton(aiDone)}</div>
         </>}
         {onboardingStep === 3 && <>
+          <h2>キーを決めます</h2>
+          <p>ボタンを押してから、使いたい組み合わせを押すと登録されます。このままでよければ次へ進めます。</p>
+          <div className="settings-list onboarding-shortcuts">
+            <article className="shortcut-row"><div><h3>開始・停止キー</h3><p>{capturingShortcut ? "押した組み合わせを登録します。Escで取り消せます。" : "音声入力の開始と停止"}</p></div><button ref={shortcutButtonRef} className={capturingShortcut ? "shortcut-key is-capturing" : "shortcut-key"} type="button" onClick={() => void beginShortcutCapture()} aria-label="開始・停止キーを変更" aria-pressed={capturingShortcut}>{capturingShortcut ? "キーを押す" : shortcutLabel(shortcut, isMac)}</button><button className="outline-action" type="button" onClick={() => void applyShortcut(DEFAULT_SHORTCUT)}>標準に戻す</button></article>
+            <article className="shortcut-row"><div><h3>選択した文章を質問するキー</h3><p>{capturingSelectionQuestionShortcut ? "押した組み合わせを登録します。Escで取り消せます。" : "選んだ文章へ音声で質問"}</p></div><button ref={selectionQuestionShortcutButtonRef} className={capturingSelectionQuestionShortcut ? "shortcut-key is-capturing" : "shortcut-key"} type="button" onClick={() => void beginSelectionQuestionShortcutCapture()} aria-label="選択した文章を質問するキーを変更" aria-pressed={capturingSelectionQuestionShortcut}>{capturingSelectionQuestionShortcut ? "キーを押す" : shortcutLabel(selectionQuestionShortcut, isMac)}</button><button className="outline-action" type="button" onClick={() => void applySelectionQuestionShortcut(DEFAULT_SELECTION_QUESTION_SHORTCUT)}>標準に戻す</button></article>
+          </div>
+          {notice && <p className="notice" role="alert">{notice}</p>}
+          <div className="onboarding-actions"><button className="outline-action" type="button" onClick={back}><ArrowLeft size={15} strokeWidth={1.9} /> 戻る</button>{nextButton(true)}</div>
+        </>}
+        {onboardingStep === 4 && <>
           <h2>試しに話してみます</h2>
           <p>「話す」を押して話し、もう一度押すと止まります。ふだんは、文字を入れたい場所にカーソルを置いて <kbd>{shortcutLabel(shortcut, isMac)}</kbd> を押すと、同じように入力できます。</p>
           <div className="onboarding-try">
@@ -1158,7 +1169,7 @@ function MainApp() {
           </div>
           <div className="onboarding-actions"><button className="outline-action" type="button" onClick={back}><ArrowLeft size={15} strokeWidth={1.9} /> 戻る</button>{nextButton(tryDone)}</div>
         </>}
-        {onboardingStep === 4 && <>
+        {onboardingStep === 5 && <>
           <h2>設定の状態</h2>
           <ul className="onboarding-summary">{[["マイク", micDone], ["音声認識モデル", modelDone], [`文章を整えるAI（${outputTargetLabel(outputTarget)}）`, aiDone]].map(([label, ok]) => <li key={label as string}>{ok ? <Check size={15} strokeWidth={2.3} /> : <CircleAlert size={15} strokeWidth={2} />}<span>{label}</span><strong>{ok ? "設定済み" : "未設定（接続と設定からあとで設定できます）"}</strong></li>)}</ul>
           <p>開始・停止キーは <kbd>{shortcutLabel(shortcut, isMac)}</kbd>、選んだ文章を質問するキーは <kbd>{shortcutLabel(selectionQuestionShortcut, isMac)}</kbd> です。</p>

@@ -757,17 +757,26 @@ try {
       await page.getByText("ClaudeのAPIキーは保存済みです").waitFor();
       await page.screenshot({ path: path.join(artifacts, `onboarding-3-ai-${viewport.name}.png`) });
       await page.getByRole("button", { name: "次へ" }).click();
-      // 4. 試しに話す
+      // 4. キー
+      await page.getByRole("heading", { name: "キーを決めます" }).waitFor();
+      await page.getByRole("button", { name: "開始・停止キーを変更" }).click();
+      await page.waitForFunction(() => window.fixture.registeredShortcut === null);
+      await page.keyboard.press("Escape");
+      await page.waitForFunction(() => window.fixture.registeredShortcut !== null);
+      await page.getByRole("button", { name: "選択した文章を質問するキーを変更" }).waitFor();
+      await page.screenshot({ path: path.join(artifacts, `onboarding-4-keys-${viewport.name}.png`) });
+      await page.getByRole("button", { name: "次へ" }).click();
+      // 5. 試しに話す
       await page.getByRole("button", { name: "話す" }).click();
       await page.waitForFunction(() => window.fixture.calls.some(({ command }) => command === "toggle_background_voice"));
       await page.evaluate(() => window.fixture.publish({ state: "idle", generation: 1, transcript: "テストです", output: "テストです。" }));
       await page.locator(".onboarding-try .result-output").filter({ hasText: "テストです。" }).waitFor();
-      await page.screenshot({ path: path.join(artifacts, `onboarding-4-try-${viewport.name}.png`) });
+      await page.screenshot({ path: path.join(artifacts, `onboarding-5-try-${viewport.name}.png`) });
       await page.getByRole("button", { name: "次へ" }).click();
-      // 5. 完了
+      // 6. 完了
       await page.getByRole("heading", { name: "設定の状態" }).waitFor();
       assert.equal(await page.locator(".onboarding-summary li").filter({ hasText: "設定済み" }).count(), 3);
-      await page.screenshot({ path: path.join(artifacts, `onboarding-5-done-${viewport.name}.png`) });
+      await page.screenshot({ path: path.join(artifacts, `onboarding-6-done-${viewport.name}.png`) });
       await page.getByRole("button", { name: "使い始める" }).click();
       await page.getByRole("status").filter({ hasText: "はじめの設定が終わりました" }).waitFor();
       await page.locator("#home-title").waitFor();
