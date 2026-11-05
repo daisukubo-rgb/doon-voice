@@ -21,6 +21,7 @@
     "core:window:allow-set-size",
     "core:window:allow-set-position",
     "allow-api-key-status",
+    "allow-set-local-model",
     "allow-save-api-key",
     "allow-delete-api-key",
     "allow-local-llm-status",

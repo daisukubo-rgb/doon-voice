@@ -63,6 +63,73 @@ const QUESTION_SELECTION_MAX_TEXT: usize = 6_000;
 const SCREEN_QUESTION_MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
 const EMPTY_AI_RESPONSE: &str = "文章を受け取れませんでした。もう一度話してください。";
 const LOCAL_MODEL: &str = "gemma4:e2b";
+const ACCURATE_LOCAL_MODEL: &str = "gemma4:e4b";
+
+// このPCのAIは、速さ優先（標準）と正確さ優先（大きいモデル）から選べる。
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum LocalModelChoice {
+    #[default]
+    Fast,
+    Accurate,
+}
+
+impl LocalModelChoice {
+    fn tag(self) -> &'static str {
+        match self {
+            Self::Fast => LOCAL_MODEL,
+            Self::Accurate => ACCURATE_LOCAL_MODEL,
+        }
+    }
+    fn name(self) -> &'static str {
+        match self {
+            Self::Fast => "Gemma 4 E2B",
+            Self::Accurate => "Gemma 4 E4B",
+        }
+    }
+    fn size(self) -> &'static str {
+        match self {
+            Self::Fast => "約7.2 GB",
+            Self::Accurate => "約9.5 GB",
+        }
+    }
+}
+
+static LOCAL_MODEL_CHOICE: Mutex<LocalModelChoice> = Mutex::new(LocalModelChoice::Fast);
+
+fn selected_local_model() -> LocalModelChoice {
+    LOCAL_MODEL_CHOICE
+        .lock()
+        .map(|choice| *choice)
+        .unwrap_or_default()
+}
+
+fn local_model_choice_path(app: &AppHandle) -> Result<PathBuf, String> {
+    Ok(voice_runtime_config_path(app)?.with_file_name("local-model.json"))
+}
+
+fn load_local_model_choice(app: &AppHandle) {
+    let choice = local_model_choice_path(app)
+        .ok()
+        .and_then(|path| std::fs::read(path).ok())
+        .and_then(|bytes| serde_json::from_slice::<LocalModelChoice>(&bytes).ok())
+        .unwrap_or_default();
+    if let Ok(mut current) = LOCAL_MODEL_CHOICE.lock() {
+        *current = choice;
+    }
+}
+
+#[tauri::command]
+fn set_local_model(app: AppHandle, choice: LocalModelChoice) -> Result<(), String> {
+    let bytes = serde_json::to_vec(&choice)
+        .map_err(|_| "このPCのAIの選択を保存できませんでした。".to_string())?;
+    write_file_atomically(&local_model_choice_path(&app)?, &bytes)
+        .map_err(|_| "このPCのAIの選択を保存できませんでした。".to_string())?;
+    if let Ok(mut current) = LOCAL_MODEL_CHOICE.lock() {
+        *current = choice;
+    }
+    Ok(())
+}
 #[cfg(target_os = "macos")]
 const OLLAMA_MAC_URL: &str = "https://ollama.com/download/Ollama-darwin.zip";
 #[cfg(any(target_os = "windows", test))]
@@ -1472,6 +1539,7 @@ struct LocalModelStatus {
 struct LocalLlmStatus {
     installed: bool,
     running: bool,
+    selected: LocalModelChoice,
     models: Vec<LocalModelStatus>,
 }
 #[derive(Serialize)]
@@ -1637,12 +1705,19 @@ async fn local_llm_status() -> LocalLlmStatus {
     LocalLlmStatus {
         installed,
         running,
-        models: vec![LocalModelStatus {
-            id: "gemma4_e2b".into(),
-            name: "Gemma 4 E2B".into(),
-            size: "7.2 GB".into(),
-            installed: models.iter().any(|x| x.starts_with(LOCAL_MODEL)),
-        }],
+        selected: selected_local_model(),
+        models: [LocalModelChoice::Fast, LocalModelChoice::Accurate]
+            .into_iter()
+            .map(|choice| LocalModelStatus {
+                id: serde_json::to_value(choice)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_string))
+                    .unwrap_or_default(),
+                name: choice.name().into(),
+                size: choice.size().into(),
+                installed: models.iter().any(|x| x.starts_with(choice.tag())),
+            })
+            .collect(),
     }
 }
 
@@ -1993,35 +2068,36 @@ async fn open_local_llm_install(app: AppHandle) -> Result<(), String> {
     }
 }
 #[tauri::command]
-async fn pull_local_model(app: AppHandle) -> Result<(), String> {
+async fn pull_local_model(app: AppHandle, choice: Option<LocalModelChoice>) -> Result<(), String> {
     if !ollama_installed() {
         return Err("先にローカルAIを準備してください。".into());
     }
+    let choice = choice.unwrap_or_else(selected_local_model);
     let operation = begin_exclusive_operation(
         &LOCAL_MODEL_PULL_RUNNING,
-        "Gemma 4 E2Bを取得中です。完了までお待ちください。",
+        "このPCのAIのモデルを取得中です。完了までお待ちください。",
     )?;
     let _operation = operation;
     publish_installation_progress(&app, "local_model", "モデル情報を確認しています", 0, 0);
     let mut response = client()?
         .post("http://127.0.0.1:11434/api/pull")
         .timeout(Duration::from_secs(60 * 30))
-        .json(&serde_json::json!({ "name": LOCAL_MODEL, "stream": true }))
+        .json(&serde_json::json!({ "name": choice.tag(), "stream": true }))
         .send()
         .await
         .map_err(|_| {
-            "高速ローカルAIの取得を開始できませんでした。ローカルAIが起動しているか確認してください。"
+            "ローカルAIのモデルの取得を開始できませんでした。ローカルAIが起動しているか確認してください。"
                 .to_string()
         })?;
     if !response.status().is_success() {
         return Err(
-            "高速ローカルAIの取得を開始できませんでした。ローカルAIを準備し直して再試行してください。"
+            "ローカルAIのモデルの取得を開始できませんでした。ローカルAIを準備し直して再試行してください。"
                 .into(),
         );
     }
     let mut pending = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|_| {
-        "高速ローカルAIの取得が途中で切れました。接続を確認して再試行してください。".to_string()
+        "ローカルAIのモデルの取得が途中で切れました。接続を確認して再試行してください。".to_string()
     })? {
         pending.extend_from_slice(&chunk);
         while let Some(end) = pending.iter().position(|byte| *byte == b'\n') {
@@ -2031,10 +2107,10 @@ async fn pull_local_model(app: AppHandle) -> Result<(), String> {
                 continue;
             }
             let progress = serde_json::from_slice::<OllamaPullProgress>(line).map_err(|_| {
-                "高速ローカルAIの取得状況を読み取れませんでした。再試行してください。".to_string()
+                "ローカルAIのモデルの取得状況を読み取れませんでした。再試行してください。".to_string()
             })?;
             if let Some(error) = progress.error {
-                return Err(format!("高速ローカルAIを取得できませんでした。{error}"));
+                return Err(format!("ローカルAIのモデルを取得できませんでした。{error}"));
             }
             let phase = if progress.total > 0 {
                 "ダウンロード中"
@@ -2052,10 +2128,10 @@ async fn pull_local_model(app: AppHandle) -> Result<(), String> {
     }
     if !pending.is_empty() {
         let progress = serde_json::from_slice::<OllamaPullProgress>(&pending).map_err(|_| {
-            "高速ローカルAIの取得状況を読み取れませんでした。再試行してください。".to_string()
+            "ローカルAIのモデルの取得状況を読み取れませんでした。再試行してください。".to_string()
         })?;
         if let Some(error) = progress.error {
-            return Err(format!("高速ローカルAIを取得できませんでした。{error}"));
+            return Err(format!("ローカルAIのモデルを取得できませんでした。{error}"));
         }
         let phase = if progress.status == "success" {
             "モデルを準備しています"
@@ -2605,7 +2681,7 @@ fn local_answer_text(generated: OllamaGenerate, truncated_error: &str) -> Result
 
 fn local_generate_payload(prompt: &str) -> serde_json::Value {
     serde_json::json!({
-        "model": LOCAL_MODEL,
+        "model": selected_local_model().tag(),
         "prompt": prompt,
         "stream": false,
         "think": false,
@@ -2620,7 +2696,7 @@ fn local_generate_payload(prompt: &str) -> serde_json::Value {
 }
 fn local_warmup_payload() -> serde_json::Value {
     serde_json::json!({
-        "model": LOCAL_MODEL,
+        "model": selected_local_model().tag(),
         "prompt": "",
         "stream": false,
         "keep_alive": "30m"
@@ -2769,7 +2845,7 @@ async fn process_voice_text_cancellable(
                 if !r.status().is_success() {
                     if r.status() == reqwest::StatusCode::NOT_FOUND {
                         return Err(
-                            "高速ローカルAIが未準備です。接続と設定からモデルを取得してください。"
+                            "選んだローカルAIのモデルが未取得です。接続と設定からモデルを取得してください。"
                                 .into(),
                         );
                     }
@@ -2842,7 +2918,7 @@ async fn answer_selection_question_cancellable(
                 let response = local_generation(&app, &local_generate_payload(&prompt)).await?;
                 if !response.status().is_success() {
                     return Err(if response.status() == reqwest::StatusCode::NOT_FOUND {
-                        "高速ローカルAIが未準備です。接続と設定からモデルを取得してください。"
+                        "選んだローカルAIのモデルが未取得です。接続と設定からモデルを取得してください。"
                             .into()
                     } else {
                         "このPCのAIが回答を生成できませんでした。".into()
@@ -3713,6 +3789,7 @@ pub fn run() {
                     };
                 }
             });
+            load_local_model_choice(handle);
             let config = load_voice_runtime_config(handle);
             warm_up_transcription(handle, Duration::from_secs(3));
             prewarm_output_target(handle, config.target);
@@ -3753,6 +3830,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             api_key_status,
+            set_local_model,
             save_api_key,
             delete_api_key,
             local_llm_status,
@@ -3909,6 +3987,16 @@ mod tests {
         assert_eq!(payload["keep_alive"], "30m");
         assert_eq!(payload["options"]["num_ctx"], 4096);
         assert_eq!(payload["options"]["num_predict"], 1024);
+    }
+
+    #[test]
+    fn ローカルaiのモデル選択は保存形式と取得するモデルが一致する() {
+        assert_eq!(LocalModelChoice::default(), LocalModelChoice::Fast);
+        let accurate: LocalModelChoice = serde_json::from_str(r#""accurate""#).unwrap();
+        assert_eq!(accurate.tag(), ACCURATE_LOCAL_MODEL);
+        assert_eq!(serde_json::to_string(&LocalModelChoice::Fast).unwrap(), r#""fast""#);
+        assert_eq!(LocalModelChoice::Fast.tag(), LOCAL_MODEL);
+        assert!(serde_json::from_str::<LocalModelChoice>(r#""large""#).is_err());
     }
 
     #[test]

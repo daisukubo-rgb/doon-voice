@@ -2,6 +2,7 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
             "api_key_status",
+            "set_local_model",
             "save_api_key",
             "delete_api_key",
             "local_llm_status",

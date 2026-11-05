@@ -330,3 +330,10 @@ html.is-overlay, html.is-overlay body, html.is-overlay #root { width: 100%; min-
 
 @keyframes state-spin { to { transform: rotate(360deg); } }
 @keyframes voice-bar { from { transform: scaleY(.45); } to { transform: scaleY(1); } }
+.local-model-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; margin-top: 10px; }
+.local-model-choices button { display: grid; gap: 3px; border: 1px solid var(--line-strong); border-radius: 6px; padding: 10px 12px; color: var(--deep); background: transparent; text-align: left; cursor: pointer; }
+.local-model-choices button:hover:not(:disabled), .local-model-choices button.is-selected { background: var(--paper-tint); }
+.local-model-choices button.is-selected { border-color: var(--deep); box-shadow: inset 0 0 0 1px var(--deep); }
+.local-model-choices button:disabled { cursor: default; opacity: .6; }
+.local-model-choices strong { font-size: 12px; }
+.local-model-choices small { color: var(--muted); font-size: 10px; line-height: 1.5; }

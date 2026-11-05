@@ -555,6 +555,12 @@
           "markdownDescription": "Enables the selection_question_popup_payload command without any pre-configured scope."
         },
         {
+          "description": "Enables the set_local_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-set-local-model",
+          "markdownDescription": "Enables the set_local_model command without any pre-configured scope."
+        },
+        {
           "description": "Enables the set_selection_question_shortcut command without any pre-configured scope.",
           "type": "string",
           "const": "allow-set-selection-question-shortcut",
@@ -757,6 +763,12 @@
           "type": "string",
           "const": "deny-selection-question-popup-payload",
           "markdownDescription": "Denies the selection_question_popup_payload command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the set_local_model command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-set-local-model",
+          "markdownDescription": "Denies the set_local_model command without any pre-configured scope."
         },
         {
           "description": "Denies the set_selection_question_shortcut command without any pre-configured scope.",

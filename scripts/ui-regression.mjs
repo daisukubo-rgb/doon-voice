@@ -97,6 +97,7 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, overlaySta
         case "local_llm_status": return f.local;
         case "transcription_status": return f.transcription;
         case "download_transcription_model": return new Promise((resolve) => { f.pendingTranscriptionDownload = resolve; });
+        case "set_local_model": f.local = { ...f.local, selected: args.choice }; return;
         case "pull_local_model": return new Promise((resolve) => { f.pendingLocalModelPull = resolve; });
         case "direct_input_status": return f.directInputAllowed ?? true;
         case "request_direct_input_permission": f.directInputRequests = (f.directInputRequests ?? 0) + 1; return false;
@@ -271,15 +272,35 @@ try {
   });
 
   await check("未起動のローカルAIではGemma取得より先に起動を案内する", async () => {
-    const page = await pageFor({ local: { installed: true, running: false, models: [{ id: "gemma4_e2b", name: "Gemma 4 E2B", size: "7.2 GB", installed: false }] } });
+    const page = await pageFor({ local: { installed: true, running: false, selected: "fast", models: [{ id: "fast", name: "Gemma 4 E2B", size: "約7.2 GB", installed: false }, { id: "accurate", name: "Gemma 4 E4B", size: "約9.5 GB", installed: false }] } });
     await page.getByRole("button", { name: "接続と設定", exact: true }).click();
     await page.getByRole("button", { name: "ローカルAIを起動", exact: true }).waitFor();
-    assert.equal(await page.getByRole("button", { name: "Gemmaを取得", exact: true }).count(), 0);
+    assert.equal(await page.getByRole("button", { name: /を取得$/ }).count(), 0);
     await mkdir(artifacts, { recursive: true });
     await page.screenshot({ path: path.join(artifacts, "settings-local-ai-wait-desktop.png"), fullPage: true });
     await page.setViewportSize({ width: 390, height: 844 });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.screenshot({ path: path.join(artifacts, "settings-local-ai-wait-mobile.png"), fullPage: true });
+    await page.close();
+  });
+
+  await check("このPCのAIを速さ優先と正確さ優先から選び、選んだモデルを取得する", async () => {
+    const page = await pageFor({ local: { installed: true, running: true, selected: "fast", models: [{ id: "fast", name: "Gemma 4 E2B", size: "約7.2 GB", installed: true }, { id: "accurate", name: "Gemma 4 E4B", size: "約9.5 GB", installed: false }] } });
+    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    const choices = page.getByRole("radiogroup", { name: "このPCのAIのモデル" });
+    assert.equal(await choices.getByRole("radio", { name: /速さ優先/ }).getAttribute("aria-checked"), "true");
+    await choices.getByRole("radio", { name: /正確さ優先/ }).click();
+    await page.waitForFunction(() => window.fixture.calls.some(({ command, args }) => command === "set_local_model" && args.choice === "accurate"));
+    assert.equal(await choices.getByRole("radio", { name: /正確さ優先/ }).getAttribute("aria-checked"), "true");
+    await page.getByRole("button", { name: "Gemma 4 E4Bを取得", exact: true }).click();
+    await page.waitForFunction(() => window.fixture.calls.some(({ command, args }) => command === "pull_local_model" && args.choice === "accurate"));
+    await mkdir(artifacts, { recursive: true });
+    await page.screenshot({ path: path.join(artifacts, "settings-local-model-choice-desktop.png"), fullPage: true });
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.screenshot({ path: path.join(artifacts, "settings-local-model-choice-mobile.png"), fullPage: true });
+    await page.setViewportSize({ width: 2560, height: 1440 });
+    await page.screenshot({ path: path.join(artifacts, "settings-local-model-choice-wide.png"), fullPage: true });
     await page.close();
   });
 
@@ -298,7 +319,7 @@ try {
   });
 
   await check("文章整形と選択文質問のAIを別々に保存して使う", async () => {
-    const page = await pageFor({ local: { installed: true, running: true, models: [{ id: "gemma4_e2b", name: "Gemma 4 E2B", size: "7.2 GB", installed: true }] } });
+    const page = await pageFor({ local: { installed: true, running: true, selected: "fast", models: [{ id: "fast", name: "Gemma 4 E2B", size: "約7.2 GB", installed: true }, { id: "accurate", name: "Gemma 4 E4B", size: "約9.5 GB", installed: false }] } });
     await page.getByRole("button", { name: "接続と設定", exact: true }).click();
     await page.getByRole("radiogroup", { name: "文章を整えるAI" }).getByRole("radio", { name: /このPCのAI/ }).click();
     await page.getByRole("radiogroup", { name: "選択文・画面を質問・編集するAI" }).getByRole("radio", { name: /Gemini/ }).click();

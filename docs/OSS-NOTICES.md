@@ -25,6 +25,7 @@ sigchld v0.2.4は、公開crateと記録されたソースコミットにLICENSE
 | whisper.cpp v1.9.2 | MIT |
 | OpenAI Whisperモデル | MIT |
 | Gemma 4 E2B | Apache-2.0 |
+| Gemma 4 E4B | Apache-2.0 |
 | CPAL v0.16.0 | Apache-2.0 |
 | Tauri / tokio / reqwest | MIT または Apache-2.0 |
 | React | MIT |
@@ -57,7 +58,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 各依存の著作権・ライセンスの詳細は、`licenses/` に記録された実際の原文資料を確認してください。
 
-Gemma 4 E2BはDOON Voiceの配布物に同梱せず、利用者が「モデルを取得」を選んだ時にOllama公式レジストリから取得します。適用ライセンスはモデルの公式マニフェストに含まれるApache License 2.0です。
+Gemma 4 E2BとGemma 4 E4BはDOON Voiceの配布物に同梱せず、利用者が選んだモデルの取得ボタンを押した時にOllama公式レジストリから取得します。適用ライセンスはモデルの公式マニフェストに含まれるApache License 2.0です。
 
 CPAL（Cross-Platform Audio Library）は、DOON Voiceの録音に使用します。CPAL v0.16.0のApache License 2.0全文を `licenses/cargo/cpal-0.16.0/LICENSE` に収録しています。
 
