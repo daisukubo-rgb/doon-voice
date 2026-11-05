@@ -2056,6 +2056,7 @@ async fn open_local_llm_install(app: AppHandle) -> Result<(), String> {
                 return Err("ローカルAIの実行ファイルが見つかりませんでした。".into());
             }
         }
+        remove_windows_ollama_archive();
         publish_installation_progress(&app, "ollama", "ローカルAIを起動しています", 0, 0);
         let mut serve = Command::new(&executable);
         serve.arg("serve");
@@ -2068,6 +2069,18 @@ async fn open_local_llm_install(app: AppHandle) -> Result<(), String> {
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         Err("このOSでは対応していません。".into())
+    }
+}
+/// 展開後の圧縮ファイル（約1.6GB）は不要なので消す。以前の版で残った分も起動時に消す。
+/// 実行ファイルがある時だけ消し、消せなくても処理は続ける。
+#[cfg(target_os = "windows")]
+fn remove_windows_ollama_archive() {
+    let Some(local_app_data) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) else {
+        return;
+    };
+    let runtime_dir = windows_standalone_ollama_dir(&local_app_data);
+    if runtime_dir.join("ollama.exe").is_file() {
+        let _ = std::fs::remove_file(runtime_dir.join("ollama-windows-amd64.zip"));
     }
 }
 #[tauri::command]
@@ -3794,6 +3807,8 @@ pub fn run() {
                 }
             });
             load_local_model_choice(handle);
+            #[cfg(target_os = "windows")]
+            remove_windows_ollama_archive();
             let config = load_voice_runtime_config(handle);
             warm_up_transcription(handle, Duration::from_secs(3));
             prewarm_output_target(handle, config.target);
