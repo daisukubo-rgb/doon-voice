@@ -98,7 +98,8 @@ function mockDesktop({ dictionary = [], dictionaryRaw, snapshot = {}, overlaySta
         case "transcription_status": return f.transcription;
         case "download_transcription_model": return new Promise((resolve) => { f.pendingTranscriptionDownload = resolve; });
         case "pull_local_model": return new Promise((resolve) => { f.pendingLocalModelPull = resolve; });
-        case "direct_input_status": return true;
+        case "direct_input_status": return f.directInputAllowed ?? true;
+        case "request_direct_input_permission": f.directInputRequests = (f.directInputRequests ?? 0) + 1; return false;
         case "check_microphone": return;
         case "background_voice_status": return f.snapshot;
         case "voice_overlay_status": return overlayStatus;
@@ -846,6 +847,23 @@ try {
     assert.deepEqual(activeNav, ["接続と設定"], "選択中の表示は今いる画面だけ");
     await page.mouse.move(800, 450);
     await page.screenshot({ path: path.join(artifacts, "sidebar-fixed-after-scroll-desktop.png") });
+    await page.close();
+  });
+
+  await check("Macで直接入力の許可が外れた時は、ホームから許可し直せる", async () => {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/605.1.15" });
+    page.setDefaultTimeout(2500);
+    await page.addInitScript(mockDesktop, {});
+    await page.addInitScript(() => { window.addEventListener("DOMContentLoaded", () => { if (window.fixture) window.fixture.directInputAllowed = false; }); });
+    await page.goto(origin + "/");
+    await page.evaluate(() => { window.fixture.directInputAllowed = false; });
+    await page.getByRole("button", { name: "状態を更新" }).click();
+    const banner = page.getByRole("status").filter({ hasText: "もう一度許可が必要です" });
+    await banner.waitFor();
+    await banner.getByRole("button", { name: "許可する" }).click();
+    await page.waitForFunction(() => window.fixture.directInputRequests === 1);
+    await page.getByText("前の版の許可を外し、今のDOON Voiceを一覧に加えました").waitFor();
+    await page.screenshot({ path: path.join(artifacts, "home-direct-input-reauthorize-desktop.png") });
     await page.close();
   });
 
