@@ -113,6 +113,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .guide-examples tbody th { width: 26%; color: var(--deep); font-weight: 700; }
 .guide-examples td { width: 37%; color: var(--muted); }
 .guide-examples td.guide-written { color: var(--deep); font-weight: 600; white-space: pre-line; }
+.guide-lead { max-width: 720px; margin: 14px 0 0; color: var(--muted); font-size: 12px; line-height: 1.8; }
+.guide-steps { display: grid; gap: 8px; max-width: 720px; margin: 12px 0 0; padding-left: 22px; color: var(--deep); font-size: 12px; line-height: 1.8; }
 .guide-note { margin: 12px 0 0; color: var(--muted); font-size: 11px; line-height: 1.7; }
 .onboarding-view { max-width: 760px; }
 .onboarding-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }

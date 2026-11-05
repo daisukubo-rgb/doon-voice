@@ -1120,6 +1120,15 @@ function MainApp() {
     return <section className="simple-view guide-view" aria-labelledby="guide-title">
       <div className="view-heading"><span>HOW TO USE</span><h1 id="guide-title">使い方</h1></div>
       <div className="settings-list"><article><span className="setting-icon"><BrandGlyph name="speed" /></span><div><h2>はじめの設定</h2><p>マイク・音声認識・文章を整えるAI・キーを順番に設定します。</p></div><span /><button className="outline-action" type="button" onClick={openOnboarding}>はじめの設定を開く <ArrowRight size={15} strokeWidth={1.9} /></button></article></div>
+      {isMac && <section className="guide-section" aria-labelledby="guide-update-title">
+        <div className="section-label"><span>AFTER UPDATE</span><h2 id="guide-update-title">アップデートした後（Mac）</h2></div>
+        <p className="guide-lead">Macでは、DOON Voiceをアップデートすると「カーソル位置へ入力」の許可が外れます。そのままでも文章はクリップボードに保存されますが、入力欄へ直接は入りません。次の手順で許可し直してください。</p>
+        <ol className="guide-steps">
+          <li>ホームか「接続と設定」の「許可する」を押します。前の版の許可は自動で外れ、今のDOON Voiceが一覧に加わります。</li>
+          <li>開いた「プライバシーとセキュリティ」→「アクセシビリティ」で、DOON Voiceをオンにします。</li>
+          <li>DOON Voiceの画面に戻ると「許可済み」に変わります。</li>
+        </ol>
+      </section>}
       <section className="guide-section" aria-labelledby="guide-features-title">
         <div className="section-label"><span>FEATURES</span><h2 id="guide-features-title">できること</h2></div>
         <dl className="guide-features">{features.map(({ title, body }) => <div key={title}><dt>{title}</dt><dd>{body}</dd></div>)}</dl>

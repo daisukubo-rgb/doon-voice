@@ -850,6 +850,19 @@ try {
     await page.close();
   });
 
+  await check("Macの使い方に、アップデート後の許可のやり直し方を載せる", async () => {
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/605.1.15" });
+    page.setDefaultTimeout(2500);
+    await page.addInitScript(mockDesktop, {});
+    await page.goto(origin + "/");
+    await page.getByRole("button", { name: "使い方", exact: true }).click();
+    await page.getByRole("heading", { name: "アップデートした後（Mac）" }).waitFor();
+    assert.equal(await page.locator(".guide-steps li").count(), 3);
+    await page.locator("#guide-update-title").scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(artifacts, "guide-after-update-mac-desktop.png") });
+    await page.close();
+  });
+
   await check("Macで直接入力の許可が外れた時は、ホームから許可し直せる", async () => {
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 }, userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_0) AppleWebKit/605.1.15" });
     page.setDefaultTimeout(2500);
