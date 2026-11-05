@@ -1,6 +1,6 @@
 [package]
 name = "doon-voice-desktop"
-version = "0.8.2"
+version = "0.8.3"
 description = "DOON Voice desktop application"
 edition = "2021"
 

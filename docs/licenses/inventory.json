@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "locks": {
-    "package-lock.json": "302b62eff182cd2703e2605b640355f56a39307253b9526acc7c9b45cb3aeb20",
-    "src-tauri/Cargo.lock": "223fb5d8a07b9113a7ea989dca4d6c3642cbc2a247fdc4e5d0f1aaea2ec5b389"
+    "package-lock.json": "37bcc51b0f6dfab6130783456de6c742c82b11b56cdb9a4da800a9adf4210116",
+    "src-tauri/Cargo.lock": "b11fc48ef9145bc3328794daea173a9ceca14367d8b759004e73d123a0fe1824"
   },
   "packages": [
     {
