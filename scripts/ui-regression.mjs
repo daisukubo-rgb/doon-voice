@@ -819,6 +819,22 @@ try {
     });
   }
 
+  await check("本文を下までスクロールしても、サイドバーは画面に固定されたまま", async () => {
+    const page = await pageFor({}, "", { width: 1440, height: 900 });
+    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await page.waitForFunction(() => window.scrollY > 200);
+    const sidebar = await page.locator(".sidebar").boundingBox();
+    assert.ok(sidebar && Math.abs(sidebar.y) < 1 && sidebar.height <= 900 + 1, `サイドバーが画面上端に固定されている: ${JSON.stringify(sidebar)}`);
+    const settingsButton = await page.getByRole("button", { name: "接続と設定", exact: true }).boundingBox();
+    assert.ok(settingsButton && settingsButton.y >= 0 && settingsButton.y + settingsButton.height <= 900, "下の「接続と設定」も見えている");
+    const activeNav = await page.evaluate(() => [...document.querySelectorAll(".sidebar .nav-item.is-active")].map((item) => item.textContent.trim()));
+    assert.deepEqual(activeNav, ["接続と設定"], "選択中の表示は今いる画面だけ");
+    await page.mouse.move(800, 450);
+    await page.screenshot({ path: path.join(artifacts, "sidebar-fixed-after-scroll-desktop.png") });
+    await page.close();
+  });
+
   await check("既に使っている人には、更新後もはじめの設定を自動で出さない", async () => {
     const page = await pageFor({ firstRun: true, existingUser: true });
     await page.locator("#home-title").waitFor();
