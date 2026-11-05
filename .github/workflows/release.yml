@@ -181,11 +181,23 @@ jobs:
           body: |
             DOON Voiceの配布版です。
 
-            macOS用DMG、Windows用MSIと、使い方・OSS表示を同梱したZIPを添付しています。
+            ## ダウンロードするファイル
 
-            ソースから起動する場合は Source code (zip) をすべて展開し、macOSは DOON Voiceを起動.command、Windowsは DOON Voiceを起動.bat を開いてください。Node.js、Rust、OS別のビルド環境が必要です。不足する環境は案内を表示して停止します。
+            お使いのPCに合うZIPを1つだけダウンロードしてください。
 
-            未署名インストーラーはOSや組織のポリシーにより起動が制限される場合があります。
+            | お使いのPC | ダウンロードするファイル |
+            | --- | --- |
+            | Mac（Apple Silicon：M1以降のチップ） | **DOON Voice-macOS.zip** |
+            | Mac（Intel） | **DOON Voice-macOS-Intel.zip** |
+            | Windows 10／11（64ビット） | **DOON Voice-Windows.zip** |
+
+            Macの種類は、画面左上のAppleメニュー →「このMacについて」で確かめられます。「チップ」に「Apple M…」とあればApple Silicon、「プロセッサ」に「Intel」とあればIntelです。
+
+            ZIPを展開し、中のDMG（Mac）またはMSI（Windows）を開いてインストールします。DOON VoiceはAppleの公証とMicrosoftのコード署名をまだ受けていないため、初めて開く時にOSが止めます。開き方は https://doon-inc.com/doon-voice/#first-open にあります。
+
+            上の3つ以外のファイル（`update-…`、`.sig`、`latest.json`）は、アプリの「更新を確認」が使うものです。DMG・MSI単体はZIPの中身と同じインストーラーです。どちらもダウンロードは不要です。
+
+            ソースから起動する場合（開発者向け）は Source code (zip) をすべて展開し、macOSは DOON Voiceを起動.command、Windowsは DOON Voiceを起動.bat を開いてください。Node.js、Rust、OS別のビルド環境が必要です。不足する環境は案内を表示して停止します。
           files: |
             installers/**/*.dmg
             installers/**/*.msi
