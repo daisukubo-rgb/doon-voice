@@ -337,3 +337,4 @@ html.is-overlay, html.is-overlay body, html.is-overlay #root { width: 100%; min-
 .local-model-choices button:disabled { cursor: default; opacity: .6; }
 .local-model-choices strong { font-size: 12px; }
 .local-model-choices small { color: var(--muted); font-size: 10px; line-height: 1.5; }
+.local-model-choices .local-model-demerit { color: #7a4a1e; }

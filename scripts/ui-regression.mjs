@@ -272,7 +272,7 @@ try {
   });
 
   await check("未起動のローカルAIではGemma取得より先に起動を案内する", async () => {
-    const page = await pageFor({ local: { installed: true, running: false, selected: "fast", models: [{ id: "fast", name: "Gemma 4 E2B", size: "約7.2 GB", installed: false }, { id: "accurate", name: "Gemma 4 E4B", size: "約9.5 GB", installed: false }] } });
+    const page = await pageFor({ local: { installed: true, running: false, selected: "fast", models: [{ id: "fast", name: "Gemma 4 E2B", size: "約7.5 GB", installed: false }, { id: "accurate", name: "Gemma 4 E4B", size: "約9.2 GB", installed: false }] } });
     await page.getByRole("button", { name: "接続と設定", exact: true }).click();
     await page.getByRole("button", { name: "ローカルAIを起動", exact: true }).waitFor();
     assert.equal(await page.getByRole("button", { name: /を取得$/ }).count(), 0);
@@ -285,10 +285,11 @@ try {
   });
 
   await check("このPCのAIを速さ優先と正確さ優先から選び、選んだモデルを取得する", async () => {
-    const page = await pageFor({ local: { installed: true, running: true, selected: "fast", models: [{ id: "fast", name: "Gemma 4 E2B", size: "約7.2 GB", installed: true }, { id: "accurate", name: "Gemma 4 E4B", size: "約9.5 GB", installed: false }] } });
+    const page = await pageFor({ local: { installed: true, running: true, selected: "fast", models: [{ id: "fast", name: "Gemma 4 E2B", size: "約7.5 GB", installed: true }, { id: "accurate", name: "Gemma 4 E4B", size: "約9.2 GB", installed: false }] } });
     await page.getByRole("button", { name: "接続と設定", exact: true }).click();
     const choices = page.getByRole("radiogroup", { name: "このPCのAIのモデル" });
     assert.equal(await choices.getByRole("radio", { name: /速さ優先/ }).getAttribute("aria-checked"), "true");
+    assert.equal(await choices.getByText(/^気になる点：/).count(), 2);
     await choices.getByRole("radio", { name: /正確さ優先/ }).click();
     await page.waitForFunction(() => window.fixture.calls.some(({ command, args }) => command === "set_local_model" && args.choice === "accurate"));
     assert.equal(await choices.getByRole("radio", { name: /正確さ優先/ }).getAttribute("aria-checked"), "true");
@@ -319,7 +320,7 @@ try {
   });
 
   await check("文章整形と選択文質問のAIを別々に保存して使う", async () => {
-    const page = await pageFor({ local: { installed: true, running: true, selected: "fast", models: [{ id: "fast", name: "Gemma 4 E2B", size: "約7.2 GB", installed: true }, { id: "accurate", name: "Gemma 4 E4B", size: "約9.5 GB", installed: false }] } });
+    const page = await pageFor({ local: { installed: true, running: true, selected: "fast", models: [{ id: "fast", name: "Gemma 4 E2B", size: "約7.5 GB", installed: true }, { id: "accurate", name: "Gemma 4 E4B", size: "約9.2 GB", installed: false }] } });
     await page.getByRole("button", { name: "接続と設定", exact: true }).click();
     await page.getByRole("radiogroup", { name: "文章を整えるAI" }).getByRole("radio", { name: /このPCのAI/ }).click();
     await page.getByRole("radiogroup", { name: "選択文・画面を質問・編集するAI" }).getByRole("radio", { name: /Gemini/ }).click();

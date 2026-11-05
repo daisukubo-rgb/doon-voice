@@ -87,10 +87,13 @@ impl LocalModelChoice {
             Self::Accurate => "Gemma 4 E4B",
         }
     }
+    // Macは取得後の実測。Windowsは配信元の記録（Macと形式が異なる）。
     fn size(self) -> &'static str {
-        match self {
-            Self::Fast => "約7.2 GB",
-            Self::Accurate => "約9.5 GB",
+        match (self, cfg!(target_os = "macos")) {
+            (Self::Fast, true) => "約7.5 GB",
+            (Self::Accurate, true) => "約9.2 GB",
+            (Self::Fast, false) => "約4.6 GB",
+            (Self::Accurate, false) => "約6.6 GB",
         }
     }
 }
