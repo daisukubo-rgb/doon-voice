@@ -99,6 +99,21 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px
 .primary-action:hover { background: var(--deep-2); }
 .primary-action.is-recording { border-color: var(--coral); background: var(--coral); }
 .text-action { border: 0; padding: 6px 2px; color: var(--muted); background: transparent; font-size: 12px; font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+.guide-view .settings-list { margin-top: 28px; }
+.guide-section { margin-top: 40px; }
+.guide-features { display: grid; margin: 0; border-top: 1px solid var(--line); }
+.guide-features > div { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 16px; border-bottom: 1px solid var(--line); padding: 14px 4px; }
+.guide-features dt { color: var(--deep); font-size: 13px; font-weight: 700; }
+.guide-features dd { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.8; }
+.guide-features kbd, .guide-view kbd { border: 1px solid var(--line-strong); border-radius: 4px; padding: 1px 6px; color: var(--deep); background: var(--paper-tint); font-family: inherit; font-size: 11px; font-weight: 700; }
+.guide-table-wrap { overflow-x: auto; border-top: 1px solid var(--line); }
+.guide-examples { width: 100%; border-collapse: collapse; font-size: 12px; line-height: 1.7; }
+.guide-examples th, .guide-examples td { border-bottom: 1px solid var(--line); padding: 12px 10px; text-align: left; vertical-align: top; }
+.guide-examples thead th { color: var(--faint); font-size: 10px; font-weight: 700; letter-spacing: .04em; }
+.guide-examples tbody th { width: 26%; color: var(--deep); font-weight: 700; }
+.guide-examples td { width: 37%; color: var(--muted); }
+.guide-examples td.guide-written { color: var(--deep); font-weight: 600; white-space: pre-line; }
+.guide-note { margin: 12px 0 0; color: var(--muted); font-size: 11px; line-height: 1.7; }
 .onboarding-view { max-width: 760px; }
 .onboarding-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; }
 .onboarding-head .section-label { flex: 1; }
@@ -278,6 +293,16 @@ html.is-overlay, html.is-overlay body, html.is-overlay #root { width: 100%; min-
   .question-dialog { max-height: calc(100vh - 24px); padding: 18px; }
   .selection-question-popup-shell { padding: 14px; }
   .question-dialog-header h2 { font-size: 20px; }
+}
+
+@media (max-width: 600px) {
+  .guide-features > div { grid-template-columns: 1fr; gap: 4px; }
+  .guide-table-wrap { overflow-x: visible; }
+  .guide-examples thead { display: none; }
+  .guide-examples, .guide-examples tbody, .guide-examples tr, .guide-examples th, .guide-examples td, .guide-examples tbody th, .guide-examples td.guide-written { display: block; width: auto; }
+  .guide-examples tr { border-bottom: 1px solid var(--line); padding: 10px 0; }
+  .guide-examples th, .guide-examples td { border-bottom: 0; padding: 4px 2px; }
+  .guide-examples td::before { display: block; color: var(--faint); font-size: 10px; font-weight: 700; content: attr(data-label); }
 }
 
 @media (max-width: 600px) {

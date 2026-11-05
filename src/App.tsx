@@ -6,7 +6,7 @@ import { currentMonitor, getCurrentWindow, primaryMonitor } from "@tauri-apps/ap
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check } from "@tauri-apps/plugin-updater";
 import { ArrowLeft, ArrowRight, Check, CircleAlert, CircleHelp, Download, ExternalLink, KeyRound, Mic, Plus, RefreshCw, Trash2, WifiOff, X } from "lucide-react";
-import { FormEvent, KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
+import { FormEvent, KeyboardEvent as ReactKeyboardEvent, ReactNode, useEffect, useRef, useState } from "react";
 import { AudioRecorder, requestMicrophoneAccess, startAudioRecorder } from "./audio-recorder";
 import { DEFAULT_OUTPUT_TARGET, DEFAULT_SELECTION_QUESTION_TARGET, isOutputTarget, isSelectionQuestionTarget, OutputTarget, outputTargetLabel, SelectionQuestionTarget } from "./output-target";
 import { DEFAULT_SELECTION_QUESTION_SHORTCUT, DEFAULT_SHORTCUT, shortcutCaptureResult, shortcutLabel } from "./shortcut";
@@ -15,7 +15,7 @@ import { createLocalStatusMonitor } from "./local-status";
 
 type ProviderId = "codex" | "claude" | "gemini";
 type ApiKeyStatus = Record<ProviderId, boolean>;
-type View = "home" | "dictionary" | "settings" | "onboarding";
+type View = "home" | "dictionary" | "settings" | "onboarding" | "guide";
 type LocalModel = { id: "gemma4_e2b"; name: string; size: string; installed: boolean };
 type LocalLlmStatus = { installed: boolean; running: boolean; models: LocalModel[] };
 type TranscriptionStatus = { downloaded: boolean; name: string; size: string };
@@ -1097,6 +1097,44 @@ function MainApp() {
         : outputTarget === "raw"
           ? { label: "AIなし", detail: "音声認識のみ", ready: Boolean(transcription?.downloaded) }
           : { label: "このPCのAI", detail: localModel?.name || "未準備", ready: localReady };
+  function renderGuide() {
+    const startKey = <kbd>{shortcutLabel(shortcut, isMac)}</kbd>;
+    const questionKey = <kbd>{shortcutLabel(selectionQuestionShortcut, isMac)}</kbd>;
+    const features: Array<{ title: string; body: ReactNode }> = [
+      { title: "音声入力", body: <>文字を入れたい場所にカーソルを置き、{startKey} を押して話します。もう一度押すと、その場所に文章が入ります。同じ文章はクリップボードにも保存されます。</> },
+      { title: "選んだ文章への質問・編集", body: <>文章を選んで {questionKey} を押し、声で質問します。「要約して」「英語にして」「箇条書きにして」のように頼むと、選んだ文章を作り変えます。答えは別の窓に出て、コピーできます。</> },
+      { title: "前面の画面への質問", body: <>ホームの「前面の画面を質問・編集」から、いま見ている画面について質問できます。初めて使う時は、OSの画面収録の許可が必要です。</> },
+      { title: "Webで調べる", body: <>質問の時に「調べて」「最新の情報で」と頼むと、ChatGPT・Claude・GeminiがWebで検索し、出典のURLを添えて答えます。</> },
+      { title: "辞書", body: <>よく使う名前や用語を辞書に登録すると、AIが登録したとおりの書き方で入力します。</> },
+      { title: "文章を整えるAI", body: <>AIなし・このPCのAI・ChatGPT・Claude・Geminiから選べます。ChatGPT・Claude・Geminiは各社のAPIキーを入れて使い、使った分だけ各社から請求されます。</> },
+    ];
+    const examples: Array<{ what: string; spoken: string; written: string }> = [
+      { what: "順番に挙げた話を番号付きの箇条書きにする", spoken: "えっと明日までにやることが3つあって1つ目が見積書の送付2つ目が請求書のチェック3つ目が会議室の予約です", written: "明日までにやることが3つあります。\n1. 見積書の送付\n2. 請求書のチェック\n3. 会議室の予約" },
+      { what: "言い直した時は、後の内容だけを残す", spoken: "今日の会議はあ違う明日の会議はえっと10時からいや10時半からで場所は本社の第2会議室です", written: "明日の会議は10時半からで、場所は本社の第2会議室です。" },
+      { what: "「えっと」「あのー」などを除き、句読点を入れる", spoken: "えっとこれ明日までにやっといてもらえるかな", written: "これ明日までにやっといてもらえるかな？" },
+      { what: "口調・一人称・語尾はそのまま残す", spoken: "いやーこれまじでやばいね俺はAのデザインのほうがいいと思うわだってBはちょっと地味すぎるし", written: "いやー、これまじでやばいね。俺はAのデザインのほうがいいと思うわ。だってBはちょっと地味すぎるし。" },
+      { what: "数字・日付・否定は変えない", spoken: "あのー来週の火曜日の午後3時からの打ち合わせなんですけど資料は持ってこなくていいです参加者は5人です", written: "来週の火曜日の午後3時からの打ち合わせなんですけど、資料は持ってこなくていいです。参加者は5人です。" },
+      { what: "よく知られた製品名は正式な書き方にする。質問の形でも答えずに整える", spoken: "えーチャットGPTとクロードとジェミニって何が違うのかあとで教えてもらえますか", written: "ChatGPTとClaudeとGeminiって何が違うのか、あとで教えてもらえますか？" },
+      { what: "辞書の言葉は登録したとおりに書く（辞書に「DOON VOICE」を登録した場合）", spoken: "ドゥーンボイスの新しいバージョンを来週みんなに配ります", written: "DOON VOICEの新しいバージョンを、来週みんなに配ります。" },
+    ];
+    return <section className="simple-view guide-view" aria-labelledby="guide-title">
+      <div className="view-heading"><span>HOW TO USE</span><h1 id="guide-title">使い方</h1></div>
+      <div className="settings-list"><article><span className="setting-icon"><BrandGlyph name="speed" /></span><div><h2>はじめの設定</h2><p>マイク・音声認識・文章を整えるAI・キーを順番に設定します。</p></div><span /><button className="outline-action" type="button" onClick={openOnboarding}>はじめの設定を開く <ArrowRight size={15} strokeWidth={1.9} /></button></article></div>
+      <section className="guide-section" aria-labelledby="guide-features-title">
+        <div className="section-label"><span>FEATURES</span><h2 id="guide-features-title">できること</h2></div>
+        <dl className="guide-features">{features.map(({ title, body }) => <div key={title}><dt>{title}</dt><dd>{body}</dd></div>)}</dl>
+      </section>
+      <section className="guide-section" aria-labelledby="guide-examples-title">
+        <div className="section-label"><span>EXAMPLES</span><h2 id="guide-examples-title">AIが整える内容</h2></div>
+        <div className="guide-table-wrap"><table className="guide-examples">
+          <thead><tr><th scope="col">整え方</th><th scope="col">話した言葉</th><th scope="col">入力される文章</th></tr></thead>
+          <tbody>{examples.map(({ what, spoken, written }) => <tr key={what}><th scope="row">{what}</th><td data-label="話した言葉">{spoken}</td><td data-label="入力される文章" className="guide-written">{written}</td></tr>)}</tbody>
+        </table></div>
+        <p className="guide-note">例は、ChatGPT・Claude・Geminiのような各社のAIで整えた場合です。このPCのAIは小型のため、箇条書きや言い直しの整理が出ないことがあります。AIなしでは、音声認識の結果をそのまま入力します。</p>
+      </section>
+    </section>;
+  }
+
   function renderOnboarding() {
     const steps = ["マイク", "音声認識", "AI", "キー", "試しに話す", "完了"];
     const micDone = microphoneReady === true;
@@ -1182,6 +1220,7 @@ function MainApp() {
   const nav = [
     { id: "home" as const, label: "ホーム", glyph: "work" as const },
     { id: "dictionary" as const, label: "辞書", glyph: "coach" as const },
+    { id: "guide" as const, label: "使い方", glyph: "speed" as const },
   ];
 
   return <main className="app-shell">
@@ -1192,9 +1231,10 @@ function MainApp() {
     </aside>
 
     <section className="main-canvas">
-      <header className="main-bar"><span>{view === "home" ? "DOON VOICE" : view === "dictionary" ? "DICTIONARY" : view === "onboarding" ? "GETTING STARTED" : "SETTINGS"}</span><div className="top-status"><span><i className={selectedOutput.ready ? "status-dot is-ready" : "status-dot"} />{selectedOutput.label}</span><span className="top-status-detail">{selectedOutput.detail}</span>{view !== "onboarding" && <button className="icon-button" type="button" onClick={openOnboarding} aria-label="使い方の案内を開く" title="使い方の案内"><CircleHelp size={16} strokeWidth={1.9} /></button>}<button className="icon-button" type="button" onClick={() => void refreshAll(true)} disabled={refreshing} aria-label={refreshing ? "状態を更新中" : "状態を更新"}><RefreshCw className={refreshing ? "is-spinning" : undefined} size={16} strokeWidth={1.9} /></button></div></header>
+      <header className="main-bar"><span>{view === "home" ? "DOON VOICE" : view === "dictionary" ? "DICTIONARY" : view === "onboarding" ? "GETTING STARTED" : view === "guide" ? "HOW TO USE" : "SETTINGS"}</span><div className="top-status"><span><i className={selectedOutput.ready ? "status-dot is-ready" : "status-dot"} />{selectedOutput.label}</span><span className="top-status-detail">{selectedOutput.detail}</span>{view !== "onboarding" && view !== "guide" && <button className="icon-button" type="button" onClick={() => navigate("guide")} aria-label="使い方を開く" title="使い方"><CircleHelp size={16} strokeWidth={1.9} /></button>}<button className="icon-button" type="button" onClick={() => void refreshAll(true)} disabled={refreshing} aria-label={refreshing ? "状態を更新中" : "状態を更新"}><RefreshCw className={refreshing ? "is-spinning" : undefined} size={16} strokeWidth={1.9} /></button></div></header>
 
       {view === "onboarding" && renderOnboarding()}
+      {view === "guide" && renderGuide()}
       {view === "home" && <section className="home-view" aria-labelledby="home-title">
         <section className={recording ? "voice-stage is-recording" : "voice-stage"} aria-label="音声入力">
           <div className="hero-brand"><img src="/brand/doon-logo.png" alt="DOON" /><span>VOICE</span></div>

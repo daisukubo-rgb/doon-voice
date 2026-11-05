@@ -800,21 +800,35 @@ try {
   });
 
   for (const viewport of [{ name: "desktop", width: 1440, height: 900 }, { name: "mobile", width: 390, height: 844 }]) {
-    await check(`どの画面でも右上の「？」から使い方の案内を開ける（${viewport.name}）`, async () => {
+    await check(`どの画面でも右上の「？」から使い方を開き、はじめの設定も開ける（${viewport.name}）`, async () => {
       const page = await pageFor({}, "", viewport);
       await page.locator(".main-bar").screenshot({ path: path.join(artifacts, `header-help-button-${viewport.name}.png`) });
       for (const destination of ["辞書", "接続と設定"]) {
         await page.getByRole("button", { name: destination, exact: true }).click();
-        await page.getByRole("button", { name: "使い方の案内を開く" }).click();
+        await page.getByRole("button", { name: "使い方を開く" }).click();
+        await page.getByRole("heading", { name: "使い方", exact: true }).waitFor();
+        assert.equal(await page.getByRole("button", { name: "使い方を開く" }).count(), 0, "使い方の中では「？」を出さない");
+        await page.getByRole("button", { name: "はじめの設定を開く" }).click();
         await page.getByRole("heading", { name: "マイクを使えるようにします" }).waitFor();
-        assert.equal(await page.getByRole("button", { name: "使い方の案内を開く" }).count(), 0, "案内の中では「？」を出さない");
         await page.getByRole("button", { name: "あとで", exact: true }).click();
         await page.locator("#home-title").waitFor();
       }
       // 完了済みの人が見直しても、完了の記録は「あとで」で上書きしない
       assert.equal(await page.evaluate(() => localStorage.getItem("doon-voice-onboarding")), "done");
-      await page.getByRole("button", { name: "使い方の案内を開く" }).click();
-      await page.screenshot({ path: path.join(artifacts, `onboarding-help-button-${viewport.name}.png`) });
+      await page.close();
+    });
+
+    await check(`使い方に、できることとAIが整える例を表示する（${viewport.name}）`, async () => {
+      const page = await pageFor({}, "", viewport);
+      await page.getByRole("button", { name: "使い方", exact: true }).click();
+      await page.getByRole("heading", { name: "できること" }).waitFor();
+      for (const title of ["音声入力", "選んだ文章への質問・編集", "前面の画面への質問", "Webで調べる", "辞書", "文章を整えるAI"]) {
+        await page.locator(".guide-features dt", { hasText: title }).first().waitFor();
+      }
+      assert.equal(await page.locator(".guide-examples tbody tr").count(), 7);
+      await page.locator(".guide-written", { hasText: "1. 見積書の送付" }).waitFor();
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true, "横にはみ出さない");
+      await page.screenshot({ path: path.join(artifacts, `guide-${viewport.name}.png`), fullPage: true });
       await page.close();
     });
   }
