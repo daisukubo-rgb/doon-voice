@@ -2107,7 +2107,8 @@ async fn pull_local_model(app: AppHandle, choice: Option<LocalModelChoice>) -> R
                 continue;
             }
             let progress = serde_json::from_slice::<OllamaPullProgress>(line).map_err(|_| {
-                "ローカルAIのモデルの取得状況を読み取れませんでした。再試行してください。".to_string()
+                "ローカルAIのモデルの取得状況を読み取れませんでした。再試行してください。"
+                    .to_string()
             })?;
             if let Some(error) = progress.error {
                 return Err(format!("ローカルAIのモデルを取得できませんでした。{error}"));
@@ -3994,7 +3995,10 @@ mod tests {
         assert_eq!(LocalModelChoice::default(), LocalModelChoice::Fast);
         let accurate: LocalModelChoice = serde_json::from_str(r#""accurate""#).unwrap();
         assert_eq!(accurate.tag(), ACCURATE_LOCAL_MODEL);
-        assert_eq!(serde_json::to_string(&LocalModelChoice::Fast).unwrap(), r#""fast""#);
+        assert_eq!(
+            serde_json::to_string(&LocalModelChoice::Fast).unwrap(),
+            r#""fast""#
+        );
         assert_eq!(LocalModelChoice::Fast.tag(), LOCAL_MODEL);
         assert!(serde_json::from_str::<LocalModelChoice>(r#""large""#).is_err());
     }
