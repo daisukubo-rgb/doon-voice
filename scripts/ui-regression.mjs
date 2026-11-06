@@ -150,6 +150,11 @@ async function pageFor(options = {}, query = "", viewport = { width: 1440, heigh
   return page;
 }
 
+async function openSettings(page, tab) {
+  await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+  await page.getByRole("tab", { name: tab, exact: true }).click();
+}
+
 async function check(name, body) {
   const errorsBefore = browserErrors.length;
   try { await body(); assert.equal(browserErrors.length, errorsBefore, browserErrors.slice(errorsBefore).join("\n")); console.log(`PASS ${name}`); }
@@ -249,7 +254,7 @@ try {
 
   await check("初回モデル取得は容量・進捗・残り時間の目安を表示する", async () => {
     const page = await pageFor({ transcription: { downloaded: false, name: "音声認識", size: "約574 MB" } });
-    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await openSettings(page, "マイク・許可");
     await page.getByRole("button", { name: "モデルを取得", exact: true }).click();
     await page.evaluate(() => window.fixture.emit("installation-progress", {
       kind: "transcription", phase: "ダウンロード中", completed: 286 * 1024 * 1024, total: 574 * 1024 * 1024,
@@ -266,14 +271,14 @@ try {
 
   await check("初回設定でマイク許可・接続確認の入口を常に表示する", async () => {
     const page = await pageFor();
-    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await openSettings(page, "マイク・許可");
     await page.getByRole("button", { name: "マイクを許可・確認", exact: true }).waitFor();
     await page.close();
   });
 
   await check("未起動のローカルAIではGemma取得より先に起動を案内する", async () => {
     const page = await pageFor({ local: { installed: true, running: false, selected: "fast", models: [{ id: "fast", name: "Gemma 4 E2B", size: "約7.5 GB", installed: false }, { id: "accurate", name: "Gemma 4 E4B", size: "約9.2 GB", installed: false }] } });
-    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await openSettings(page, "AI");
     await page.getByRole("button", { name: "ローカルAIを起動", exact: true }).waitFor();
     assert.equal(await page.getByRole("button", { name: /を取得$/ }).count(), 0);
     await mkdir(artifacts, { recursive: true });
@@ -286,7 +291,7 @@ try {
 
   await check("このPCのAIを速さ優先と正確さ優先から選び、選んだモデルを取得する", async () => {
     const page = await pageFor({ local: { installed: true, running: true, selected: "fast", models: [{ id: "fast", name: "Gemma 4 E2B", size: "約7.5 GB", installed: true }, { id: "accurate", name: "Gemma 4 E4B", size: "約9.2 GB", installed: false }] } });
-    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await openSettings(page, "AI");
     const choices = page.getByRole("radiogroup", { name: "このPCのAIのモデル" });
     assert.equal(await choices.getByRole("radio", { name: /速さ優先/ }).getAttribute("aria-checked"), "true");
     assert.equal(await choices.getByText(/^気になる点：/).count(), 2);
@@ -305,9 +310,44 @@ try {
     await page.close();
   });
 
+  await check("接続と設定は種類ごとのタブで切り替え、矢印キーでも移れる", async () => {
+    const page = await pageFor({ local: { installed: true, running: true, selected: "fast", models: [{ id: "fast", name: "Gemma 4 E2B", size: "約7.5 GB", installed: true }, { id: "accurate", name: "Gemma 4 E4B", size: "約9.2 GB", installed: false }] } });
+    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    const tabs = page.getByRole("tablist", { name: "設定の種類" });
+    assert.deepEqual(await tabs.getByRole("tab").allTextContents(), ["AI", "APIキー", "マイク・許可", "ショートカット", "アプリ"]);
+    assert.equal(await tabs.getByRole("tab", { name: "AI", exact: true }).getAttribute("aria-selected"), "true");
+    assert.equal(await page.getByLabel("ChatGPTのAPIキー").count(), 0);
+    await tabs.getByRole("tab", { name: "AI", exact: true }).focus();
+    await page.keyboard.press("ArrowRight");
+    assert.equal(await tabs.getByRole("tab", { name: "APIキー", exact: true }).getAttribute("aria-selected"), "true");
+    await page.getByLabel("ChatGPTのAPIキー").waitFor();
+    await page.keyboard.press("End");
+    await page.getByRole("button", { name: "更新を確認" }).waitFor();
+    for (const [name, viewport] of [["desktop", { width: 1440, height: 900 }], ["mobile", { width: 390, height: 844 }], ["wide", { width: 2560, height: 1440 }]]) {
+      await page.setViewportSize(viewport);
+      await tabs.getByRole("tab", { name: "マイク・許可", exact: true }).click();
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await mkdir(artifacts, { recursive: true });
+      await page.screenshot({ path: path.join(artifacts, `settings-tabs-${name}.png`), fullPage: true });
+    }
+    await page.close();
+  });
+
+  await check("話した結果とコピーは、ホームの最初の画面に収まる", async () => {
+    const page = await pageFor({ snapshot: { ...recovery, output: "明日までにやることが3つあります。\n\n1. 見積書の送付\n2. 請求書のチェック\n3. 会議室の予約", recovery_pending: false, message: "" } }, "", { width: 1440, height: 900 });
+    const copy = await page.getByRole("button", { name: "文章をコピー", exact: true }).boundingBox();
+    assert.ok(copy && copy.y + copy.height <= 900, JSON.stringify(copy));
+    const result = await page.locator(".result-section").boundingBox();
+    const destination = await page.locator(".destination-section").boundingBox();
+    assert.ok(result.y < destination.y, "結果は文章の仕上げより上");
+    await mkdir(artifacts, { recursive: true });
+    await page.screenshot({ path: path.join(artifacts, "home-result-first-view-desktop.png") });
+    await page.close();
+  });
+
   await check("マイク許可後にネイティブ録音経路まで確認する", async () => {
     const page = await pageFor();
-    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await openSettings(page, "マイク・許可");
     await page.getByRole("button", { name: "マイクを許可・確認", exact: true }).click();
     await page.waitForFunction(() => window.fixture.calls.some(({ command }) => command === "check_microphone"));
     await page.getByText("接続確認済み", { exact: true }).waitFor();
@@ -321,7 +361,7 @@ try {
 
   await check("文章整形と選択文質問のAIを別々に保存して使う", async () => {
     const page = await pageFor({ local: { installed: true, running: true, selected: "fast", models: [{ id: "fast", name: "Gemma 4 E2B", size: "約7.5 GB", installed: true }, { id: "accurate", name: "Gemma 4 E4B", size: "約9.2 GB", installed: false }] } });
-    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await openSettings(page, "AI");
     await page.getByRole("radiogroup", { name: "文章を整えるAI" }).getByRole("radio", { name: /このPCのAI/ }).click();
     await page.getByRole("radiogroup", { name: "選択文・画面を質問・編集するAI" }).getByRole("radio", { name: /Gemini/ }).click();
     await page.waitForFunction(() => window.fixture.activeTarget === "local" && window.fixture.activeSelectionQuestionTarget === "gemini");
@@ -651,7 +691,7 @@ try {
 
   await check("選択した文章を質問するキーは音声入力キーと別に登録できる", async () => {
     const page = await pageFor();
-    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await openSettings(page, "ショートカット");
     await page.getByRole("button", { name: "選択した文章を質問するキーを変更" }).click();
     await page.waitForFunction(() => window.fixture.calls.some(({ command }) => command === "clear_selection_question_shortcut"));
     await page.keyboard.press("Control+Shift+Q");
@@ -663,12 +703,12 @@ try {
 
   await check("an old shortcut-clear response cannot restore over a newer shortcut", async () => {
     const page = await pageFor();
-    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await openSettings(page, "ショートカット");
     await page.evaluate(() => { window.fixture.deferNextClear = true; });
     await page.getByRole("button", { name: "開始・停止キーを変更" }).click();
     await page.waitForFunction(() => window.fixture.pendingClear !== null);
     await page.getByRole("button", { name: "ホーム", exact: true }).click();
-    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await openSettings(page, "ショートカット");
     await page.getByRole("button", { name: "開始・停止キーを変更" }).click();
     await page.keyboard.press("Control+Shift+K");
     await page.waitForFunction(() => window.fixture.registeredShortcut === "Ctrl+Shift+K");
@@ -681,7 +721,7 @@ try {
   for (const destination of ["辞書", "ホーム", "blur", "Escape"]) {
     await check(`RCS-009: shortcut capture cancels on ${destination}`, async () => {
       const page = await pageFor();
-      await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+      await openSettings(page, "ショートカット");
       await page.getByRole("button", { name: "開始・停止キーを変更" }).click();
       await page.waitForFunction(() => window.fixture.registeredShortcut === null);
       if (destination === "blur") await page.evaluate(() => window.dispatchEvent(new Event("blur")));
@@ -699,7 +739,7 @@ try {
 
   await check("APIキーを確認して保存し、画面側には残さない", async () => {
     const page = await pageFor({}, "", { width: 1180, height: 760 });
-    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await openSettings(page, "APIキー");
     const chatgpt = page.locator("article").filter({ has: page.getByRole("heading", { name: "ChatGPT", exact: true }) });
     await chatgpt.getByText("キー未設定").waitFor();
     assert.equal(await chatgpt.getByRole("button", { name: "確認して保存" }).isDisabled(), true);
@@ -719,7 +759,7 @@ try {
   await check("キーが使えない理由を押したボタンの行に表示する", async () => {
     const page = await pageFor({}, "", { width: 1180, height: 760 });
     await page.evaluate(() => { window.fixture.keyError = "ChatGPTのAPIキーが正しくないか、無効になっています。「接続と設定」でキーを入れ直してください。"; });
-    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await openSettings(page, "APIキー");
     const chatgpt = page.locator("article").filter({ has: page.getByRole("heading", { name: "ChatGPT", exact: true }) });
     await chatgpt.getByLabel("ChatGPTのAPIキー").fill("sk-wrong");
     await chatgpt.getByLabel("ChatGPTのAPIキー").press("Enter");
@@ -735,7 +775,7 @@ try {
 
   await check("APIキーの削除は確認してから行う", async () => {
     const page = await pageFor({ apiKeys: { claude: true } });
-    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await openSettings(page, "APIキー");
     const claude = page.locator("article").filter({ has: page.getByRole("heading", { name: "Claude", exact: true }) });
     await claude.getByText("キー設定済み").waitFor();
     await claude.screenshot({ path: path.join(artifacts, "settings-api-key-row-desktop.png") });
@@ -813,10 +853,10 @@ try {
     const page = await pageFor({ firstRun: true });
     await page.getByRole("heading", { name: "はじめの設定" }).waitFor();
     await page.getByRole("button", { name: "戻る" }).count().then((count) => assert.equal(count, 0, "最初の手順に戻るボタンは出さない"));
-    await page.getByRole("button", { name: "あとで", exact: true }).click();
+    await page.getByRole("button", { name: "案内を閉じる", exact: true }).click();
     await page.locator("#home-title").waitFor();
     assert.equal(await page.evaluate(() => localStorage.getItem("doon-voice-onboarding")), "later");
-    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await openSettings(page, "アプリ");
     await page.getByRole("button", { name: "案内を開く", exact: true }).click();
     await page.getByRole("heading", { name: "マイクを使えるようにします" }).waitFor();
     await page.close();
@@ -833,7 +873,7 @@ try {
         assert.equal(await page.getByRole("button", { name: "使い方を開く" }).count(), 0, "使い方の中では「？」を出さない");
         await page.getByRole("button", { name: "はじめの設定を開く" }).click();
         await page.getByRole("heading", { name: "マイクを使えるようにします" }).waitFor();
-        await page.getByRole("button", { name: "あとで", exact: true }).click();
+        await page.getByRole("button", { name: "案内を閉じる", exact: true }).click();
         await page.locator("#home-title").waitFor();
       }
       // 完了済みの人が見直しても、完了の記録は「あとで」で上書きしない
@@ -857,14 +897,15 @@ try {
   }
 
   await check("本文を下までスクロールしても、サイドバーは画面に固定されたまま", async () => {
-    const page = await pageFor({}, "", { width: 1440, height: 900 });
-    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    // 設定はタブで短くなったため、縦に低い画面で長い「AI」タブをスクロールして確かめる。
+    const page = await pageFor({}, "", { width: 1440, height: 560 });
+    await openSettings(page, "AI");
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
     await page.waitForFunction(() => window.scrollY > 200);
     const sidebar = await page.locator(".sidebar").boundingBox();
-    assert.ok(sidebar && Math.abs(sidebar.y) < 1 && sidebar.height <= 900 + 1, `サイドバーが画面上端に固定されている: ${JSON.stringify(sidebar)}`);
+    assert.ok(sidebar && Math.abs(sidebar.y) < 1 && sidebar.height <= 560 + 1, `サイドバーが画面上端に固定されている: ${JSON.stringify(sidebar)}`);
     const settingsButton = await page.getByRole("button", { name: "接続と設定", exact: true }).boundingBox();
-    assert.ok(settingsButton && settingsButton.y >= 0 && settingsButton.y + settingsButton.height <= 900, "下の「接続と設定」も見えている");
+    assert.ok(settingsButton && settingsButton.y >= 0 && settingsButton.y + settingsButton.height <= 560, "下の「接続と設定」も見えている");
     const activeNav = await page.evaluate(() => [...document.querySelectorAll(".sidebar .nav-item.is-active")].map((item) => item.textContent.trim()));
     assert.deepEqual(activeNav, ["接続と設定"], "選択中の表示は今いる画面だけ");
     await page.mouse.move(800, 450);
@@ -919,7 +960,7 @@ try {
 
   await check("更新欄に現在の版と確認結果を表示する", async () => {
     const page = await pageFor();
-    await page.getByRole("button", { name: "接続と設定", exact: true }).click();
+    await openSettings(page, "アプリ");
     await page.getByText("現在の版: v0.5.45", { exact: true }).waitFor();
     await page.getByText("最新版はまだ確認していません。", { exact: true }).waitFor();
     await page.screenshot({ path: path.join(artifacts, "settings-update-version-desktop.png"), fullPage: true });
