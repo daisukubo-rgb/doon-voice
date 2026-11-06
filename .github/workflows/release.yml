@@ -41,7 +41,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-14, windows-latest]
+        runner: [macos-15, windows-latest]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -78,12 +78,12 @@ jobs:
       matrix:
         include:
           - name: macOS Intel
-            runner: macos-14
+            runner: macos-15
             target: x86_64-apple-darwin
             bundle: app,dmg
             packageSuffix: macOS-Intel
           - name: macOS Apple Silicon
-            runner: macos-14
+            runner: macos-15
             target: aarch64-apple-darwin
             bundle: app,dmg
             packageSuffix: macOS

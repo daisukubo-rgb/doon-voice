@@ -123,7 +123,7 @@ if rg -i -q 'password|api.?key' "$FRONTEND"; then
   exit 1
 fi
 
-if ! rg -F -q 'macos-14' "$WORKFLOW" || ! rg -F -q 'x86_64-apple-darwin' "$WORKFLOW" || ! rg -F -q 'windows-latest' "$WORKFLOW"; then
+if ! rg -F -q 'macos-15' "$WORKFLOW" || ! rg -F -q 'x86_64-apple-darwin' "$WORKFLOW" || ! rg -F -q 'windows-latest' "$WORKFLOW"; then
   print -u2 'FAIL: GitHub ActionsにApple Silicon/Intel macOSとWindowsのビルドがありません'
   exit 1
 fi
