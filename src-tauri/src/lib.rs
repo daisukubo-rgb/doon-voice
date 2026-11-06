@@ -833,6 +833,15 @@ fn set_voice_overlay(app: AppHandle, state: String) -> Result<(), String> {
             window
                 .hide()
                 .map_err(|_| "音声状態を閉じられませんでした。".to_string())?;
+            // 次に表示した時、新しい状態を読み込むまでの間に前回の
+            // 「入力しました」が一瞬見えないよう、隠した後は空の表示にしておく。
+            if let Some(next_url) = window
+                .url()
+                .ok()
+                .and_then(|url| overlay_url_with_state(url, "hidden").ok())
+            {
+                let _ = window.navigate(next_url);
+            }
         }
         return Ok(());
     }

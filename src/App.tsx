@@ -1412,8 +1412,8 @@ function MainApp() {
 
 function VoiceOverlay() {
   const initial = new URLSearchParams(window.location.search).get("overlay");
-  const [state] = useState<OverlayState>(
-    initial === "starting" || initial === "thinking" || initial === "done" || initial === "error" ? initial : "listening",
+  const [state] = useState<OverlayState | "hidden">(
+    initial === "starting" || initial === "thinking" || initial === "done" || initial === "error" || initial === "hidden" ? initial : "listening",
   );
   const [failureDetail, setFailureDetail] = useState("");
   useEffect(() => {
@@ -1430,6 +1430,8 @@ function VoiceOverlay() {
       document.documentElement.classList.remove("is-overlay");
     };
   }, []);
+  // 隠している間は何も描かない（次に表示した瞬間に前回の状態が見えないように）。
+  if (state === "hidden") return null;
   const label = state === "starting" ? "準備しています" : state === "listening" ? "聞いています" : state === "thinking" ? "処理しています" : state === "done" ? "入力しました" : "入力できませんでした";
   const detail = state === "starting" ? "マイクを準備しています" : state === "listening" ? "音声を受け取っています" : state === "thinking" ? "音声を処理しています" : state === "done" ? "カーソル位置へ入力しました" : failureDetail || "DOON Voiceで内容を確認してください";
   return <main className={`voice-overlay is-${state}`} aria-live="assertive">

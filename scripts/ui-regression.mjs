@@ -220,6 +220,17 @@ try {
     await page.close();
   });
 
+  await check("隠した後の状態表示は空にし、次に出す時に前回の「入力しました」を見せない", async () => {
+    const page = await browser.newPage({ viewport: { width: 380, height: 86 } });
+    page.on("pageerror", (error) => browserErrors.push(error.message));
+    await page.addInitScript(mockDesktop, {});
+    await page.goto(origin + "/?overlay=hidden");
+    await page.waitForFunction(() => document.documentElement.classList.contains("is-overlay"));
+    assert.equal(await page.locator(".voice-overlay").count(), 0);
+    assert.equal(await page.getByText("入力しました").count(), 0);
+    await page.close();
+  });
+
   await check("RCS-006: error overlay never claims a successful clipboard write", async () => {
     const page = await pageFor({}, "?overlay=error");
     assert.doesNotMatch(await page.locator("main").innerText(), /クリップボードに保存しました/);
