@@ -86,13 +86,35 @@ pub(crate) fn normalize_key(raw: &str) -> Result<String, String> {
     Ok(key.to_string())
 }
 
+static HTTP_CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+
 pub(crate) fn http_client() -> Result<reqwest::Client, String> {
+    // 接続（TLS）を使い回すため、アプリ全体で1つのクライアントを共有する。
+    // 回線が遅い時は接続の作成だけで数秒かかるため、発話ごとに作り直さない。
+    if let Some(client) = HTTP_CLIENT.get() {
+        return Ok(client.clone());
+    }
     // キーを付けた要求が別のホストへ転送されないよう、転送には従わない。
-    reqwest::Client::builder()
+    let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(10))
+        .pool_idle_timeout(Duration::from_secs(90))
+        .tcp_keepalive(Duration::from_secs(30))
         .build()
-        .map_err(|_| "通信の準備ができませんでした。".to_string())
+        .map_err(|_| "通信の準備ができませんでした。".to_string())?;
+    Ok(HTTP_CLIENT.get_or_init(|| client).clone())
+}
+
+/// 話している間に、選んだAIのAPIへの接続を作っておく。キーも本文も送らない。
+pub(crate) async fn preconnect(provider: Provider) {
+    let Ok(client) = http_client() else {
+        return;
+    };
+    let _ = client
+        .head(request_url(provider))
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await;
 }
 
 pub(crate) fn request_timeout(provider: Provider, question_mode: bool) -> Duration {

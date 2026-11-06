@@ -3093,7 +3093,7 @@ fn start_background_recording(
     };
     let selected_question_context =
         background_voice_question_context(selection_question, selection)?;
-    let (generation, snapshot) = {
+    let (generation, snapshot, target) = {
         let mut runtime = state
             .0
             .lock()
@@ -3115,8 +3115,16 @@ fn start_background_recording(
         runtime.selected_question_context = selected_question_context;
         runtime.question_result_opened = false;
         runtime.message = "マイクを準備しています".into();
-        (runtime.generation, runtime.snapshot())
+        let target = if selection_question {
+            runtime.config.selection_question_target
+        } else {
+            runtime.config.target
+        };
+        (runtime.generation, runtime.snapshot(), target)
     };
+    if let Some(provider) = cloud_provider(target) {
+        tauri::async_runtime::spawn(api_cloud::preconnect(provider));
+    }
     publish_background_voice(app, &snapshot);
     set_voice_overlay_if_current(app, generation, BackgroundVoicePhase::Starting, "starting");
 
