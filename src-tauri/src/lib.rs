@@ -3206,6 +3206,13 @@ fn start_background_recording(
     };
     if let Some(provider) = cloud_provider(target) {
         tauri::async_runtime::spawn(api_cloud::preconnect(provider));
+    } else if target == OutputTarget::Local {
+        // 30分使わないとモデルがメモリーから外れ、読み込み直しに5秒ほどかかる。
+        // 話している間に読み込んでおき、話し終えた後の待ち時間に乗せない。
+        let warm_app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = prewarm_local_ai(&warm_app).await;
+        });
     }
     publish_background_voice(app, &snapshot);
     set_voice_overlay_if_current(app, generation, BackgroundVoicePhase::Starting, "starting");
