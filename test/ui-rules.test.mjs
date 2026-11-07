@@ -160,8 +160,8 @@ assert(
   "録音スレッドの開始直後にエラー状態を聞き取り中で上書きしない",
 );
 assert(
-  backgroundRecording.includes("background_voice_question_context(selection_question, selection)?"),
-  "選択質問キーの取得エラーを録音開始前に呼び出し元へ返す",
+  /background_voice_question_context\(selection_question, selection, \|\| \{[\s\S]*?capture_frontmost_screen_question\(app\)[\s\S]*?\}\)\?;/.test(backgroundRecording),
+  "選択質問キーの取得エラー（許可なし・画面を読めない）を録音開始前に呼び出し元へ返し、未選択なら画面を読む",
 );
 assert(
   /let selection = if selection_question \{\s*capture_active_selection_for_voice_question\(app\)\s*\} else \{\s*Ok\(None\)\s*\};/s.test(backgroundRecording),
@@ -178,8 +178,9 @@ assert(
   "未許可と選択取得エラーは録音へフォールバックせず明示する",
 );
 assert(
-  selectionQuestionContext.includes("selection_capture_retry_message()"),
-  "質問文脈がない場合は選び直しを案内して録音を止める",
+  selectionQuestionContext.includes("selection_question_permission_message()")
+    && selectionQuestionContext.includes("capture_screen().map(Some)"),
+  "許可がない時は案内して止め、文章を選んでいない時は画面を質問の根拠にする",
 );
 assert(
   manualSelectionCapture.indexOf("let result = if direct_input_allowed()") >= 0

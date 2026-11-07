@@ -1325,12 +1325,17 @@ $graphics.Dispose(); $bitmap.Dispose()
 fn background_voice_question_context(
     selection_question: bool,
     selection: Result<Option<String>, String>,
+    capture_screen: impl FnOnce() -> Result<QuestionContext, String>,
 ) -> Result<Option<QuestionContext>, String> {
-    if selection_question {
-        let selection = selection?.ok_or_else(|| selection_capture_retry_message().to_string())?;
-        Ok(Some(QuestionContext::Selection(selection)))
-    } else {
-        Ok(None)
+    if !selection_question {
+        return Ok(None);
+    }
+    match selection {
+        Ok(Some(selection)) => Ok(Some(QuestionContext::Selection(selection))),
+        // アクセシビリティ未許可では選択の有無が分からないため、許可先を案内する。
+        Err(error) if error == selection_question_permission_message() => Err(error),
+        // 文章を選んでいない時は、見ている画面について質問する（2026-11-07 オーナー判断）。
+        Ok(None) | Err(_) => capture_screen().map(Some),
     }
 }
 
@@ -3174,7 +3179,9 @@ fn start_background_recording(
         Ok(None)
     };
     let selected_question_context =
-        background_voice_question_context(selection_question, selection)?;
+        background_voice_question_context(selection_question, selection, || {
+            capture_frontmost_screen_question(app)
+        })?;
     let (generation, snapshot, target) = {
         let mut runtime = state
             .0
@@ -4257,21 +4264,46 @@ mod tests {
     }
 
     #[test]
-    fn 選択質問キーは未選択や取得エラーを通常入力へフォールバックさせない() {
+    fn 選択質問キーは文章を選んでいなければ画面について質問する() {
+        let screen = || {
+            Ok(QuestionContext::Screen {
+                image_data_url: "data:image/jpeg;base64,AA==".into(),
+            })
+        };
         assert!(matches!(
-            background_voice_question_context(true, Ok(Some("選択した文章".to_string()))),
+            background_voice_question_context(true, Ok(Some("選択した文章".to_string())), || {
+                panic!("選択があれば画面は読まない")
+            }),
             Ok(Some(QuestionContext::Selection(selection))) if selection == "選択した文章"
         ));
         assert!(matches!(
-            background_voice_question_context(true, Ok(None)),
-            Err(error) if error.contains("選択し直して")
+            background_voice_question_context(true, Ok(None), screen),
+            Ok(Some(QuestionContext::Screen { .. }))
         ));
         assert!(matches!(
-            background_voice_question_context(true, Err("選択文を取得できませんでした".to_string())),
-            Err(error) if error == "選択文を取得できませんでした"
+            background_voice_question_context(
+                true,
+                Err("選択文を取得できませんでした".to_string()),
+                screen
+            ),
+            Ok(Some(QuestionContext::Screen { .. }))
         ));
         assert!(matches!(
-            background_voice_question_context(false, Ok(None)),
+            background_voice_question_context(
+                true,
+                Err(selection_question_permission_message().to_string()),
+                || panic!("許可がない時は画面を読まない")
+            ),
+            Err(error) if error == selection_question_permission_message()
+        ));
+        assert!(matches!(
+            background_voice_question_context(true, Ok(None), || Err("前面の画面を読み取れませんでした。".to_string())),
+            Err(error) if error.contains("前面の画面")
+        ));
+        assert!(matches!(
+            background_voice_question_context(false, Ok(None), || panic!(
+                "通常の音声入力では画面を読まない"
+            )),
             Ok(None)
         ));
     }
